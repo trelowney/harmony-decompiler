@@ -154,21 +154,29 @@ Running the decompiler over the 525 config answers it.
 | 10 | **487** | u16 | **yes, all 1,463 B** |
 | 11 | 22 | u16 | yes |
 | 12 | 5 | u8 | yes |
+| 13 | 24 | u16 + 6 B | yes |
 | 14 | 11 | u8 | no - 34 B of 55 |
 | 15 | 5 | u8 | yes |
 
-Sections **1, 2, 3, 4, 8, 13, 16 and 17** contain no recognisable pointer table
-and remain entirely opaque.
+Sections **1, 2, 3, 4, 8, 16 and 17** contain no recognisable pointer table and
+remain entirely opaque.
 
 Section 10 was previously listed as unknown; it is a pointer array and nothing
-else. That accounts for 656 addresses across the config, every one of which the
-compiler now recomputes rather than copying.
+else. Together these hold 685 addresses, and with the record headers and the
+references found in record bodies the compiler recomputes 944 in total rather
+than copying them.
 
-Acceptance is deliberately strict - every address inside the config, addresses
-strictly increasing, and either an exact fit or at least three entries. A loose
-test finds pointer tables everywhere, for the reason given above: `0x02` is the
-most common byte in the file precisely *because* it is the high byte of these
-addresses.
+Acceptance is deliberately strict, because a loose test finds pointer tables
+everywhere for the reason given above: `0x02` is the most common byte in the file
+precisely *because* it is the high byte of these addresses. Every address has to
+land inside the config, and the table has to either fit its span exactly - the
+declared count, the header length and the section boundary all agreeing - or,
+failing that, ascend.
+
+Section 13 is why the rule is phrased that way rather than simply demanding
+ascent. Its 24 addresses ascend for 23 entries and then the last one jumps
+backwards, so a strict monotonic test rejected the whole thing. The header reads
+`24, 23, 1, 23`, which says as much out loud: 23 of one thing and 1 of another.
 
 ### Section 6 = index into the low region
 
@@ -242,6 +250,43 @@ own bytecode** - exactly as the original developer described.
 
 The headers account for 249 of the pointers the compiler recomputes. Record
 bodies are still opaque, apart from the key table in record #0.
+
+### Record bodies: eight blocks, one per matrix row
+
+Each body is eight blocks indexed 0-7. A block opens with
+
+```
+16 <i> 03 00 <i*8> 00 <i*8> 60 08 8B 2F 03
+```
+
+and closes with `17`. That `i*8` is `row << 3` from the key-code arithmetic in
+section 5g, so **there is one block per row of the keyboard matrix**. Blocks are
+often empty; where they are not, the payload sits between the header and the
+`17`.
+
+That is as far as the bodies are decoded. What the payload means is unknown, and
+it is the largest single gap left in the format.
+
+### References hiding in the bodies - 124 of them
+
+The same `0x16` also appears followed by a **valid 24-bit address**:
+
+```
+16 <u24 address>
+```
+
+There is no ambiguity with the block headers, whose next three bytes read as
+`<row> 03 00`, around 0x0300 and never a valid config address.
+
+124 turn up in the 525 config. Roughly one would be expected by chance, and they
+arrive in pairs referring to the same target, so they are real. 123 point within
+the region below 0xF35B and one into the section area.
+
+These matter out of proportion to their number. They were sitting inside regions
+the decompiler was copying as opaque hex, which means a length-changing edit would
+have left every one of them pointing at whatever had moved into its place, with
+nothing to report it. They are decoded and relinked now. **The lesson generalises:
+assume more of them are still hidden in the sections that remain opaque.**
 
 ## 4e. KEY TABLE - SOLVED
 

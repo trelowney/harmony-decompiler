@@ -69,7 +69,9 @@ claim than "it looks right":
 - **which sections carry pointer tables** - 10 of the 18, holding 685 addresses.
   Section 10 turns out to be nothing but a 487-entry pointer array
 - the **header of all 114 records** in the region the section table does not
-  cover, carrying another 249 pointers
+  cover, carrying another 249 pointers, and **124 references buried in the record
+  bodies** that were previously being copied as opaque hex
+- record bodies are eight blocks, **one per row of the keyboard matrix**
 - the name table, wrapped in `0xFEED ... 0xBEEF` with a length field, whose `index`
   is the address of a **live state variable readable over USB**
 - the **key table** format, `<u8 code> <u16 target> <0x7F>`, and that there is one

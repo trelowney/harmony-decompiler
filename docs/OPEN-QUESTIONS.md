@@ -102,7 +102,9 @@ length. Running the decompiler settles it:
   records - their headers are decoded.
 
 Pointers are now symbolic - `region + delta` - so the compiler relinks every one
-it knows about when something changes length. The same-size restriction is
+it knows about when something changes length. Digging into the record bodies
+turned up 124 more that had been sitting in hex the decompiler was copying
+verbatim, which is a fair warning about how many might still be hidden. The same-size restriction is
 therefore lifted for *known* pointers. It is emphatically not lifted for unknown
 ones: anything pointer-shaped inside a still-opaque region gets left behind
 silently. That is now the main risk in the whole approach.

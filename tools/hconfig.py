@@ -12,10 +12,12 @@ That test is the point. Decompile a config, compile it back, compare bytes. If
 they match, the model is complete for that file - not plausible, complete. It is
 the only feedback loop available on a format with no documentation.
 
-Pointers are recomputed on compile rather than copied, so section contents can
-change length and the section table still comes out correct. Pointers *inside*
-opaque regions obviously cannot be, which is why lengths must currently stay
-fixed - see docs/OPEN-QUESTIONS.md.
+Pointers decompile as `region + delta` and are resolved against the new layout on
+compile, so a config can change length and everything relinks. What that cannot
+cover is a pointer still buried in a region nobody has decoded: it gets copied as
+hex and left aimed at whatever moved into its place. Some of those have been
+found and pulled out - see find_references - but assume there are more, and see
+docs/OPEN-QUESTIONS.md.
 
 Layout of the arch 9 blob:
 
@@ -337,6 +339,37 @@ def parse_record_header(blob: bytes, start: int, limit: int):
     }
 
 
+REF_OPCODE = 0x16
+
+
+def find_references(blob: bytes, start: int, end: int):
+    """`16 <u24 address>` inside a record body.
+
+    Record bodies are eight blocks, one per matrix row, each opening with
+    `16 <row> 03 00 <row*8> 00 <row*8> 60 08 8B 2F 03` and closing with `17`.
+    The same `0x16` also appears followed by a real address, and those are
+    pointers hiding in what was being treated as opaque hex.
+
+    The two cannot be confused: a block header's next three bytes read as
+    `<row> 03 00`, which is around 0x0300 and never a valid config address.
+
+    124 of these turn up in the 525 config against roughly one expected by
+    chance, and they come in pairs referring to the same target, so they are
+    real. They matter because a length change would otherwise leave every one of
+    them pointing at whatever moved into its place.
+    """
+    hits, i = [], start
+    while i + 4 <= end:
+        if blob[i] == REF_OPCODE:
+            v = int.from_bytes(blob[i + 1:i + 4], "little") - CONFIG_BASE
+            if 0 <= v < len(blob):
+                hits.append((i, v))
+                i += 4
+                continue
+        i += 1
+    return hits
+
+
 RECOGNISERS = ("name_table", "pointer_table", "key_table")
 
 
@@ -361,8 +394,8 @@ def _refine_span(blob, parent, start, end, blob_len, skip=(), records=()):
             rh = parse_record_header(blob, start, end)
             if rh:
                 return ([_annotate(rh, parent)]
-                        + _refine_span(blob, parent, start + rh["length"], end,
-                                       blob_len, records=()))
+                        + _split_references(blob, parent,
+                                            start + rh["length"], end))
 
     if "name_table" not in skip:
         nt = parse_name_table(blob, start, end)
@@ -393,6 +426,30 @@ def _refine_span(blob, parent, start, end, blob_len, skip=(), records=()):
             return out
 
     return [_slice(parent, blob, start, end)]
+
+
+def _split_references(blob, parent, start, end):
+    """A record body: opaque hex, with each embedded reference pulled out."""
+    if start >= end:
+        return []
+
+    out, cursor = [], start
+    for off, target in find_references(blob, start, end):
+        if off > cursor:
+            out += _refine_span(blob, parent, cursor, off, len(blob),
+                                skip=("name_table", "pointer_table"))
+        out.append({
+            "kind": "reference",
+            "offset": off,
+            "length": 4,
+            "opcode": f"0x{REF_OPCODE:02X}",
+            "targets": [target],
+        })
+        cursor = off + 4
+    if cursor < end:
+        out += _refine_span(blob, parent, cursor, end, len(blob),
+                            skip=("name_table", "pointer_table"))
+    return out
 
 
 def _annotate(region, parent):
@@ -585,6 +642,10 @@ def emit_region(r: dict, resolve=None) -> bytes:
         return (NAME_MAGIC + declared.to_bytes(2, "little")
                 + bytes([r["unknown_0x04"]]) + bytes(body) + NAME_END)
 
+    if kind == "reference":
+        return (bytes([int(r["opcode"], 16)])
+                + (resolve(r["targets"][0]) + CONFIG_BASE).to_bytes(3, "little"))
+
     if kind == "record_header":
         out = bytearray(b"\x00")
         out += (resolve(r["back_reference"]) + CONFIG_BASE).to_bytes(3, "little")
@@ -773,6 +834,8 @@ def region_length(r: dict) -> int:
                 + 3 * len(r["targets"]))
     if kind == "record_header":
         return 6 + 3 * len(r["targets"])
+    if kind == "reference":
+        return 4
     raise ConfigError(f"unknown region kind {kind!r}")
 
 
