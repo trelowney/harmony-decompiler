@@ -1,0 +1,57 @@
+name: Contribute a config sample
+description: Share a config dumped off a real remote — the most useful thing you can add
+title: "[sample] "
+labels: ["sample"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you — samples are the bottleneck on this whole effort. Every model
+        other than the Harmony 525 is currently unrepresented, and the four arch 8
+        samples in circulation all came from one person.
+
+        Dump one with:
+
+        ```sh
+        concordance --dump-config my-remote.EZHex
+        ```
+
+        **Before attaching it:** the config contains your device brands and your
+        activity names. It should not contain account credentials, but please have
+        a look rather than being surprised later.
+
+  - type: input
+    id: model
+    attributes:
+      label: Which remote?
+      placeholder: "Harmony 880 / One / 600 / …"
+    validations:
+      required: true
+
+  - type: textarea
+    id: version
+    attributes:
+      label: Version block from the XML header (optional)
+      description: >
+        The first few lines of the file, or the `<INTENDEDVERSION>` block. Useful
+        for sorting samples by architecture before anyone opens them.
+      render: xml
+
+  - type: checkboxes
+    id: file
+    attributes:
+      label: The file
+      options:
+        - label: I have attached the .EZHex file (drag it into the comment box below)
+        - label: I have had a look at what is in it and I am happy to publish it
+          required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything worth knowing
+      description: >
+        For example: what devices and activities are configured, whether you have
+        deliberately unusual button assignments, or whether you have a second dump
+        of the same remote with one thing changed. Any of those make the sample
+        considerably more useful.

@@ -1,0 +1,13 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Ask a question / think out loud
+    url: https://github.com/trelowney/harmony-decompiler/discussions
+    about: >
+      Discussions is the better place for open-ended questions, "has anyone
+      considered…", and general brainstorming. No question is too basic — nobody
+      here started out knowing this hardware.
+  - name: Talking to the remote over USB
+    url: https://github.com/jaymzh/concordance/issues
+    about: >
+      Transfers, drivers and device detection belong with concordance, which does
+      the USB side. This repository is only about the config format.

@@ -1,0 +1,9 @@
+# Config dumps must never be touched. .EZHex starts with an XML header, so git
+# would otherwise be entitled to treat it as text and rewrite its line endings —
+# which would corrupt the binary blob and break both the declared size and the
+# XOR checksum.
+*.EZHex   binary
+*.bin     binary
+*.EZUp    binary
+
+* text=auto eol=lf

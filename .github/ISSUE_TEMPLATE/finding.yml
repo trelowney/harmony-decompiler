@@ -1,0 +1,52 @@
+name: Report a finding
+description: Something you worked out about the format — confirmed or not
+title: "[finding] "
+labels: ["finding"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Partial findings and hunches are welcome. So are negative results — "I
+        tried X, it does not work" saves the next person an evening, and there are
+        sections in the docs specifically for them.
+
+        The one thing worth being careful about is keeping **what you measured**
+        separate from **what you think it means**. Several early conclusions in
+        this project were wrong, and the ones that got caught were the ones
+        labelled as guesses.
+
+  - type: dropdown
+    id: confidence
+    attributes:
+      label: How solid is this?
+      options:
+        - Verified — checked against real data, and I say below how
+        - Hypothesis — it fits, but I have not proven it
+        - Negative result — I tried this and it does not work
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: finding
+    attributes:
+      label: What did you find?
+      placeholder: >
+        Offsets, bytes, structure. Hex dumps are fine and welcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: How did you check it?
+      description: >
+        Which config, how many instances it holds for, and anything that would
+        falsify it. If it only ever got checked against one file, saying so is
+        perfectly fine and much better than leaving it implied.
+
+  - type: input
+    id: config
+    attributes:
+      label: Which config / remote?
+      placeholder: "the 525 sample in this repo / my own 880 / one of the arch 8 samples"

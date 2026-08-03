@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+
+# Local dumps and scratch work. Samples that are meant to be published go in
+# samples/ and are added deliberately.
+*.EZHex
+*.EZUp
+!samples/**/*.EZHex
+dumps/
+scratch/
+
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
