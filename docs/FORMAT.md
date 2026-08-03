@@ -366,9 +366,36 @@ somewhere other than a plain IR command — most likely a macro or an activity.
 
 ## 5f. Key codes are shared across architectures
 
-Arch 8 has a table at `0x000A22` with **53 entries and targets 17…69 — a
-contiguous run**. That is the canonical/default table, and it sits at an
-**identical offset in all four samples**.
+Arch 8 turns out to carry **two** distinct key tables, which is worth stating
+plainly because an earlier revision of this document conflated them:
+
+| offset | entries | targets | across the four samples |
+|---|---|---|---|
+| `0x000A22` | 53 | 17–69, a contiguous run | byte-identical in all four |
+| `0x0001EF` | 40 | 3–715, with exceptions | byte-identical in all four |
+
+A third, at `0x000293` with 15 entries, is also identical in all four. The
+remaining tables each appear in only one sample, so nothing can be concluded
+about them.
+
+The contiguous 17–69 target run at `0x000A22` looks like a canonical or default
+table. But **do not read too much into "identical in all four"**: the samples
+share a board revision and a flash ID and came from one person, so they are very
+probably four configs for a *single* remote. What that identity shows is that
+these tables do not change with configuration — not that they are the same on
+every model. Confirming the latter needs a sample from a different arch 8 remote,
+which nobody has yet.
+
+Overlap with the 51-entry arch 9 main table depends on which one you compare
+against, so both are given:
+
+| against | shared | arch 9 only | arch 8 only |
+|---|---|---|---|
+| canonical `0x000A22` (53) | **41** | 10 | 12 |
+| per-config `0x0001EF` (40) | 34 | 17 | 6 |
+
+The canonical comparison is the meaningful one for the question "do models share
+key codes", and 41 of 51 is a strong yes.
 
 The code ordering is strikingly similar between the two architectures:
 
@@ -378,8 +405,7 @@ arch 9:  89 8B 8A 8D 8C 06 8F 8E 81 83 82 85 84 87 86  99 9A 9B 9C ...
 ```
 
 Same groups (`0x8x` → `0x9x` → `0xAx` → `0xBx`), same order within them, with a
-few codes inserted or omitted. Main-table overlap: **34 codes shared**, 17 only in
-ours, 6 only in arch 8.
+few codes inserted or omitted.
 
 → **The code ↔ physical key assignment is shared across models**, and the table
 order is canonical (Logitech's standard key ordering).

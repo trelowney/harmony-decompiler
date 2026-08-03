@@ -57,11 +57,45 @@ if len(ot) > 1:
               f"extra {sorted(hex(c) for c in cs - main)}")
 
 # --- arch 9 versus arch 8 ---
+#
+# Compare against every arch 8 table, not just the first one found. Arch 8 has
+# two: a canonical table at 0x000A22 that is byte-identical across all samples,
+# and a per-configuration one at 0x0001EF. They give different overlap figures
+# (41 shared versus 34), and an earlier version of this script quietly picked
+# whichever came first, which is how the two ended up conflated in the docs.
 if ot and at:
-    a, b = set(ot[0][2]), set(at[0][2])
-    print(f"\n{'='*72}\nARCH 9 vs ARCH 8 - main tables\n{'='*72}")
-    print(f"  arch 9 : {len(a)} codes, 0x{min(a):02X}-0x{max(a):02X}")
-    print(f"  arch 8 : {len(b)} codes, 0x{min(b):02X}-0x{max(b):02X}")
-    print(f"  shared      : {len(a & b)}")
-    print(f"  arch 9 only : {sorted(hex(c) for c in a - b)}")
-    print(f"  arch 8 only : {sorted(hex(c) for c in b - a)}")
+    a = set(ot[0][2])
+    print(f"\n{'='*72}\nARCH 9 main table vs EVERY ARCH 8 TABLE\n{'='*72}")
+    print(f"  arch 9 main @0x{ot[0][0]:06X}: {len(a)} codes, "
+          f"0x{min(a):02X}-0x{max(a):02X}")
+    for off, cnt, codes, targets in at:
+        b = set(codes)
+        contiguous = sorted(targets) == list(range(min(targets), max(targets) + 1))
+        print(f"\n  arch 8 @0x{off:06X}: {len(b)} codes, "
+              f"0x{min(b):02X}-0x{max(b):02X}, targets {min(targets)}-{max(targets)}"
+              f"{' (contiguous)' if contiguous else ''}")
+        print(f"    shared      : {len(a & b)}")
+        print(f"    arch 9 only : {sorted(hex(c) for c in a - b)}")
+        print(f"    arch 8 only : {sorted(hex(c) for c in b - a)}")
+
+# --- which arch 8 tables are the same in every sample? ---
+if len(samples) > 1:
+    print(f"\n{'='*72}\nWHICH ARCH 8 TABLES ARE SAMPLE-INDEPENDENT\n{'='*72}")
+    print("  Caveat before reading anything into this: the bundled arch 8")
+    print("  samples all carry the same board and flash IDs and came from one")
+    print("  person, so they are probably four configs for a single remote.")
+    print("  'Identical across samples' therefore shows a table does not change")
+    print("  with configuration - NOT that it is the same on every model.\n")
+    per_file = {p.name: {off: codes for off, _, codes, _ in tables(get_blob(p))}
+                for p in samples}
+    all_offs = sorted({o for t in per_file.values() for o in t})
+    for off in all_offs:
+        present = [n for n, t in per_file.items() if off in t]
+        variants = {tuple(t[off]) for n, t in per_file.items() if off in t}
+        if len(present) == 1:
+            verdict = "only in one sample - nothing to compare"
+        elif len(variants) == 1:
+            verdict = "IDENTICAL wherever present"
+        else:
+            verdict = f"varies ({len(variants)} different versions)"
+        print(f"  0x{off:06X}: in {len(present)}/{len(per_file)} samples, {verdict}")
