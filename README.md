@@ -67,17 +67,24 @@ key presses over USB does not work — the remote locks its UI in USB mode and
 never reports which key was pressed.
 
 Without that map, a decompiler can round-trip a config perfectly and still not be
-able to tell you which button you are remapping. If you have any of the following,
-it would unblock a lot: original Logitech documentation, a service manual, a photo
-of a bare Harmony PCB, or simply the patience to buzz out a matrix with a
-multimeter. Details in [`docs/OPEN-QUESTIONS.md`](docs/OPEN-QUESTIONS.md).
+able to tell you which button you are remapping. Both halves of the problem are
+written up — the matrix in [`docs/FORMAT.md`](docs/FORMAT.md), the buttons a human
+sees in [`docs/BUTTON-LAYOUT.md`](docs/BUTTON-LAYOUT.md) — and joining them is
+what nobody has done.
+
+If you have any of the following, it would unblock a lot: original Logitech
+documentation, a service manual, a photo of a bare Harmony PCB, or simply the
+patience to buzz out a matrix with a multimeter. Details in
+[`docs/OPEN-QUESTIONS.md`](docs/OPEN-QUESTIONS.md).
 
 ## Repository layout
 
 ```
 docs/FORMAT.md          everything known about the format, with evidence
 docs/OPEN-QUESTIONS.md  what is unknown, and what would answer it
+docs/BUTTON-LAYOUT.md   the buttons as Logitech documents them
 samples/harmony525/     a real arch 9 config, with checksums
+samples/arch8/          four 720/785/88x configs, mirrored from the thread
 tools/                  Python scripts used for the analysis (read-only)
 ```
 

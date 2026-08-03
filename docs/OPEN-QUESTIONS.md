@@ -13,8 +13,10 @@ cannot.
 
 Key codes are keyboard-matrix coordinates, `code = 0x80 | (row << 3) | column`,
 giving a clean 8 × 7 grid with 50 occupied positions and no collisions
-([FORMAT.md §5g](FORMAT.md#5g-key-codes-are-keyboard-matrix-addresses)). What is
-missing is the map from a grid position to the button a human presses.
+([FORMAT.md §5g](FORMAT.md#5g-key-codes-are-keyboard-matrix-addresses)). The
+buttons on the other side of the gap — what Logitech names them, how they are
+arranged, and which of them the manual actually counts — are written up in
+[BUTTON-LAYOUT.md](BUTTON-LAYOUT.md). What is missing is the map between the two.
 
 Why the obvious routes do not work:
 

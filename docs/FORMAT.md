@@ -458,6 +458,9 @@ evidence.
 
 ### Buttons documented in the manual (pp. 5 and 9)
 
+Summarised here; the full extraction, including the physical arrangement and
+Logitech's own descriptions, is in [BUTTON-LAYOUT.md](BUTTON-LAYOUT.md).
+
 | group | count | documented? |
 |---|---|---|
 | system: Off, Activities, Devices, Help, Glow | 5 | yes, by name |
