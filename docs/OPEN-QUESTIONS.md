@@ -101,6 +101,12 @@ length. Running the decompiler settles it:
   6, 9 and 14 that follows their pointer prefixes, plus the *bodies* of the 114
   records - their headers are decoded.
 
+Pointers are now symbolic - `region + delta` - so the compiler relinks every one
+it knows about when something changes length. The same-size restriction is
+therefore lifted for *known* pointers. It is emphatically not lifted for unknown
+ones: anything pointer-shaped inside a still-opaque region gets left behind
+silently. That is now the main risk in the whole approach.
+
 So the remaining question is narrower and more concrete than it was: **do sections
 1, 2, 3, 4, 8 or 17 contain pointers in some shape the recogniser does not
 match?** Section 13 did, and was found by relaxing the requirement that addresses

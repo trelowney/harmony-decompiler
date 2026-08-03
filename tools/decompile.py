@@ -3,6 +3,7 @@
     python decompile.py                          # the bundled 525 sample
     python decompile.py config.EZHex out.json
     python decompile.py config.EZHex --summary   # print the layout, write nothing
+    python decompile.py config.EZHex --absolute  # raw offsets, not region+delta
 
 Regions with a `data` field are still opaque and pass through as hex; the rest
 are decoded into fields and rebuilt from them by compile.py. Check the result
@@ -72,6 +73,10 @@ def main(argv):
 
     src = Path(args[0]) if args else SAMPLE_EZHEX
     doc = hconfig.decompile(src.read_bytes(), src.name)
+    if "--absolute" not in flags:
+        # pointers as `region + delta` rather than raw offsets, so the compiler
+        # can relink them if anything before them changes length
+        doc = hconfig.symbolise(doc)
 
     summarise(doc)
 

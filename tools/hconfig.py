@@ -554,8 +554,19 @@ def decompile(raw: bytes, filename=None) -> dict:
 # --------------------------------------------------------------------------
 # compile
 
-def emit_region(r: dict) -> bytes:
-    """Turn one region back into bytes."""
+def emit_region(r: dict, resolve=None) -> bytes:
+    """Turn one region back into bytes.
+
+    `resolve` maps a pointer to a blob offset. Absolute pointers pass straight
+    through; symbolic ones need the layout, which is why compile_blob works out
+    every region's position before emitting any of them.
+    """
+    if resolve is None:
+        def resolve(t):
+            if isinstance(t, int):
+                return t
+            raise ConfigError("symbolic pointers need a resolver")
+
     kind = r["kind"]
 
     if kind in ("opaque", "section"):
@@ -576,10 +587,10 @@ def emit_region(r: dict) -> bytes:
 
     if kind == "record_header":
         out = bytearray(b"\x00")
-        out += (r["back_reference"] + CONFIG_BASE).to_bytes(3, "little")
+        out += (resolve(r["back_reference"]) + CONFIG_BASE).to_bytes(3, "little")
         out += len(r["targets"]).to_bytes(2, "little")
-        for o in r["targets"]:
-            out += (o + CONFIG_BASE).to_bytes(3, "little")
+        for t in r["targets"]:
+            out += (resolve(t) + CONFIG_BASE).to_bytes(3, "little")
         return bytes(out)
 
     if kind == "pointer_table":
@@ -587,8 +598,8 @@ def emit_region(r: dict) -> bytes:
         out = bytearray()
         out += len(targets).to_bytes(r["count_width"], "little")
         out += bytes.fromhex(r.get("header", r.get("padding", "")))
-        for o in targets:
-            out += (o + CONFIG_BASE).to_bytes(3, "little")
+        for t in targets:
+            out += (resolve(t) + CONFIG_BASE).to_bytes(3, "little")
         return bytes(out)
 
     if kind == "key_table":
@@ -617,7 +628,10 @@ def compile_blob(doc: dict) -> bytes:
     if header is None or footer is None:
         raise ConfigError("regions must include a blob_header and a blob_footer")
 
-    # lay the body out first, so section addresses can be derived from it
+    # work out where every region lands before emitting any of them, so
+    # symbolic pointers can be resolved against the new layout
+    resolve, _ = _resolver(regions)
+
     body, addresses, cursor = [], {}, header["length"]
     for r in regions:
         kind = r["kind"]
@@ -629,7 +643,7 @@ def compile_blob(doc: dict) -> bytes:
         if "section" in r and r["section"] not in addresses:
             addresses[r["section"]] = cursor + CONFIG_BASE
 
-        data = emit_region(r)
+        data = emit_region(r, resolve)
         body.append(data)
         cursor += len(data)
 
@@ -680,6 +694,87 @@ def compile_config(doc: dict) -> bytes:
 
 
 # --------------------------------------------------------------------------
+
+def symbolise(doc: dict) -> dict:
+    """Turn every pointer from an absolute offset into `region + delta`.
+
+    An offset only stays correct while nothing before it moves, which is why
+    lengths currently have to be preserved. A pointer that says "12 bytes into
+    record 42" instead stays correct wherever record 42 ends up, so the compiler
+    can recompute it after a change in length.
+
+    Pointers are resolved against the region that contains them, not the nearest
+    labelled thing: 705 of the 934 in the 525 config land inside a region rather
+    than on its first byte, mostly in record bodies that are still opaque.
+    """
+    regions = doc["blob"]["regions"]
+    for i, r in enumerate(regions):
+        r.setdefault("id", f"r{i:04d}")
+
+    starts = sorted((r["offset"], r["id"]) for r in regions)
+    offsets = [s for s, _ in starts]
+
+    def to_symbol(off):
+        import bisect
+        i = bisect.bisect_right(offsets, off) - 1
+        if i < 0:
+            return off
+        base, rid = starts[i]
+        return {"to": rid, "delta": off - base} if off != base else {"to": rid}
+
+    for r in regions:
+        if "targets" in r:
+            r["targets"] = [to_symbol(t) if isinstance(t, int) else t
+                            for t in r["targets"]]
+        if "back_reference" in r and isinstance(r["back_reference"], int):
+            r["back_reference"] = to_symbol(r["back_reference"])
+
+    doc["blob"]["pointers_symbolic"] = True
+    return doc
+
+
+def _resolver(regions):
+    """Map region ids to their final offsets, then resolve a pointer.
+
+    Two passes are possible because a pointer is always three bytes whatever it
+    points at, so every region's length is known before any address is.
+    """
+    offsets, cursor = {}, 0
+    for r in regions:
+        if "id" in r:
+            offsets[r["id"]] = cursor
+        cursor += region_length(r)
+
+    def resolve(t):
+        if isinstance(t, int):
+            return t
+        if t["to"] not in offsets:
+            raise ConfigError(f"pointer to unknown region {t['to']!r}")
+        return offsets[t["to"]] + t.get("delta", 0)
+
+    return resolve, cursor
+
+
+def region_length(r: dict) -> int:
+    """A region's size in bytes, without needing any pointer resolved."""
+    kind = r["kind"]
+    if kind in ("opaque", "section"):
+        return sum(len(line) for line in r["data"]) // 2
+    if kind == "blob_header":
+        return r["length"]
+    if kind == "blob_footer":
+        return 4
+    if kind == "name_table":
+        return 7 + sum(7 + len(rec["name"]) for rec in r["records"])
+    if kind == "key_table":
+        return 4 * len(r["entries"])
+    if kind == "pointer_table":
+        return (r["count_width"] + len(bytes.fromhex(r.get("header", "")))
+                + 3 * len(r["targets"]))
+    if kind == "record_header":
+        return 6 + 3 * len(r["targets"])
+    raise ConfigError(f"unknown region kind {kind!r}")
+
 
 def load(path) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))

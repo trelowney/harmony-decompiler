@@ -13,12 +13,17 @@ repository is an attempt to change that.
 > one byte of the blob, with the container's checksum recomputed. About 5% of the
 > file is decoded so far and the rest passes through as opaque blobs, but that 5%
 > includes **952 pointers**, which the compiler recomputes rather than copies.
+>
+> **Length-changing edits work too**, as of the pointers becoming symbolic:
+> lengthen a name and every section after it shifts, every pointer relinks, and
+> the file comes back with the same structure. See the caveat under *Editing*.
 > See [`docs/FORMAT.md`](docs/FORMAT.md) for what is known and
 > [`docs/OPEN-QUESTIONS.md`](docs/OPEN-QUESTIONS.md) for what is not.
 
 ```sh
 cd tools
 python roundtrip.py                       # decompile, recompile, compare bytes
+python roundtrip.py --resize              # lengthen a name, check it relinks
 python decompile.py --summary             # what is decoded and what is not
 python decompile.py config.EZHex out.json
 python compile.py out.json new.EZHex --against config.EZHex
@@ -77,6 +82,20 @@ test within an hour of it working, which is roughly the point of having it.
 
 Full detail, including the negative results worth not repeating, is in
 [`docs/FORMAT.md`](docs/FORMAT.md).
+
+## Editing
+
+Pointers decompile as `region + delta` rather than raw offsets, so the compiler
+recomputes them against wherever things end up. That is what makes a length
+change survivable: `roundtrip.py --resize` lengthens a name, and all 820 symbolic
+pointers come back referring to the same things they referred to before.
+
+**This proves internal consistency, not that a remote would accept the result.**
+A pointer hidden inside a region that is still opaque is invisible to this code
+and would be silently left behind by exactly the kind of edit above. Sections 1,
+2, 3, 4, 8, 16 and 17 and all 114 record bodies are still opaque, so treat
+length-changing edits as an experiment rather than a feature, and read the safety
+note below before going anywhere near hardware.
 
 ## The main thing standing in the way
 

@@ -35,11 +35,22 @@ from them - or not, in which case it is hex that passes straight through. Adding
 recogniser to `hconfig.py` moves a region from the second kind to the first, and
 `roundtrip.py` says immediately whether the new decoding is right.
 
-**If you edit the JSON, keep lengths the same.** Section addresses and the
-end-of-config address are recomputed, and `BINARYDATASIZE`/`CHECKSUM` are updated,
-so length-neutral edits are safe - retargeting a key is one changed byte. But
-pointers inside regions that are still opaque are just hex to this code, and
-moving anything they point at will corrupt the config silently.
+Pointers decompile as `{"to": "r0042", "delta": 12}` rather than as offsets, so
+they survive things moving. `compile.py` works out where every region lands before
+emitting any of them - possible because a pointer is three bytes whatever it points
+at - and then resolves each against the new layout. Pass `--absolute` to
+`decompile.py` for raw offsets instead.
+
+That is what `roundtrip.py --resize` checks: it lengthens a name, which shifts
+every section after it, then confirms the rebuilt config has the same region
+structure and the same *symbolic* pointers as before.
+
+**The caveat that matters.** All of that covers only the pointers this code can
+see. Sections 1, 2, 3, 4, 8, 16 and 17 are still opaque, as are all 114 record
+bodies, and anything pointer-shaped in there is just hex being copied. A
+length-changing edit will leave such a pointer aimed at whatever moved into its
+place, and nothing here will notice. Length-neutral edits - retargeting a key,
+renaming something to a name of the same length - do not have that problem.
 
 ## Offline analysis
 
