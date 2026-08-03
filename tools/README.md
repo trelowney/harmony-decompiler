@@ -16,10 +16,10 @@ python sections.py ../my-remote.EZHex  # your own dump, .EZHex or already split
 
 | script | what it does |
 |---|---|
-| `hconfig.py` | the library — parse a config into regions, rebuild it from them |
-| `decompile.py` | config → JSON, and a summary of what is decoded |
-| `compile.py` | JSON → config, recomputing pointers and checksums |
-| `roundtrip.py` | **the correctness test** — decompile, recompile, compare bytes |
+| `hconfig.py` | the library - parse a config into regions, rebuild it from them |
+| `decompile.py` | config -> JSON, and a summary of what is decoded |
+| `compile.py` | JSON -> config, recomputing pointers and checksums |
+| `roundtrip.py` | **the correctness test** - decompile, recompile, compare bytes |
 
 ```sh
 python roundtrip.py                       # the bundled sample
@@ -30,14 +30,14 @@ python compile.py out.json new.EZHex --against ../samples/harmony525/config.EZHe
 ```
 
 A config is modelled as an ordered list of regions that tiles the blob with no
-gaps and no overlaps. Each region is either understood — stored as fields, rebuilt
-from them — or not, in which case it is hex that passes straight through. Adding a
+gaps and no overlaps. Each region is either understood - stored as fields, rebuilt
+from them - or not, in which case it is hex that passes straight through. Adding a
 recogniser to `hconfig.py` moves a region from the second kind to the first, and
 `roundtrip.py` says immediately whether the new decoding is right.
 
 **If you edit the JSON, keep lengths the same.** Section addresses and the
 end-of-config address are recomputed, and `BINARYDATASIZE`/`CHECKSUM` are updated,
-so length-neutral edits are safe — retargeting a key is one changed byte. But
+so length-neutral edits are safe - retargeting a key is one changed byte. But
 pointers inside regions that are still opaque are just hex to this code, and
 moving anything they point at will corrupt the config silently.
 
@@ -49,7 +49,7 @@ moving anything they point at will corrupt the config silently.
 | `sections.py` | parse the 18-section pointer table from the header |
 | `records.py` | parse the 114-record array indexed by section 6 |
 | `keytable.py` | parse the key table in record #0 |
-| `keymatrix.py` | test the keyboard-matrix hypothesis, render the 8×7 grid |
+| `keymatrix.py` | test the keyboard-matrix hypothesis, render the 8x7 grid |
 | `find_keytables.py` | generic key-table detector, ranked by code uniqueness |
 | `compare_keytables.py` | compare tables within a config and across architectures |
 | `ir_section.py` | sections 6 and 8 |
@@ -76,21 +76,21 @@ Logitech's documentation server is still up:
 
 ## Live communication with a remote
 
-Windows only — these go through `setupapi`/`hid.dll` via ctypes, because the
+Windows only - these go through `setupapi`/`hid.dll` via ctypes, because the
 32-bit `libhidapi-0.dll` shipped with concordance cannot be loaded from 64-bit
 Python. Porting them to Linux/macOS would mean swapping the transport layer in
 `hid_listen.py` for hidraw or libusb; everything above it is portable.
 
 | script | what it does |
 |---|---|
-| `hid_query.py` | **protocol core** — GET_VERSION, ReadMisc, and the command whitelist |
+| `hid_query.py` | **protocol core** - GET_VERSION, ReadMisc, and the command whitelist |
 | `hid_listen.py` | dump HID capabilities; with an argument, listen for input reports |
 | `poll_state.py` | poll state variables, report changes |
 | `capture_keys.py` | sample state during key presses, group by pause |
 | `probe_kinds.py` | try every address space (EEPROM / STATE / RAM / REGISTER) |
 
 Start with `hid_query.py`. Its second step reads the clock out of state variables,
-which you can check against `concordance --get-time` — if those agree, the
+which you can check against `concordance --get-time` - if those agree, the
 transport is working and everything else it reports can be trusted.
 
 ### These do not write to your remote
@@ -100,5 +100,5 @@ transport is working and everything else it reports can be trusted.
 `0xD0 ERASE_FLASH`. Everything else routes through it. `hid_listen.py` opens the
 device with `GENERIC_READ` only, so Windows itself would reject a write.
 
-Please leave that in place — see [../CONTRIBUTING.md](../CONTRIBUTING.md) for the
+Please leave that in place - see [../CONTRIBUTING.md](../CONTRIBUTING.md) for the
 reasoning.

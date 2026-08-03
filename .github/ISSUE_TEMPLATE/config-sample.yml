@@ -1,12 +1,12 @@
 name: Contribute a config sample
-description: Share a config dumped off a real remote — the most useful thing you can add
+description: Share a config dumped off a real remote - the most useful thing you can add
 title: "[sample] "
 labels: ["sample"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thank you — samples are the bottleneck on this whole effort. Every model
+        Thank you - samples are the bottleneck on this whole effort. Every model
         other than the Harmony 525 is currently unrepresented, and the four arch 8
         samples in circulation all came from one person.
 
@@ -24,7 +24,7 @@ body:
     id: model
     attributes:
       label: Which remote?
-      placeholder: "Harmony 880 / One / 600 / …"
+      placeholder: "Harmony 880 / One / 600 / ..."
     validations:
       required: true
 
@@ -43,7 +43,7 @@ body:
       label: The file, and anything worth knowing
       description: >
         **Drag the .EZHex file into this box.** If GitHub refuses the extension,
-        put it in a .zip — that is how the existing samples were shared.
+        put it in a .zip - that is how the existing samples were shared.
 
 
         Anything else that would help: what devices and activities are

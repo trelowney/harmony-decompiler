@@ -1,4 +1,4 @@
-# Harmony 525 — arch 9 sample
+# Harmony 525 - arch 9 sample
 
 A config read off a physical Harmony 525 on 2026-08-02 with
 `concordance --dump-config`. As far as anyone in the
@@ -13,7 +13,7 @@ checked rather than taken on trust. Every offset quoted there refers to this fil
 
 | file | size | what it is |
 |---|---|---|
-| `config.EZHex` | 81,639 B | the complete file as dumped — XML header + blob |
+| `config.EZHex` | 81,639 B | the complete file as dumped - XML header + blob |
 | `config.bin` | 78,486 B | just the binary blob, split out for convenience |
 | `header.xml` | 3,153 B | just the XML header, byte-exact |
 | `header-pretty.xml` | 2,652 B | the same header, reformatted for reading |
@@ -36,7 +36,7 @@ anything.
 | devices configured | Panasonic TV, Genius amplifier, XBOX 360 |
 
 The remote runs on the **native Windows HID stack**. No Zadig or libusb driver
-swap is needed — that requirement applies to the Harmony 900/1000, not this
+swap is needed - that requirement applies to the Harmony 900/1000, not this
 generation.
 
 ## Privacy
@@ -75,5 +75,5 @@ as such:
 concordance --write-config config.EZHex --force
 ```
 
-This has not been tested by the person who dumped it — testing it means writing to
+This has not been tested by the person who dumped it - testing it means writing to
 the only 525 involved.

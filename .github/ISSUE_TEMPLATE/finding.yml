@@ -1,12 +1,12 @@
 name: Report a finding
-description: Something you worked out about the format — confirmed or not
+description: Something you worked out about the format - confirmed or not
 title: "[finding] "
 labels: ["finding"]
 body:
   - type: markdown
     attributes:
       value: |
-        Partial findings and hunches are welcome. So are negative results — "I
+        Partial findings and hunches are welcome. So are negative results - "I
         tried X, it does not work" saves the next person an evening, and there are
         sections in the docs specifically for them.
 
@@ -20,9 +20,9 @@ body:
     attributes:
       label: How solid is this?
       options:
-        - Verified — checked against real data, and I say below how
-        - Hypothesis — it fits, but I have not proven it
-        - Negative result — I tried this and it does not work
+        - Verified - checked against real data, and I say below how
+        - Hypothesis - it fits, but I have not proven it
+        - Negative result - I tried this and it does not work
         - Not sure
     validations:
       required: true

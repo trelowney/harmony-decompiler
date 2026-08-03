@@ -1,7 +1,7 @@
 # harmony-decompiler
 
 Reverse engineering the **Logitech Harmony configuration binary**, with the goal
-of decompiling a config into a readable text format and compiling it back —
+of decompiling a config into a readable text format and compiling it back -
 byte for byte.
 
 Logitech's servers for these remotes are gone. A config that is already on a
@@ -9,7 +9,7 @@ remote can still be read off it, but nobody can generate a new one. This
 repository is an attempt to change that.
 
 > **Status: the round trip works.** A 525 config decompiles to JSON and compiles
-> back byte-identical, and a button can be remapped through it — changing exactly
+> back byte-identical, and a button can be remapped through it - changing exactly
 > one byte of the blob, with the container's checksum recomputed. About 3.7% of
 > the file is genuinely decoded so far; the rest passes through as opaque blobs.
 > See [`docs/FORMAT.md`](docs/FORMAT.md) for what is known and
@@ -27,7 +27,7 @@ python compile.py out.json new.EZHex --against config.EZHex
 
 This repository is about **the config format and the toolchain around it**.
 Talking to the remote over USB is already solved by
-[concordance / libconcord](https://github.com/jaymzh/concordance) — please use
+[concordance / libconcord](https://github.com/jaymzh/concordance) - please use
 that for transfers. Keeping the two separate was
 [suggested in the thread](https://github.com/jaymzh/concordance/issues/66) this
 work grew out of, on the grounds that the data format and the USB transport are
@@ -46,8 +46,8 @@ logically independent problems.
    unchanged, that is proof the model of the format is complete rather than
    plausible. Every newly decoded structure gets checked by the same test.
 
-Once every section containing pointers is decoded — even where the rest of that
-section is still opaque — the same-size restriction can be lifted and larger
+Once every section containing pointers is decoded - even where the rest of that
+section is still opaque - the same-size restriction can be lifted and larger
 changes become possible.
 
 ## What is known so far
@@ -59,11 +59,11 @@ claim than "it looks right":
 - the `.EZHex` container: XML header + binary blob, size and XOR checksum
 - the blob header: `AHCM` magic, an 18-entry section pointer table
 - pointers are **24-bit little-endian absolute flash addresses**;
-  `config_base = 0x20000` — confirmed on arch 8 too
-- **which sections carry pointer tables** — 9 of the 18, holding 656 addresses,
+  `config_base = 0x20000` - confirmed on arch 8 too
+- **which sections carry pointer tables** - 9 of the 18, holding 656 addresses,
   all of which the compiler now recomputes rather than copying. Section 10 turns
   out to be nothing but a 487-entry pointer array
-- the name table, wrapped in `0xFEED … 0xBEEF` with a length field, whose `index`
+- the name table, wrapped in `0xFEED ... 0xBEEF` with a length field, whose `index`
   is the address of a **live state variable readable over USB**
 - the **key table** format, `<u8 code> <u16 target> <0x7F>`, and that there is one
   overlay table per activity
@@ -81,13 +81,13 @@ Full detail, including the negative results worth not repeating, is in
 **Nobody knows which matrix position is which physical button.** The codes are
 matrix coordinates, and the ordering in the config is Logitech's canonical key
 order rather than the visual layout, so it cannot be read off the table. Sniffing
-key presses over USB does not work — the remote locks its UI in USB mode and
+key presses over USB does not work - the remote locks its UI in USB mode and
 never reports which key was pressed.
 
 Without that map, a decompiler can round-trip a config perfectly and still not be
 able to tell you which button you are remapping. Both halves of the problem are
-written up — the matrix in [`docs/FORMAT.md`](docs/FORMAT.md), the buttons a human
-sees in [`docs/BUTTON-LAYOUT.md`](docs/BUTTON-LAYOUT.md) — and joining them is
+written up - the matrix in [`docs/FORMAT.md`](docs/FORMAT.md), the buttons a human
+sees in [`docs/BUTTON-LAYOUT.md`](docs/BUTTON-LAYOUT.md) - and joining them is
 what nobody has done.
 
 If you have any of the following, it would unblock a lot: original Logitech
@@ -117,14 +117,14 @@ concordance --dump-config my-remote.EZHex
 ```
 
 That file contains your device brands and your activity names. It does not
-contain account credentials — the `UserId` field in the sample here reads `0` —
+contain account credentials - the `UserId` field in the sample here reads `0` -
 but do have a look before posting, and say which remote it came from.
 
 There is a ready-made issue form for this: **Contribute a config sample**.
 
 ## Contributing
 
-Questions, half-formed ideas and "I tried X and it did not work" are all welcome —
+Questions, half-formed ideas and "I tried X and it did not work" are all welcome -
 negative results genuinely save other people time, and there is a section for them
 in `FORMAT.md`. Use **Discussions** for open-ended thinking, **Issues** for
 specific findings, samples and bugs. See
@@ -138,8 +138,8 @@ Nothing in this repository writes to a remote. The scripts in `tools/` are
 read-only by construction: `hid_query.py` carries a command whitelist that refuses
 `WRITE_FLASH`, `WRITE_FLASH_DATA`, `WRITE_MISC` and `ERASE_FLASH`.
 
-When the time comes to test writing, the current understanding — from the original
-Harmony developer — is that transferring a bad config through concordance should
+When the time comes to test writing, the current understanding - from the original
+Harmony developer - is that transferring a bad config through concordance should
 confuse the runtime rather than brick the remote: you can usually send a new config
 over USB, and in the worst case boot into safe mode, where the remote ignores the
 config entirely. The caveat he attached is worth repeating, though: a config could
@@ -158,8 +158,8 @@ This work leans directly on
 (© Phil Dibowitz 2007, © Kevin Timmerman 2007, maintained by
 [@jaymzh](https://github.com/jaymzh)). Specifically:
 
-- the `.EZHex` container layout — where the blob starts, and that the checksum is
-  an XOR seeded `0x69` — was read out of
+- the `.EZHex` container layout - where the blob starts, and that the checksum is
+  an XOR seeded `0x69` - was read out of
   `libconcord/operationfile.cpp:find_config_binary`
 - the vendor HID framing and the `ReadMisc` command shapes reimplemented in
   `tools/hid_query.py` were derived from `libconcord/libhidapi.cpp` and
@@ -173,7 +173,7 @@ it says so at the point it does.
 
 ## Licence
 
-**GPL-3.0-or-later** — see [LICENSE](LICENSE).
+**GPL-3.0-or-later** - see [LICENSE](LICENSE).
 
 This matches libconcord, deliberately. Parts of this work are derived from reading
 that GPLv3 source, so the same licence is the honest and compatible choice, and it

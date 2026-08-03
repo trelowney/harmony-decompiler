@@ -1,4 +1,4 @@
-# Harmony 525 — buttons, as documented by Logitech
+# Harmony 525 - buttons, as documented by Logitech
 
 Extracted from page 5 of the official *Harmony 525 User Manual*, which is titled
 "The buttons on your Harmony 525". The manual is not redistributed here; at the
@@ -20,9 +20,9 @@ Every other page of the manual was checked; page 5 is the only one carrying a
 labelled diagram.
 
 > **Read this alongside [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md).** This document
-> gives the buttons a human sees. [FORMAT.md §5g](FORMAT.md) gives the 8×7 matrix
+> gives the buttons a human sees. [FORMAT.md §5g](FORMAT.md) gives the 8x7 matrix
 > the config addresses. **Joining those two is the unsolved problem**, and nothing
-> below solves it — a button being named "Guide" here does not tell you which
+> below solves it - a button being named "Guide" here does not tell you which
 > matrix cell it is wired to.
 
 ---
@@ -51,7 +51,7 @@ authoritative rather than inferred.
 | screen paging arrows | page through items on the touch screen |
 | previous channel | returns to the last channel |
 | **Play, Pause, Stop, Rec, Rew, Fwd, Skip, Replay** | transport controls, described as "the play area" |
-| **0–9, `*` (clear), `#` (enter)** | the number pad |
+| **0-9, `*` (clear), `#` (enter)** | the number pad |
 
 Two details worth keeping, because they affect the count:
 
@@ -64,8 +64,8 @@ Two details worth keeping, because they affect the count:
 
 Rows recovered from the y-coordinates of the diagram, top to bottom. Horizontal
 positions are only roughly recoverable: the PDF merges adjacent labels into
-single text runs — `1 2 3` and `Stop Replay Skip Play` each come out as one
-fragment — so the per-key x is lost even though the row structure is solid.
+single text runs - `1 2 3` and `Stop Replay Skip Play` each come out as one
+fragment - so the per-key x is lost even though the row structure is solid.
 
 ```
         Off        Activities
@@ -102,7 +102,7 @@ pad, while the `+` and `-` glyphs that survive individually sit on the right.
 
 ## How this squares with the 50 matrix cells
 
-The config gives **50 occupied cells** in an 8×7 matrix
+The config gives **50 occupied cells** in an 8x7 matrix
 ([FORMAT.md §5g](FORMAT.md)). Counting what the manual documents:
 
 | group | count |
@@ -110,10 +110,10 @@ The config gives **50 occupied cells** in an 8×7 matrix
 | Off, Activities, Devices, Help, Glow | 5 |
 | Menu, Info, Exit, Guide | 4 |
 | navigation pad + OK | 5 |
-| Vol +/−, Ch +/− | 4 |
+| Vol +/-, Ch +/- | 4 |
 | Mute, previous channel | 2 |
 | Play, Pause, Stop, Rec, Rew, Fwd, Skip, Replay | 8 |
-| 0–9, `*`, `#` | 12 |
+| 0-9, `*`, `#` | 12 |
 | **firmly documented** | **40** |
 
 Plus, mentioned but never counted: the LCD paging arrows, the side LCD buttons,
@@ -124,8 +124,8 @@ anything.
 
 The manual also does **not** state a total button count anywhere, including in
 `Appendix C - Product Specification` on page 35. A number circulating elsewhere
-claims "50 buttons", but the same source claims an 84 × 84 px LCD where the
-manual says 96 × 64, so it is not reliable.
+claims "50 buttons", but the same source claims an 84 x 84 px LCD where the
+manual says 96 x 64, so it is not reliable.
 
 ## Why this still does not give the mapping
 

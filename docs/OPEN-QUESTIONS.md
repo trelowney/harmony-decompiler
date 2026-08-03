@@ -1,7 +1,7 @@
 # Open questions
 
 What is *not* known, roughly in order of how much it blocks. If you can answer any
-of these — even partially, even with "I checked and it is not X" — please open an
+of these - even partially, even with "I checked and it is not X" - please open an
 issue or a discussion.
 
 ---
@@ -12,18 +12,18 @@ issue or a discussion.
 cannot.
 
 Key codes are keyboard-matrix coordinates, `code = 0x80 | (row << 3) | column`,
-giving a clean 8 × 7 grid with 50 occupied positions and no collisions
+giving a clean 8 x 7 grid with 50 occupied positions and no collisions
 ([FORMAT.md §5g](FORMAT.md#5g-key-codes-are-keyboard-matrix-addresses)). The
-buttons on the other side of the gap — what Logitech names them, how they are
-arranged, and which of them the manual actually counts — are written up in
+buttons on the other side of the gap - what Logitech names them, how they are
+arranged, and which of them the manual actually counts - are written up in
 [BUTTON-LAYOUT.md](BUTTON-LAYOUT.md). What is missing is the map between the two.
 
 Why the obvious routes do not work:
 
-- **Reading it off the config table order** — the order is grouped by matrix row,
+- **Reading it off the config table order** - the order is grouped by matrix row,
   but the columns are permuted differently in each pair of rows. It is Logitech's
   canonical key ordering, not the visual layout.
-- **Sniffing key presses over USB** — the remote locks its UI while connected. It
+- **Sniffing key presses over USB** - the remote locks its UI while connected. It
   sends no HID input reports (`NumberInputButtonCaps = 0`), and the only state
   change visible from outside is a backlight boolean, which two *different* keys
   set identically. Three independent attempts, all negative;
@@ -32,19 +32,19 @@ Why the obvious routes do not work:
 
 What would answer it:
 
-- **original Logitech documentation or source** — the mapping was a table in the
+- **original Logitech documentation or source** - the mapping was a table in the
   configuration software once
 - **a service manual or schematic** for any remote in this family
-- **a photo of a bare PCB** — enough to trace which switch sits on which row/column
-- **buzzing out a matrix with a multimeter** — definitive, and only needs doing
+- **a photo of a bare PCB** - enough to trace which switch sits on which row/column
+- **buzzing out a matrix with a multimeter** - definitive, and only needs doing
   once for one model
-- **a config whose key assignment is already known** — e.g. one built with a known,
+- **a config whose key assignment is already known** - e.g. one built with a known,
   deliberately unusual button layout, so codes can be matched against intent
 
 The assignment appears to be **shared across models**: arch 8 (720/785/88x) uses
 the same code groups in the same order, 34 codes overlapping with the 525
 ([§5f](FORMAT.md#5f-key-codes-are-shared-across-architectures)). So solving it for
-*one* remote in the family carries most of the way to the others — and arch 8
+*one* remote in the family carries most of the way to the others - and arch 8
 layouts are far better documented publicly. A 720 or an 880 is probably an easier
 target than a 525.
 
@@ -58,7 +58,7 @@ bytecode. The original developer described the remote as *"a Von-Neumann style
 computing device with a 16 bit instruction"*, which matches independently.
 
 Unknown: what the opcodes mean. Observed so far are `0x7E, 0x7F, 0x9E, 0x9F, 0xA6,
-0xA7`. Currently a hypothesis, not a verified finding —
+0xA7`. Currently a hypothesis, not a verified finding -
 [FORMAT.md §4c](FORMAT.md#4c-section-8-looks-like-bytecode--hypothesis).
 
 Note this does **not** block the round-trip work: section 8 can travel as an
@@ -68,17 +68,17 @@ opaque blob for as long as it needs to.
 
 ## 3. How IR signals are encoded in flash
 
-The 114-record array in the low region is almost certainly the IR codes — right
+The 114-record array in the low region is almost certainly the IR codes - right
 size, right count, and each record carries a bytecode pointer. The record header
 and trailer are decoded
 ([§4d](FORMAT.md#4d-the-114-record-array--header-solved)); the payload is not.
 
 What is known is only the *wire* format used to send IR data to the (now dead)
-Logitech server, from `libconcord/web.cpp:252`: `F<carrier>P<mark>S<space>…`
+Logitech server, from `libconcord/web.cpp:252`: `F<carrier>P<mark>S<space>...`
 in microseconds. Whether flash uses anything resembling that is unknown.
 
-Anyone who has matched a known IR command — a specific button on a specific
-device, ideally captured with a receiver — against bytes in a config would move
+Anyone who has matched a known IR command - a specific button on a specific
+device, ideally captured with a receiver - against bytes in a config would move
 this a long way.
 
 ---
@@ -91,7 +91,7 @@ pointers are decoded can keep everything else opaque and still survive a change 
 length. Running the decompiler settles it:
 
 - **Pointer tables, now decoded and recomputed on compile:** sections 5, 6, 7, 9,
-  10, 11, 12, 14, 15 — 656 addresses in total. Section 10 turns out to be nothing
+  10, 11, 12, 14, 15-656 addresses in total. Section 10 turns out to be nothing
   *but* a pointer array, 487 entries filling all 1,463 bytes.
 - **Decoded structures:** section 0 is the name table; the four key tables sit in
   the region below 0xF35B.
@@ -138,10 +138,10 @@ Kept here so nobody spends an evening on them twice.
 
 | question | answer |
 |---|---|
-| Can key presses be read over USB? | No. Three approaches, all fail — [§5d](FORMAT.md#5d-identifying-keys-over-usb-is-impossible--closed) |
-| Can configs be diffed to isolate a change? | No. A small logical change moves 73–84% of bytes — [§5](FORMAT.md#negative-result-diffing-samples-does-not-work) |
+| Can key presses be read over USB? | No. Three approaches, all fail - [§5d](FORMAT.md#5d-identifying-keys-over-usb-is-impossible--closed) |
+| Can configs be diffed to isolate a change? | No. A small logical change moves 73-84% of bytes - [§5](FORMAT.md#negative-result-diffing-samples-does-not-work) |
 | Is `config_base` the same across architectures? | Yes, `0x20000` on both arch 8 and arch 9 |
 | Are pointers 32-bit? | No, 24-bit little-endian |
-| Does the remote need a libusb/Zadig driver swap? | Not for the 525 — it runs on the native HID stack. That applies to the 900/1000 |
+| Does the remote need a libusb/Zadig driver swap? | Not for the 525 - it runs on the native HID stack. That applies to the 900/1000 |
 | Does EEPROM/RAM/REGISTER hold anything readable? | No, only `kind=01` STATE returns data, and only in word mode |
 | Is there a published solution to this format already? | No, as of 2026-08 |

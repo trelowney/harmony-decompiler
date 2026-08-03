@@ -6,13 +6,13 @@ not work", and questions from people who have never touched this hardware are al
 genuinely useful.
 
 No prior knowledge of Harmony internals is assumed. If something in the docs is
-impenetrable, saying so is a contribution — it usually means it is badly written.
+impenetrable, saying so is a contribution - it usually means it is badly written.
 
 ## Where to put things
 
 | | |
 |---|---|
-| **Discussions** | open-ended thinking, "has anyone considered…", brainstorming, questions |
+| **Discussions** | open-ended thinking, "has anyone considered...", brainstorming, questions |
 | **Issues** | a specific finding, a config sample, a bug in a script, a concrete task |
 | **Pull requests** | code and documentation changes |
 
@@ -32,13 +32,13 @@ which remote it came from.
 
 Before posting, have a look at what is in it. The XML header of the sample in this
 repository has `UserId` set to `0` and carries no account data, but the config
-does contain your device brands and your activity names — for example the sample
+does contain your device brands and your activity names - for example the sample
 here makes it obvious the owner has a Panasonic TV and an XBOX 360. That is
 usually harmless, but it should be your decision rather than a surprise.
 
 Every sample is worth having even if it duplicates a model already present.
 Two configs from the *same* remote taken before and after one deliberate change
-are especially valuable, even though naive diffing does not work — knowing exactly
+are especially valuable, even though naive diffing does not work - knowing exactly
 what changed logically is the point.
 
 ## Contributing a finding
@@ -61,7 +61,7 @@ questions already settled, specifically so nobody repeats the work.
 
 ## Contributing code
 
-There is no build system and no dependencies — the scripts in `tools/` are plain
+There is no build system and no dependencies - the scripts in `tools/` are plain
 Python 3 using only the standard library, and the Windows HID access goes through
 `ctypes` rather than a binding. Keeping it that way means anyone can run a script
 without setting anything up. If something genuinely needs a dependency, say so in
@@ -81,7 +81,7 @@ but it should be a deliberate, separate, clearly-labelled piece of work rather t
 something that arrives inside a patch about parsing.
 
 If you are experimenting with writes, do it on a remote you are prepared to lose.
-The current understanding — from the original Harmony developer — is that pushing
+The current understanding - from the original Harmony developer - is that pushing
 a bad config through concordance should confuse the runtime rather than brick the
 device, and that safe mode ignores the config entirely so a new one can be sent.
 He also noted that a config could in principle contain an instruction sequence
