@@ -13,3 +13,7 @@ scratch/
 .idea/
 .DS_Store
 Thumbs.db
+
+# decompiler output
+*.json
+!.github/**/*.json

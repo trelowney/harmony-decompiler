@@ -8,10 +8,20 @@ Logitech's servers for these remotes are gone. A config that is already on a
 remote can still be read off it, but nobody can generate a new one. This
 repository is an attempt to change that.
 
-> **Status: research in progress.** Large parts of the format are understood and
-> verified; there is no working compiler yet. See
-> [`docs/FORMAT.md`](docs/FORMAT.md) for what is known and
+> **Status: the round trip works.** A 525 config decompiles to JSON and compiles
+> back byte-identical, and a button can be remapped through it — changing exactly
+> one byte of the blob, with the container's checksum recomputed. About 3.7% of
+> the file is genuinely decoded so far; the rest passes through as opaque blobs.
+> See [`docs/FORMAT.md`](docs/FORMAT.md) for what is known and
 > [`docs/OPEN-QUESTIONS.md`](docs/OPEN-QUESTIONS.md) for what is not.
+
+```sh
+cd tools
+python roundtrip.py                       # decompile, recompile, compare bytes
+python decompile.py --summary             # what is decoded and what is not
+python decompile.py config.EZHex out.json
+python compile.py out.json new.EZHex --against config.EZHex
+```
 
 ## Scope
 
@@ -42,18 +52,26 @@ changes become possible.
 
 ## What is known so far
 
-Verified against a real Harmony 525 config (arch 9, protocol 9):
+Verified against a real Harmony 525 config (arch 9, protocol 9). Everything in
+this list survives a decompile/recompile cycle byte-for-byte, which is a stronger
+claim than "it looks right":
 
 - the `.EZHex` container: XML header + binary blob, size and XOR checksum
 - the blob header: `AHCM` magic, an 18-entry section pointer table
 - pointers are **24-bit little-endian absolute flash addresses**;
   `config_base = 0x20000` — confirmed on arch 8 too
-- the name table, and the fact that its `index` field is the address of a
-  **live state variable readable over USB**
+- **which sections carry pointer tables** — 9 of the 18, holding 656 addresses,
+  all of which the compiler now recomputes rather than copying. Section 10 turns
+  out to be nothing but a 487-entry pointer array
+- the name table, wrapped in `0xFEED … 0xBEEF` with a length field, whose `index`
+  is the address of a **live state variable readable over USB**
 - the **key table** format, `<u8 code> <u16 target> <0x7F>`, and that there is one
   overlay table per activity
 - key codes are **keyboard matrix addresses**: `code = 0x80 | (row << 3) | column`
 - the vendor HID protocol, reimplemented and cross-checked against concordance
+
+Two errors in this document's own earlier revisions were caught by the round-trip
+test within an hour of it working, which is roughly the point of having it.
 
 Full detail, including the negative results worth not repeating, is in
 [`docs/FORMAT.md`](docs/FORMAT.md).

@@ -12,6 +12,35 @@ python sections.py                     # the bundled 525 sample
 python sections.py ../my-remote.EZHex  # your own dump, .EZHex or already split
 ```
 
+## The decompiler
+
+| script | what it does |
+|---|---|
+| `hconfig.py` | the library — parse a config into regions, rebuild it from them |
+| `decompile.py` | config → JSON, and a summary of what is decoded |
+| `compile.py` | JSON → config, recomputing pointers and checksums |
+| `roundtrip.py` | **the correctness test** — decompile, recompile, compare bytes |
+
+```sh
+python roundtrip.py                       # the bundled sample
+python roundtrip.py --all                 # every sample in the repo
+python decompile.py --summary             # region map, nothing written
+python decompile.py ../samples/harmony525/config.EZHex out.json
+python compile.py out.json new.EZHex --against ../samples/harmony525/config.EZHex
+```
+
+A config is modelled as an ordered list of regions that tiles the blob with no
+gaps and no overlaps. Each region is either understood — stored as fields, rebuilt
+from them — or not, in which case it is hex that passes straight through. Adding a
+recogniser to `hconfig.py` moves a region from the second kind to the first, and
+`roundtrip.py` says immediately whether the new decoding is right.
+
+**If you edit the JSON, keep lengths the same.** Section addresses and the
+end-of-config address are recomputed, and `BINARYDATASIZE`/`CHECKSUM` are updated,
+so length-neutral edits are safe — retargeting a key is one changed byte. But
+pointers inside regions that are still opaque are just hex to this code, and
+moving anything they point at will corrupt the config silently.
+
 ## Offline analysis
 
 | script | what it does |

@@ -37,21 +37,27 @@ body:
         for sorting samples by architecture before anyone opens them.
       render: xml
 
-  - type: checkboxes
-    id: file
-    attributes:
-      label: The file
-      options:
-        - label: I have attached the .EZHex file (drag it into the comment box below)
-        - label: I have had a look at what is in it and I am happy to publish it
-          required: true
-
   - type: textarea
     id: notes
     attributes:
-      label: Anything worth knowing
+      label: The file, and anything worth knowing
       description: >
-        For example: what devices and activities are configured, whether you have
-        deliberately unusual button assignments, or whether you have a second dump
-        of the same remote with one thing changed. Any of those make the sample
-        considerably more useful.
+        **Drag the .EZHex file into this box.** If GitHub refuses the extension,
+        put it in a .zip — that is how the existing samples were shared.
+
+
+        Anything else that would help: what devices and activities are
+        configured, whether you have deliberately unusual button assignments, or
+        whether you have a second dump of the same remote with one thing changed.
+        Any of those make the sample considerably more useful.
+      placeholder: Drop the file here, then type anything you want to add.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: consent
+    attributes:
+      label: Before posting
+      options:
+        - label: I have had a look at what is in it and I am happy to publish it
+          required: true

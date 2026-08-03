@@ -70,14 +70,30 @@ key table (§4e).
 ## 4. Name record — SOLVED
 
 Section 0 is a table of named symbols belonging to a rule engine called
-"HarmonyAssistant".
+"HarmonyAssistant". The whole section is wrapped:
 
 ```
-A7  u16 len  u16 parent  u16 index  char name[len-4]
+ED FE            0xFEED
+u16 length       offset of the terminator, counted from the start of the table
+u8               unknown, 0 here
+records:
+  A7  u16 len  u16 parent  u16 index  char name[len-4]
+  …
+EF BE            0xBEEF
 ```
 
-`len` = name length + 4. Verified on all 12 records. The table is terminated by
-`EF BE` (0xBEEF).
+`len` counts the parent and index fields plus the name, so a record occupies
+`len + 3` bytes. **13 records** in this config. The declared length reads 305 and
+the terminator sits at exactly +305, with the section being 307 bytes — the two
+agree, which is what makes this safe to rebuild rather than merely plausible.
+
+> Two corrections to earlier revisions of this document, both caught by building
+> the decompiler: the record count is 13, not 12, and the `ED FE … EF BE` framing
+> with its length field was not noticed at all — `0xFEED` and `0xBEEF` are not a
+> coincidence.
+
+The table round-trips byte-for-byte through `tools/hconfig.py`, so the structure
+above is confirmed rather than inferred.
 
 Contents of this particular remote:
 
@@ -115,7 +131,44 @@ Verified on section 15 (`0x12669`): `05` = count, then 5 addresses
 fall **exactly** inside section 14 (0x12632 + 55 B). Sections 5, 11 and 12 are
 consistent too.
 
-General shape: `<u8 count> <u24 address>[count]`.
+There are three shapes, all ending in the same array of 24-bit addresses:
+
+```
+<u8 count>  <u24 address>[count]
+<u16 count> <u24 address>[count]
+<u16 count> <00> <u24 address>[count]      (section 6)
+```
+
+### Which sections carry pointers
+
+This is the question that matters most for a compiler: a section whose pointers
+are decoded can keep everything else opaque and still survive a change in length.
+Running the decompiler over the 525 config answers it.
+
+| section | pointers | shape | fills the section? |
+|---|---|---|---|
+| 5 | 4 | u8 | yes |
+| 6 | 114 | u16 + pad | no — 345 B of 6,968 |
+| 7 | 5 | u16 | yes |
+| 9 | 8 | u8 | no — 25 B of 417 |
+| 10 | **487** | u16 | **yes, all 1,463 B** |
+| 11 | 22 | u16 | yes |
+| 12 | 5 | u8 | yes |
+| 14 | 11 | u8 | no — 34 B of 55 |
+| 15 | 5 | u8 | yes |
+
+Sections **1, 2, 3, 4, 8, 13, 16 and 17** contain no recognisable pointer table
+and remain entirely opaque.
+
+Section 10 was previously listed as unknown; it is a pointer array and nothing
+else. That accounts for 656 addresses across the config, every one of which the
+compiler now recomputes rather than copying.
+
+Acceptance is deliberately strict — every address inside the config, addresses
+strictly increasing, and either an exact fit or at least three entries. A loose
+test finds pointer tables everywhere, for the reason given above: `0x02` is the
+most common byte in the file precisely *because* it is the high byte of these
+addresses.
 
 ### Section 6 = index into the low region
 

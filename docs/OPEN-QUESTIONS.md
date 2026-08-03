@@ -85,14 +85,29 @@ this a long way.
 
 ## 4. The unidentified sections
 
-Of 18 sections, 0, 6 and 8 are understood to varying degrees. Sections 1–5, 7 and
-9–17 are not. Sizes and offsets are tabulated in
-[FORMAT.md §3](FORMAT.md#3-sections-18-entries-contiguous-no-gaps).
+**Partly answered.** The priority here was never "understand everything" but the
+narrower question of **which sections contain pointers**, since a section whose
+pointers are decoded can keep everything else opaque and still survive a change in
+length. Running the decompiler settles it:
 
-For the round-trip compiler the priority is narrower than "understand everything":
-**which sections contain pointers**. A section whose pointers are decoded can have
-everything else in it stay opaque and still survive a size change. Sections 5, 11,
-12 and 15 are already known to use the `<u8 count> <u24 address>[count]` shape.
+- **Pointer tables, now decoded and recomputed on compile:** sections 5, 6, 7, 9,
+  10, 11, 12, 14, 15 — 656 addresses in total. Section 10 turns out to be nothing
+  *but* a pointer array, 487 entries filling all 1,463 bytes.
+- **Decoded structures:** section 0 is the name table; the four key tables sit in
+  the region below 0xF35B.
+- **Still entirely opaque:** sections **1, 2, 3, 4, 8, 13, 16, 17**, plus the bulk
+  of 6, 9 and 14 that follows their pointer prefixes, plus the 114-record array.
+
+So the remaining question is narrower and more concrete than it was: **do sections
+1, 2, 3, 4, 8, 13 or 17 contain pointers in some shape the recogniser does not
+match?** If they do not, then length changes become possible as soon as the
+114-record array is understood. If they do, that shape needs finding. Section 4
+(2,551 B of 3-byte records) and section 17 (3,096 B) are the two worth looking at
+first, on size alone.
+
+Sizes and offsets are tabulated in
+[FORMAT.md §3](FORMAT.md#3-sections-18-entries-contiguous-no-gaps); the pointer
+breakdown is in [§4b](FORMAT.md).
 
 ---
 
