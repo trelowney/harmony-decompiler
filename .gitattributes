@@ -6,4 +6,10 @@
 *.bin     binary
 *.EZUp    binary
 
+# Nothing under samples/ gets line-ending normalisation either. header.xml is a
+# byte-exact slice of the container and uses CRLF; rewriting it to LF changes its
+# length, which is exactly what <BINARYDATASIZE> and the checksum are there to
+# detect. It has to stay as it came off the remote.
+samples/** -text
+
 * text=auto eol=lf
