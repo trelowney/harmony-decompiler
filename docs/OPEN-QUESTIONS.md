@@ -91,16 +91,20 @@ pointers are decoded can keep everything else opaque and still survive a change 
 length. Running the decompiler settles it:
 
 - **Pointer tables, now decoded and recomputed on compile:** sections 5, 6, 7, 9,
-  10, 11, 12, 14, 15-656 addresses in total. Section 10 turns out to be nothing
-  *but* a pointer array, 487 entries filling all 1,463 bytes.
+  10, 11, 12, 13, 14, 15 - 685 addresses in total. Section 10 turns out to be
+  nothing
+  *but* a pointer array, 487 entries filling all 1,463 bytes. The 114 record
+  headers add another 249, for 952 recomputed pointers in total.
 - **Decoded structures:** section 0 is the name table; the four key tables sit in
   the region below 0xF35B.
-- **Still entirely opaque:** sections **1, 2, 3, 4, 8, 13, 16, 17**, plus the bulk
-  of 6, 9 and 14 that follows their pointer prefixes, plus the 114-record array.
+- **Still entirely opaque:** sections **1, 2, 3, 4, 8, 16, 17**, plus the bulk of
+  6, 9 and 14 that follows their pointer prefixes, plus the *bodies* of the 114
+  records - their headers are decoded.
 
 So the remaining question is narrower and more concrete than it was: **do sections
-1, 2, 3, 4, 8, 13 or 17 contain pointers in some shape the recogniser does not
-match?** If they do not, then length changes become possible as soon as the
+1, 2, 3, 4, 8 or 17 contain pointers in some shape the recogniser does not
+match?** Section 13 did, and was found by relaxing the requirement that addresses
+ascend - its last entry jumps backwards. If they do not, then length changes become possible as soon as the
 114-record array is understood. If they do, that shape needs finding. Section 4
 (2,551 B of 3-byte records) and section 17 (3,096 B) are the two worth looking at
 first, on size alone.

@@ -231,50 +231,138 @@ def parse_pointer_table(blob: bytes, start: int, end: int, blob_len: int):
     """
     best = None
     for width in (1, 2):
-        for pad in (0, 1):
-            if pad and width == 1:
-                continue
-            head = start + width + pad
-            count = int.from_bytes(blob[start:start + width], "little")
-            if count < 2 or head + count * 3 > end:
-                continue
-            if pad and blob[start + width] != 0:
-                continue
+        count = int.from_bytes(blob[start:start + width], "little")
+        if count < 2:
+            continue
+        for head_len in range(width, 13):
+            head = start + head_len
+            if head + count * 3 > end:
+                break
             addrs = [int.from_bytes(blob[head + 3 * k:head + 3 * k + 3], "little")
                      for k in range(count)]
             offs = [a - CONFIG_BASE for a in addrs]
             if not all(0 <= o < blob_len for o in offs):
                 continue
-            if any(offs[i] >= offs[i + 1] for i in range(len(offs) - 1)):
-                continue
+
             exact = head + count * 3 == end
-            if not exact and count < 3:
+            ascending = all(offs[i] < offs[i + 1] for i in range(len(offs) - 1))
+
+            # An exact fit means the declared count, the header length and the
+            # region boundary all agree, which is strong enough on its own.
+            # A table that only occupies part of a section has none of that
+            # corroboration, so it additionally has to ascend.
+            if not exact and not (ascending and count >= 3):
                 continue
-            cand = (exact, count, width, pad, offs, head + count * 3 - start)
+
+            cand = (exact, count, width, head_len, offs,
+                    head + count * 3 - start, ascending)
             if best is None or cand[:2] > best[:2]:
                 best = cand
+            if exact:
+                break
 
     if best is None:
         return None
-    exact, count, width, pad, offs, length = best
-    return {
+    exact, count, width, head_len, offs, length, ascending = best
+    region = {
         "kind": "pointer_table",
         "offset": start,
         "length": length,
         "count_width": width,
-        "padding": "00" * pad,
+        "header": blob[start + width:start + head_len].hex(),
         "note": "24-bit absolute flash addresses; stored here as blob offsets",
         "targets": offs,
+    }
+    if not ascending:
+        region["unsorted"] = True
+    return region
+
+
+def find_record_starts(blob: bytes, section6_offset: int):
+    """Offsets of the records indexed by section 6.
+
+    Section 6 is `<u16 count> <00> <u24 address>[count]`, and the addresses run
+    into the region below 0xF35B that the section table does not cover. That
+    region is not unstructured: it is an array of records, and this is the
+    index to it.
+    """
+    count = int.from_bytes(blob[section6_offset:section6_offset + 2], "little")
+    head = section6_offset + 3
+    starts = []
+    for k in range(count):
+        a = int.from_bytes(blob[head + 3 * k:head + 3 * k + 3], "little")
+        o = a - CONFIG_BASE
+        if not (0 <= o < len(blob)) or (starts and o <= starts[-1]):
+            return []
+        starts.append(o)
+    return starts
+
+
+def parse_record_header(blob: bytes, start: int, limit: int):
+    """The header of one record in the array indexed by section 6.
+
+        00
+        u24        a back-reference, usually the previous record's start + 9
+        u16 count
+        u24[count] addresses
+
+    Holds on all 114 records of the 525 config. The count is what earlier
+    revisions of the docs read as a literal `01 00`: 108 records have exactly one
+    address, so the field looked like a constant until the six with more turned
+    up.
+
+    That makes another 249 pointers explicit rather than copied.
+    """
+    if start >= limit or blob[start] != 0x00:
+        return None
+    back = int.from_bytes(blob[start + 1:start + 4], "little") - CONFIG_BASE
+    count = int.from_bytes(blob[start + 4:start + 6], "little")
+    if not (0 <= back < len(blob)) or not 1 <= count <= 64:
+        return None
+    head = start + 6
+    if head + count * 3 > limit:
+        return None
+    targets = []
+    for k in range(count):
+        o = int.from_bytes(blob[head + 3 * k:head + 3 * k + 3], "little") - CONFIG_BASE
+        if not (0 <= o < len(blob)):
+            return None
+        targets.append(o)
+    return {
+        "kind": "record_header",
+        "offset": start,
+        "length": 6 + count * 3,
+        "back_reference": back,
+        "targets": targets,
     }
 
 
 RECOGNISERS = ("name_table", "pointer_table", "key_table")
 
 
-def _refine_span(blob, parent, start, end, blob_len, skip=()):
+def _refine_span(blob, parent, start, end, blob_len, skip=(), records=()):
     """Recognise structures inside one span, recursing into what is left over."""
     if start >= end:
         return []
+
+    # record boundaries come from section 6 rather than from the bytes here, so
+    # they are checked before anything that pattern-matches
+    if records:
+        inside = sorted(r for r in records if start < r < end)
+        if inside:
+            out = _refine_span(blob, parent, start, inside[0], blob_len, skip,
+                               records)
+            for i, r in enumerate(inside):
+                stop = inside[i + 1] if i + 1 < len(inside) else end
+                out += _refine_span(blob, parent, r, stop, blob_len, skip,
+                                    records)
+            return out
+        if start in records:
+            rh = parse_record_header(blob, start, end)
+            if rh:
+                return ([_annotate(rh, parent)]
+                        + _refine_span(blob, parent, start + rh["length"], end,
+                                       blob_len, records=()))
 
     if "name_table" not in skip:
         nt = parse_name_table(blob, start, end)
@@ -313,7 +401,7 @@ def _annotate(region, parent):
     return region
 
 
-def _refine(blob: bytes, regions):
+def _refine(blob: bytes, regions, records=()):
     """Split opaque and section regions wherever a recogniser identifies something."""
     out = []
     for r in regions:
@@ -321,7 +409,7 @@ def _refine(blob: bytes, regions):
             out.append(r)
             continue
         out += _refine_span(blob, r, r["offset"], r["offset"] + r["length"],
-                            len(blob))
+                            len(blob), records=records)
     return out
 
 
@@ -422,7 +510,13 @@ def decompile(raw: bytes, filename=None) -> dict:
         "magic": END_MAGIC.decode(),
     })
 
-    regions = _refine(blob, regions)
+    # section 6 indexes the record array; find it before refining so the low
+    # region can be split on record boundaries rather than guessed at
+    records = ()
+    if len(bounds) > 7:
+        records = frozenset(find_record_starts(blob, bounds[6]))
+
+    regions = _refine(blob, regions, records)
 
     doc = {
         "harmony_config_version": FORMAT_VERSION,
@@ -480,11 +574,19 @@ def emit_region(r: dict) -> bytes:
         return (NAME_MAGIC + declared.to_bytes(2, "little")
                 + bytes([r["unknown_0x04"]]) + bytes(body) + NAME_END)
 
+    if kind == "record_header":
+        out = bytearray(b"\x00")
+        out += (r["back_reference"] + CONFIG_BASE).to_bytes(3, "little")
+        out += len(r["targets"]).to_bytes(2, "little")
+        for o in r["targets"]:
+            out += (o + CONFIG_BASE).to_bytes(3, "little")
+        return bytes(out)
+
     if kind == "pointer_table":
         targets = r["targets"]
         out = bytearray()
         out += len(targets).to_bytes(r["count_width"], "little")
-        out += bytes.fromhex(r["padding"])
+        out += bytes.fromhex(r.get("header", r.get("padding", "")))
         for o in targets:
             out += (o + CONFIG_BASE).to_bytes(3, "little")
         return bytes(out)

@@ -10,8 +10,9 @@ repository is an attempt to change that.
 
 > **Status: the round trip works.** A 525 config decompiles to JSON and compiles
 > back byte-identical, and a button can be remapped through it - changing exactly
-> one byte of the blob, with the container's checksum recomputed. About 3.7% of
-> the file is genuinely decoded so far; the rest passes through as opaque blobs.
+> one byte of the blob, with the container's checksum recomputed. About 5% of the
+> file is decoded so far and the rest passes through as opaque blobs, but that 5%
+> includes **952 pointers**, which the compiler recomputes rather than copies.
 > See [`docs/FORMAT.md`](docs/FORMAT.md) for what is known and
 > [`docs/OPEN-QUESTIONS.md`](docs/OPEN-QUESTIONS.md) for what is not.
 
@@ -60,9 +61,10 @@ claim than "it looks right":
 - the blob header: `AHCM` magic, an 18-entry section pointer table
 - pointers are **24-bit little-endian absolute flash addresses**;
   `config_base = 0x20000` - confirmed on arch 8 too
-- **which sections carry pointer tables** - 9 of the 18, holding 656 addresses,
-  all of which the compiler now recomputes rather than copying. Section 10 turns
-  out to be nothing but a 487-entry pointer array
+- **which sections carry pointer tables** - 10 of the 18, holding 685 addresses.
+  Section 10 turns out to be nothing but a 487-entry pointer array
+- the **header of all 114 records** in the region the section table does not
+  cover, carrying another 249 pointers
 - the name table, wrapped in `0xFEED ... 0xBEEF` with a length field, whose `index`
   is the address of a **live state variable readable over USB**
 - the **key table** format, `<u8 code> <u16 target> <0x7F>`, and that there is one

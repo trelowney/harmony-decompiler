@@ -209,18 +209,39 @@ This **independently matches** the original developer's description (§6):
 Section 6 indexes **114 records** in the region `0x0000F1-0x00E0F8` (57,351 B).
 Sizes range 142-29,939 B, median ~177 B. **All 114 start with byte `0x00`.**
 
-Record header (verified on #0, #1, #2):
+Record header, now verified on **all 114**:
 
 ```
-00  <u24 ptr>   pointer to (previous record + 9)
-01 00 <u24 ptr> pointer to (start of this record - 6)
-<u8 count>      number of entries that follow
+00
+u24         a back-reference, usually the previous record's start + 9
+u16 count
+u24[count]  addresses
 ```
+
+> An earlier revision of this document read the `01 00` as a literal and
+> described the header as a fixed pair of pointers. It is not: `01 00` is the
+> **count**, and it looks like a constant only because 108 of the 114 records
+> happen to carry exactly one address. The other six carry 2, 4, 5 and 6.
+>
+> | addresses | records |
+> |---|---|
+> | 1 | 108 |
+> | 2 | 1 |
+> | 4 | 2 |
+> | 5 | 1 |
+> | 6 | 2 |
+>
+> Reading three records by hand was never going to catch this, however carefully
+> it was done, because all three were in the 108. Decoding the field and letting
+> the round trip check all 114 did.
 
 Record trailer: `00 <u24 into section 8> <u24 back into itself>`.
 
 That pointer into section 8 is strong evidence that **each record references its
 own bytecode** - exactly as the original developer described.
+
+The headers account for 249 of the pointers the compiler recomputes. Record
+bodies are still opaque, apart from the key table in record #0.
 
 ## 4e. KEY TABLE - SOLVED
 
