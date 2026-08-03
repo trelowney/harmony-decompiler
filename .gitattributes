@@ -1,15 +1,18 @@
+# Text files are stored with LF and checked out however the platform wants.
+* text=auto eol=lf
+
+# Everything below overrides that, because the last matching rule wins.
+
 # Config dumps must never be touched. .EZHex starts with an XML header, so git
-# would otherwise be entitled to treat it as text and rewrite its line endings —
-# which would corrupt the binary blob and break both the declared size and the
-# XOR checksum.
+# would otherwise be entitled to treat it as text and rewrite its line endings,
+# corrupting the binary blob and breaking both the declared size and the XOR
+# checksum.
 *.EZHex   binary
 *.bin     binary
 *.EZUp    binary
 
-# Nothing under samples/ gets line-ending normalisation either. header.xml is a
-# byte-exact slice of the container and uses CRLF; rewriting it to LF changes its
-# length, which is exactly what <BINARYDATASIZE> and the checksum are there to
-# detect. It has to stay as it came off the remote.
+# Nor does anything under samples/ get line-ending normalisation. header.xml is
+# a byte-exact slice of the container and uses CRLF; rewriting it to LF changes
+# its length, which is precisely what <BINARYDATASIZE> and the checksum exist to
+# detect. Samples have to stay exactly as they came off a remote.
 samples/** -text
-
-* text=auto eol=lf
