@@ -20,6 +20,7 @@ python sections.py ../my-remote.EZHex  # your own dump, .EZHex or already split
 | `decompile.py` | config -> JSON, and a summary of what is decoded |
 | `compile.py` | JSON -> config, recomputing pointers and checksums |
 | `roundtrip.py` | **the correctness test** - decompile, recompile, compare bytes |
+| `show_bitmaps.py` | draw the LCD bitmaps as text, to check them by eye |
 
 ```sh
 python roundtrip.py                       # the bundled sample

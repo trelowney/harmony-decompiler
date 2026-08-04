@@ -42,6 +42,15 @@ FORMAT_VERSION = 1
 
 END_TAG = b"</INFORMATION>"
 CONFIG_BASE = 0x20000
+# Each architecture stamps the blob with its own magic, its own end marker and
+# its own end-of-header marker. Arch 9 mirrors its magic for the end marker;
+# arch 8 does not mirror anything, which is worth knowing before assuming a
+# pattern from one example.
+ARCHITECTURES = {
+    b"AHCM": {"end": b"MCHA", "marker": b"CMAH", "name": "arch 9"},
+    b"TPTP": {"end": b"DKDK", "marker": b"WLWL", "name": "arch 8"},
+}
+
 MAGIC = b"AHCM"
 END_MAGIC = b"MCHA"
 HEADER_MARKER = b"CMAH"
@@ -121,36 +130,57 @@ def find_key_tables(blob: bytes, start: int, end: int):
     longest 0x7F-terminated runs in a config are always filler. A real table has
     every code distinct - see tools/find_keytables.py, which this mirrors.
     """
-    spans, i = [], start
-    while i + 4 <= end:
-        if blob[i + 3] != KEY_TERM:
-            i += 1
-            continue
-        run_start, count = i, 0
-        while i + 4 <= end and blob[i + 3] == KEY_TERM:
-            count += 1
-            i += 4
-        if count < KEY_MIN_ENTRIES:
-            continue
-        codes = [blob[run_start + k * 4] for k in range(count)]
-        if len(set(codes)) / count < KEY_MIN_UNIQUE:
-            continue
-        spans.append((run_start, count))
-    return spans
+    spans = []
+    # stride 5 first: it is the rarer and more specific shape, and a 5-byte
+    # table read at stride 4 dissolves into nothing, so there is no contest
+    for stride in (5, 4):
+        code_at = 1 if stride == 5 else 0
+        i = start
+        while i + stride <= end:
+            if blob[i + stride - 1] != KEY_TERM:
+                i += 1
+                continue
+            run_start, count = i, 0
+            while i + stride <= end and blob[i + stride - 1] == KEY_TERM:
+                count += 1
+                i += stride
+            if count < KEY_MIN_ENTRIES:
+                continue
+            if any(run_start < s + c * st and s < run_start + count * stride
+                   for s, c, st in spans):
+                continue
+            codes = [blob[run_start + k * stride + code_at] for k in range(count)]
+            if len(set(codes)) / count < KEY_MIN_UNIQUE:
+                continue
+            spans.append((run_start, count, stride))
+    return sorted(spans)
 
 
-def _key_table_region(blob, off, count, parent=None):
+def _key_table_region(blob, off, count, parent=None, stride=4):
+    """One key table.
+
+    Two shapes exist. The common one is `<u8 code> <u16 target> <0x7F>`. The
+    other carries a leading byte per entry, `<u8 flag> <u8 code> <u16 target>
+    <0x7F>`, and the one instance found so far has the flag set to 1 throughout.
+
+    That 5-byte table is worth the special case: it holds the same 50 physical
+    key codes in the same order as the main table, and is preceded by a count
+    byte of 0x33 = 51 exactly as the main table is.
+    """
     entries = []
     for k in range(count):
-        p = off + k * 4
-        entries.append({
-            "code": f"0x{blob[p]:02X}",
-            "target": int.from_bytes(blob[p + 1:p + 3], "little"),
-        })
+        p = off + k * stride
+        e = {}
+        if stride == 5:
+            e["flag"] = f"0x{blob[p]:02X}"
+        e["code"] = f"0x{blob[p + stride - 4]:02X}"
+        e["target"] = int.from_bytes(blob[p + stride - 3:p + stride - 1], "little")
+        entries.append(e)
     region = {
         "kind": "key_table",
         "offset": off,
-        "length": count * 4,
+        "length": count * stride,
+        "entry_stride": stride,
         "terminator": f"0x{KEY_TERM:02X}",
         "entries": entries,
     }
@@ -342,6 +372,41 @@ def parse_record_header(blob: bytes, start: int, limit: int):
 REF_OPCODE = 0x16
 
 
+def parse_block_header(blob: bytes, start: int, end: int):
+    """The header of one block inside a record body.
+
+        16 <row> 03 00 <row*8> 00 <row*8> 60 08 <u24 address>
+
+    Twelve bytes. The `row*8` is `row << 3` from the key-code arithmetic in
+    section 5g, so a block belongs to one row of the keyboard matrix.
+
+    The three bytes after `60 08` were written up as part of a fixed constant,
+    `60 08 8B 2F 03`. They are not constant: they are an address, and the value
+    only looked fixed because the records first read by hand happened to share
+    it. All 1072 block headers in the 525 config carry a valid one, and all 1072
+    point into section 17.
+    """
+    if start + 12 > end:
+        return None
+    b = blob
+    row = b[start + 1]
+    if (b[start] != 0x16 or b[start + 2] != 0x03 or b[start + 3] != 0x00
+            or b[start + 4] != (row * 8) & 0xFF or b[start + 5] != 0x00
+            or b[start + 6] != (row * 8) & 0xFF
+            or b[start + 7] != 0x60 or b[start + 8] != 0x08):
+        return None
+    target = int.from_bytes(b[start + 9:start + 12], "little") - CONFIG_BASE
+    if not (0 <= target < len(b)):
+        return None
+    return {
+        "kind": "block_header",
+        "offset": start,
+        "length": 12,
+        "matrix_row": row,
+        "targets": [target],
+    }
+
+
 def find_references(blob: bytes, start: int, end: int):
     """`16 <u24 address>` inside a record body.
 
@@ -370,10 +435,162 @@ def find_references(blob: bytes, start: int, end: int):
     return hits
 
 
-RECOGNISERS = ("name_table", "pointer_table", "key_table")
+BITMAP_FORMAT = 0x02
 
 
-def _refine_span(blob, parent, start, end, blob_len, skip=(), records=()):
+def parse_bitmap(blob: bytes, start: int, end: int):
+    """A monochrome bitmap for the remote's LCD.
+
+        02          format
+        u16 width
+        u16 height
+        bytes[width * height / 8]
+
+    The 525's screen is 96 x 64 per the manual, and the header reads exactly
+    that, with 768 bytes of pixels following it - one bit per pixel. Rendering
+    them produces axis-aligned lines rather than noise, which is the other half
+    of the argument.
+
+    Section 17 is four of these back to back. Every one of the 1072 block headers
+    in the config points at one of them, so a block is, among other things,
+    choosing a screen to draw.
+    """
+    if start + 5 > end or blob[start] != BITMAP_FORMAT:
+        return None
+    w = int.from_bytes(blob[start + 1:start + 3], "little")
+    h = int.from_bytes(blob[start + 3:start + 5], "little")
+    # Calibrated to a real screen rather than to what the arithmetic allows.
+    # A loose test - anything whose width times height divides by eight - finds
+    # fifteen extra "bitmaps" in this config, most of them 256 pixels tall
+    # because a 0x0100 fell where the height should be, and it eats four of the
+    # five key tables on the way past. Another model with a different screen
+    # will want these bounds widened, deliberately.
+    if not (8 <= w <= 256 and 8 <= h <= 128) or w % 8 or h % 8:
+        return None
+    size = w * h // 8
+    if start + 5 + size > end:
+        return None
+    return {
+        "kind": "bitmap",
+        "offset": start,
+        "length": 5 + size,
+        "format": f"0x{BITMAP_FORMAT:02X}",
+        "width": w,
+        "height": h,
+        "note": "1 bit per pixel, row-major; the 525's LCD is 96x64",
+        "pixels": _hex_lines(blob[start + 5:start + 5 + size]),
+    }
+
+
+def find_bitmaps(blob: bytes, start: int, end: int, allowed=None):
+    """Bitmaps anywhere in a span, not only at its first byte.
+
+    Section 17 opens with two bytes before the first one and closes with two
+    after the last, so testing only the start of the span finds nothing.
+
+    A minimum size keeps this from matching stray `02` bytes, and `allowed`
+    restricts the search to offsets something actually points at. Both are
+    needed: on an arch 8 config the size and dimension checks alone still find a
+    56x64 "bitmap" that renders as speckle, and nothing in the file refers to it.
+    """
+    out, i, chain = [], start, -1
+    while i < end:
+        # a bitmap counts if something points at it, or if it sits immediately
+        # after one that does - section 17 is an array, and its last entry is
+        # unreferenced erased flash that still belongs to the array
+        if allowed is not None and i not in allowed and i != chain:
+            i += 1
+            continue
+        bm = parse_bitmap(blob, i, end)
+        if bm and bm["length"] >= 5 + 256:
+            out.append(bm)
+            i += bm["length"]
+            chain = i
+        else:
+            i += 1
+    return out
+
+
+def parse_action_list(blob: bytes, start: int, end: int):
+    """A list of actions.
+
+        <u8 count>  <u16 operand> <u8 opcode>  [count]
+
+    Section 10 is an array of 487 addresses and nothing else, and every one of
+    them lands on one of these. 482 of the 486 consecutive pairs are exactly
+    `1 + 3 * count` apart, the other four leave a gap and none of them overlap,
+    and the last list ends on the byte where the index itself begins. So the
+    section is not an unexplained pointer array: it is the index to an array of
+    action lists, and it tiles the region it covers.
+
+    A key table's `target` is an index into it. That is what the original
+    developer's `bindings: { button: executeActionList(n) }` looks like once it
+    has been through the compiler, and it is the answer to what had been the
+    most blocking open question here: pressing a key runs list number `target`.
+
+    The instruction is the same three bytes section 8 is built from, which
+    unifies two structures that had been described separately. Its opcodes are
+    dominated by 0x7C, 0x7D, 0x7E and 0x7F - about three quarters of all 1043
+    instructions in the 525 config - and what any of them mean is not known.
+
+    Accepted only at an offset something points at. On its own the shape is far
+    too weak to scan for: almost any byte can be read as a count.
+    """
+    n = blob[start]
+    if not 1 <= n <= 64 or start + 1 + 3 * n > end:
+        return None
+    return {
+        "kind": "action_list",
+        "offset": start,
+        "length": 1 + 3 * n,
+        "instructions": [
+            {"operand": int.from_bytes(blob[start + 1 + 3 * k:start + 3 + 3 * k],
+                                       "little"),
+             "opcode": f"0x{blob[start + 3 + 3 * k]:02X}"}
+            for k in range(n)
+        ],
+    }
+
+
+def find_action_lists(blob: bytes, regions):
+    """Offsets of action lists, taken from whichever pointer table indexes them.
+
+    Deliberately not hardcoded to section 10. A table qualifies if its targets
+    behave like an index into a packed array of `1 + 3 * count` byte records:
+    no two entries may overlap, and nearly all of them have to sit exactly
+    where the previous one ended. Both halves matter - the overlap test is what
+    stops an ordinary pointer table being read this way, and the adjacency test
+    is what makes it positive evidence rather than the absence of a problem.
+    """
+    out = set()
+    for r in regions:
+        if r["kind"] != "pointer_table":
+            continue
+        t = sorted(r["targets"])
+        if len(t) < 8:
+            continue
+        exact = 0
+        for i in range(len(t) - 1):
+            n = blob[t[i]]
+            if not 1 <= n <= 64:
+                exact = -1
+                break
+            finish = t[i] + 1 + 3 * n
+            if finish > t[i + 1]:          # overlap: not an array of these
+                exact = -1
+                break
+            if finish == t[i + 1]:
+                exact += 1
+        if exact >= 0.9 * (len(t) - 1):
+            out.update(t)
+    return frozenset(out)
+
+
+RECOGNISERS = ("name_table", "pointer_table", "key_table", "bitmap")
+
+
+def _refine_span(blob, parent, start, end, blob_len, skip=(), records=(),
+                 bitmaps=None, actions=frozenset()):
     """Recognise structures inside one span, recursing into what is left over."""
     if start >= end:
         return []
@@ -384,71 +601,163 @@ def _refine_span(blob, parent, start, end, blob_len, skip=(), records=()):
         inside = sorted(r for r in records if start < r < end)
         if inside:
             out = _refine_span(blob, parent, start, inside[0], blob_len, skip,
-                               records)
+                               records, bitmaps, actions)
             for i, r in enumerate(inside):
                 stop = inside[i + 1] if i + 1 < len(inside) else end
                 out += _refine_span(blob, parent, r, stop, blob_len, skip,
-                                    records)
+                                    records, bitmaps, actions)
             return out
         if start in records:
             rh = parse_record_header(blob, start, end)
             if rh:
                 return ([_annotate(rh, parent)]
                         + _split_references(blob, parent,
-                                            start + rh["length"], end))
+                                            start + rh["length"], end,
+                                            bitmaps, actions))
+
+    # action lists, like records, are known from an index rather than from
+    # anything in their own bytes, so they are also settled before pattern
+    # matching gets a chance to claim the same span
+    if actions:
+        inside = sorted(a for a in actions if start < a < end)
+        if inside:
+            out = _refine_span(blob, parent, start, inside[0], blob_len, skip,
+                               records, bitmaps, actions)
+            for i, a in enumerate(inside):
+                stop = inside[i + 1] if i + 1 < len(inside) else end
+                out += _refine_span(blob, parent, a, stop, blob_len, skip,
+                                    records, bitmaps, actions)
+            return out
+        if start in actions:
+            al = parse_action_list(blob, start, end)
+            if al:
+                return ([_annotate(al, parent)]
+                        + _refine_span(blob, parent, start + al["length"], end,
+                                       blob_len, skip, records, bitmaps,
+                                       actions))
 
     if "name_table" not in skip:
         nt = parse_name_table(blob, start, end)
         if nt:
             return ([_annotate(nt, parent)]
                     + _refine_span(blob, parent, start + nt["length"], end,
-                                   blob_len))
+                                   blob_len, bitmaps=bitmaps, actions=actions))
+
+    if "bitmap" not in skip:
+        found = find_bitmaps(blob, start, end, bitmaps)
+        if found:
+            out, cursor = [], start
+            for bm in found:
+                if bm["offset"] > cursor:
+                    out += _refine_span(blob, parent, cursor, bm["offset"],
+                                        blob_len, skip=RECOGNISERS,
+                                        bitmaps=bitmaps, actions=actions)
+                out.append(_annotate(bm, parent))
+                cursor = bm["offset"] + bm["length"]
+            if cursor < end:
+                out += _refine_span(blob, parent, cursor, end, blob_len,
+                                    skip=RECOGNISERS, bitmaps=bitmaps,
+                                    actions=actions)
+            return out
 
     if "pointer_table" not in skip:
         pt = parse_pointer_table(blob, start, end, blob_len)
         if pt:
             return ([_annotate(pt, parent)]
                     + _refine_span(blob, parent, start + pt["length"], end,
-                                   blob_len, skip=("pointer_table",)))
+                                   blob_len, skip=("pointer_table",),
+                                   bitmaps=bitmaps, actions=actions))
 
     if "key_table" not in skip:
         found = find_key_tables(blob, start, end)
         if found:
             out, cursor = [], start
-            for off, count in found:
+            for off, count, stride in found:
                 if off > cursor:
                     out += _refine_span(blob, parent, cursor, off, blob_len,
-                                        skip=RECOGNISERS)
-                out.append(_key_table_region(blob, off, count, parent))
-                cursor = off + count * 4
+                                        skip=RECOGNISERS, bitmaps=bitmaps,
+                                        actions=actions)
+                out.append(_key_table_region(blob, off, count, parent, stride))
+                cursor = off + count * stride
             out += _refine_span(blob, parent, cursor, end, blob_len,
-                                skip=RECOGNISERS)
+                                skip=RECOGNISERS, bitmaps=bitmaps,
+                                actions=actions)
             return out
 
     return [_slice(parent, blob, start, end)]
 
 
-def _split_references(blob, parent, start, end):
-    """A record body: opaque hex, with each embedded reference pulled out."""
+def parse_record_trailer(blob: bytes, start: int, end: int):
+    """The last seven bytes of a record.
+
+        00 <u24 into section 8> <u24 back into this record>
+
+    The second address lands on the record's own start + 11 where it has been
+    checked. The first points into section 8, the suspected bytecode, which is
+    the evidence that each record carries its own program.
+
+    113 of the 114 records end this way.
+    """
+    if end - start < 7 or blob[end - 7] != 0x00:
+        return None
+    a = int.from_bytes(blob[end - 6:end - 3], "little") - CONFIG_BASE
+    b = int.from_bytes(blob[end - 3:end], "little") - CONFIG_BASE
+    if not (0 <= a < len(blob)) or not (0 <= b < len(blob)):
+        return None
+    return {
+        "kind": "record_trailer",
+        "offset": end - 7,
+        "length": 7,
+        "note": "first target is in section 8, the suspected bytecode",
+        "targets": [a, b],
+    }
+
+
+def _split_references(blob, parent, start, end, bitmaps=None,
+                      actions=frozenset()):
+    """A record body: opaque hex, with everything recognisable pulled out."""
     if start >= end:
         return []
 
+    trailer = parse_record_trailer(blob, start, end)
+    if trailer:
+        return (_split_references(blob, parent, start, end - 7, bitmaps, actions)
+                + [_annotate(trailer, parent)])
+
+    found, i = [], start
+    while i < end:
+        bh = parse_block_header(blob, i, end)
+        if bh:
+            found.append(bh)
+            i += 12
+            continue
+        if blob[i] == REF_OPCODE and i + 4 <= end:
+            v = int.from_bytes(blob[i + 1:i + 4], "little") - CONFIG_BASE
+            if 0 <= v < len(blob):
+                found.append({
+                    "kind": "reference",
+                    "offset": i,
+                    "length": 4,
+                    "opcode": f"0x{REF_OPCODE:02X}",
+                    "targets": [v],
+                })
+                i += 4
+                continue
+        i += 1
+
     out, cursor = [], start
-    for off, target in find_references(blob, start, end):
+    for region in found:
+        off = region["offset"]
         if off > cursor:
             out += _refine_span(blob, parent, cursor, off, len(blob),
-                                skip=("name_table", "pointer_table"))
-        out.append({
-            "kind": "reference",
-            "offset": off,
-            "length": 4,
-            "opcode": f"0x{REF_OPCODE:02X}",
-            "targets": [target],
-        })
-        cursor = off + 4
+                                skip=("name_table", "pointer_table"),
+                                bitmaps=bitmaps, actions=actions)
+        out.append(region)
+        cursor = off + region["length"]
     if cursor < end:
         out += _refine_span(blob, parent, cursor, end, len(blob),
-                            skip=("name_table", "pointer_table"))
+                            skip=("name_table", "pointer_table"),
+                            bitmaps=bitmaps, actions=actions)
     return out
 
 
@@ -458,7 +767,8 @@ def _annotate(region, parent):
     return region
 
 
-def _refine(blob: bytes, regions, records=()):
+def _refine(blob: bytes, regions, records=(), bitmaps=None,
+            actions=frozenset()):
     """Split opaque and section regions wherever a recogniser identifies something."""
     out = []
     for r in regions:
@@ -466,7 +776,8 @@ def _refine(blob: bytes, regions, records=()):
             out.append(r)
             continue
         out += _refine_span(blob, r, r["offset"], r["offset"] + r["length"],
-                            len(blob), records=records)
+                            len(blob), records=records, bitmaps=bitmaps,
+                            actions=actions)
     return out
 
 
@@ -492,66 +803,75 @@ def _slice(parent, blob, a, b):
 def decompile(raw: bytes, filename=None) -> dict:
     xml, sep, blob = split_container(raw)
 
-    if blob[:4] != MAGIC:
+    magic = bytes(blob[:4])
+    arch = ARCHITECTURES.get(magic)
+    if arch is None:
         raise ConfigError(
-            f"expected {MAGIC.decode()} magic, found {blob[:4]!r}. "
-            "Only arch 9 is modelled so far; arch 8 blobs start with TPTP.")
-    if blob[-4:] != END_MAGIC:
-        raise ConfigError(f"expected {END_MAGIC.decode()} at the end, "
+            f"unrecognised magic {magic!r}; known: "
+            + ", ".join(m.decode() for m in ARCHITECTURES))
+    if blob[-4:] != arch["end"]:
+        raise ConfigError(f"expected {arch['end'].decode()} at the end, "
                           f"found {blob[-4:]!r}")
 
-    marker = blob.find(HEADER_MARKER)
+    marker = blob.find(arch["marker"])
     if marker == -1:
-        raise ConfigError("no CMAH marker in the header")
-    header_len = marker + len(HEADER_MARKER)
+        raise ConfigError(f"no {arch['marker'].decode()} marker in the header")
+    header_len = marker + len(arch["marker"])
 
     end_address = _u32(blob, 4)
     unknown_08 = _u32(blob, 8)
 
-    # section pointers run until the first zero
-    ptrs, off = [], PTR_TABLE_OFF
+    # Read the whole pointer table, then drop the zeros that pad it out to the
+    # marker. Zeros *inside* the table are not padding: they mean the subsystem
+    # is not present, and arch 8 has one. Stopping at the first zero, which is
+    # what this used to do, silently truncates an arch 8 table to eight entries.
+    raw_ptrs, off = [], PTR_TABLE_OFF
     while off + 4 <= marker:
-        v = _u32(blob, off)
-        if v == 0:
-            break
-        ptrs.append(v)
+        raw_ptrs.append(_u32(blob, off))
         off += 4
-    padding = blob[off:marker]
+    while raw_ptrs and raw_ptrs[-1] == 0:
+        raw_ptrs.pop()
+    ptrs = [p if p else None for p in raw_ptrs]
+    padding = blob[PTR_TABLE_OFF + 4 * len(ptrs):marker]
 
     # the addresses tile the region from the first pointer to the end marker
     end_off = len(blob) - 4
-    bounds = [p - CONFIG_BASE for p in ptrs] + [end_off]
-    for i, o in enumerate(bounds[:-1]):
+    present = [(i, p - CONFIG_BASE) for i, p in enumerate(ptrs) if p is not None]
+    for n, (i, o) in enumerate(present):
         if not (0 <= o < len(blob)):
             raise ConfigError(f"section {i} address 0x{ptrs[i]:X} is out of range")
-        if bounds[i + 1] < o:
+        nxt = present[n + 1][1] if n + 1 < len(present) else end_off
+        if nxt < o:
             raise ConfigError(f"section {i} is not followed by a later address")
 
     regions = [{
         "kind": "blob_header",
         "offset": 0,
         "length": header_len,
-        "magic": MAGIC.decode(),
+        "architecture": arch["name"],
+        "magic": magic.decode(),
         "end_address": f"0x{end_address:06X}",
         "unknown_0x08": f"0x{unknown_08:08X}",
         "section_count": len(ptrs),
+        "absent_sections": [i for i, x in enumerate(ptrs) if x is None],
         "padding": padding.hex(),
-        "marker": HEADER_MARKER.decode(),
+        "marker": arch["marker"].decode(),
+        "end_marker": arch["end"].decode(),
     }]
 
-    first_section = bounds[0]
+    first_section = present[0][1]
     if first_section > header_len:
         regions.append({
             "kind": "opaque",
-            "note": "not covered by the section table; holds the 114-record "
-                    "array indexed by section 6",
+            "note": "not covered by the section table; on arch 9 this holds the "
+                    "record array indexed by section 6",
             "offset": header_len,
             "length": first_section - header_len,
             "data": _hex_lines(blob[header_len:first_section]),
         })
 
-    for i in range(len(ptrs)):
-        a, b = bounds[i], bounds[i + 1]
+    for n, (i, a) in enumerate(present):
+        b = present[n + 1][1] if n + 1 < len(present) else end_off
         regions.append({
             "kind": "section",
             "section": i,
@@ -564,16 +884,30 @@ def decompile(raw: bytes, filename=None) -> dict:
         "kind": "blob_footer",
         "offset": end_off,
         "length": 4,
-        "magic": END_MAGIC.decode(),
+        "magic": arch["end"].decode(),
     })
 
     # section 6 indexes the record array; find it before refining so the low
     # region can be split on record boundaries rather than guessed at
     records = ()
-    if len(bounds) > 7:
-        records = frozenset(find_record_starts(blob, bounds[6]))
+    if ptrs and len(ptrs) > 6 and ptrs[6]:
+        records = frozenset(find_record_starts(blob, ptrs[6] - CONFIG_BASE))
 
-    regions = _refine(blob, regions, records)
+    # Two passes. The first finds the structures that can be recognised on
+    # their own; the second is told what those point at, and only accepts a
+    # bitmap or an action list at an offset something actually refers to.
+    #
+    # Both restrictions are load-bearing rather than tidiness. The bitmap
+    # dimension checks alone still pass a 56x64 region of speckle in the arch 8
+    # samples that nothing in the file refers to, and an action list is a count
+    # byte followed by three-byte instructions, which almost any run of bytes
+    # can be read as.
+    first = _refine(blob, regions, records, bitmaps=frozenset())
+    targets = frozenset(x for r in first if r["kind"] == "block_header"
+                        for x in r["targets"])
+    actions = find_action_lists(blob, first)
+    regions = (_refine(blob, regions, records, bitmaps=targets, actions=actions)
+               if targets or actions else first)
 
     doc = {
         "harmony_config_version": FORMAT_VERSION,
@@ -646,6 +980,31 @@ def emit_region(r: dict, resolve=None) -> bytes:
         return (bytes([int(r["opcode"], 16)])
                 + (resolve(r["targets"][0]) + CONFIG_BASE).to_bytes(3, "little"))
 
+    if kind == "bitmap":
+        return (bytes([int(r["format"], 16)])
+                + r["width"].to_bytes(2, "little")
+                + r["height"].to_bytes(2, "little")
+                + _unhex(r["pixels"]))
+
+    if kind == "action_list":
+        out = bytearray([len(r["instructions"])])
+        for ins in r["instructions"]:
+            out += ins["operand"].to_bytes(2, "little")
+            out += bytes([int(ins["opcode"], 16)])
+        return bytes(out)
+
+    if kind == "record_trailer":
+        out = bytearray(bytes([0]))
+        for x in r["targets"]:
+            out += (resolve(x) + CONFIG_BASE).to_bytes(3, "little")
+        return bytes(out)
+
+    if kind == "block_header":
+        row = r["matrix_row"]
+        return (bytes([0x16, row, 0x03, 0x00, (row * 8) & 0xFF, 0x00,
+                       (row * 8) & 0xFF, 0x60, 0x08])
+                + (resolve(r["targets"][0]) + CONFIG_BASE).to_bytes(3, "little"))
+
     if kind == "record_header":
         out = bytearray(b"\x00")
         out += (resolve(r["back_reference"]) + CONFIG_BASE).to_bytes(3, "little")
@@ -672,6 +1031,8 @@ def emit_region(r: dict, resolve=None) -> bytes:
                 raise ConfigError(f"key code {e['code']} does not fit in a byte")
             if not 0 <= e["target"] <= 0xFFFF:
                 raise ConfigError(f"target {e['target']} does not fit in u16")
+            if "flag" in e:
+                out += bytes([int(e["flag"], 16)])
             out += bytes([code])
             out += e["target"].to_bytes(2, "little")
             out += bytes([term])
@@ -708,21 +1069,29 @@ def compile_blob(doc: dict) -> bytes:
         body.append(data)
         cursor += len(data)
 
-    if sorted(addresses) != list(range(len(addresses))):
-        raise ConfigError("section indices must be contiguous from 0")
+    absent = set(header.get("absent_sections", []))
+    count = header.get("section_count", len(addresses) + len(absent))
+    expected = set(range(count)) - absent
+    if set(addresses) != expected:
+        missing = sorted(expected - set(addresses))
+        extra = sorted(set(addresses) - expected)
+        raise ConfigError(
+            f"section indices do not match the header: missing {missing}, "
+            f"unexpected {extra}")
 
     end_address = cursor + CONFIG_BASE
     padding = bytes.fromhex(header["padding"])
     declared = int(header["unknown_0x08"], 16)
 
     out = bytearray()
-    out += MAGIC
+    out += header["magic"].encode("ascii")
     out += _p32(end_address)
     out += _p32(declared)
-    for i in range(len(addresses)):
-        out += _p32(addresses[i])
+    for i in range(count):
+        # an absent section keeps its null; it is not a gap to be closed up
+        out += _p32(0 if i in absent else addresses[i])
     out += padding
-    out += HEADER_MARKER
+    out += header["marker"].encode("ascii")
 
     if len(out) != header["length"]:
         raise ConfigError(
@@ -731,7 +1100,7 @@ def compile_blob(doc: dict) -> bytes:
 
     for chunk in body:
         out += chunk
-    out += END_MAGIC
+    out += header.get("end_marker", END_MAGIC.decode()).encode("ascii")
     return bytes(out)
 
 
@@ -828,7 +1197,7 @@ def region_length(r: dict) -> int:
     if kind == "name_table":
         return 7 + sum(7 + len(rec["name"]) for rec in r["records"])
     if kind == "key_table":
-        return 4 * len(r["entries"])
+        return r.get("entry_stride", 4) * len(r["entries"])
     if kind == "pointer_table":
         return (r["count_width"] + len(bytes.fromhex(r.get("header", "")))
                 + 3 * len(r["targets"]))
@@ -836,6 +1205,14 @@ def region_length(r: dict) -> int:
         return 6 + 3 * len(r["targets"])
     if kind == "reference":
         return 4
+    if kind == "block_header":
+        return 12
+    if kind == "record_trailer":
+        return 7
+    if kind == "action_list":
+        return 1 + 3 * len(r["instructions"])
+    if kind == "bitmap":
+        return 5 + r["width"] * r["height"] // 8
     raise ConfigError(f"unknown region kind {kind!r}")
 
 

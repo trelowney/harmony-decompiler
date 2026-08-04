@@ -93,12 +93,20 @@ def check_resize(path: Path) -> bool:
     if ptrs(doc) != ptrs(again):
         problems.append("pointers do not refer to the same regions afterwards")
 
-    tag = hconfig._tag(hconfig.split_container(out)[0], "BINARYDATASIZE")
-    if int(tag) != len(after):
-        problems.append(f"BINARYDATASIZE says {tag}, blob is {len(after)}")
-    ck = hconfig._tag(hconfig.split_container(out)[0], "CHECKSUM")
-    if int(ck) != hconfig.blob_checksum(after):
-        problems.append("checksum does not match the rebuilt blob")
+    # A bare blob has no XML header, so there is nothing to check the size and
+    # checksum against. That is not a failure, it just means this file cannot
+    # exercise the container half of the test.
+    xml = hconfig.split_container(out)[0]
+    note = ""
+    if xml is None:
+        note = ", container not checked (bare blob, no XML header)"
+    else:
+        tag = hconfig._tag(xml, "BINARYDATASIZE")
+        if int(tag) != len(after):
+            problems.append(f"BINARYDATASIZE says {tag}, blob is {len(after)}")
+        ck = hconfig._tag(xml, "CHECKSUM")
+        if int(ck) != hconfig.blob_checksum(after):
+            problems.append("checksum does not match the rebuilt blob")
 
     if problems:
         print(f"  {path.name:<28} FAIL  " + "; ".join(problems))
@@ -106,7 +114,7 @@ def check_resize(path: Path) -> bool:
 
     n = sum(len(r.get("targets", [])) for r in doc["blob"]["regions"])
     print(f"  {path.name:<28} OK    +{delta} B absorbed, {n} pointers relinked, "
-          f"structure unchanged")
+          f"structure unchanged{note}")
     return True
 
 

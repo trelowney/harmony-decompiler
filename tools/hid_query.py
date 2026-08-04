@@ -42,13 +42,21 @@ kernel32.WriteFile.argtypes = [
 
 # --- commands ---
 COMMAND_GET_VERSION = 0x10
+COMMAND_READ_FLASH = 0x50
 COMMAND_READ_MISC = 0xB0
 RESPONSE_VERSION_DATA = 0x20
+RESPONSE_READ_FLASH_DATA = 0x60
 RESPONSE_READ_MISC_DATA = 0xC0
 
 MISC_EEPROM, MISC_STATE, MISC_RAM = 0x00, 0x01, 0x06
 
-ALLOWED_FIRST_BYTE = {0x10, 0xB2, 0xB3}
+# How many data bytes a read-flash response carries, indexed by the low nibble
+# of its first byte. Per the dlx table in libconcord/remote.cpp:ReadFlash;
+# protocol 0, which is safe mode only, uses a different one.
+READ_FLASH_LENGTHS = (0, 0, 1, 2, 3, 4, 5, 6, 14, 30, 62, 0, 0, 0, 0, 0)
+READ_FLASH_CHUNK = 1022
+
+ALLOWED_FIRST_BYTE = {0x10, 0x55, 0xB2, 0xB3}
 FORBIDDEN = {0x30: "WRITE_FLASH", 0x40: "WRITE_FLASH_DATA",
              0xA0: "WRITE_MISC", 0xD0: "ERASE_FLASH"}
 
@@ -134,6 +142,62 @@ class Remote:
         if (r[0] & 0xF0) != RESPONSE_READ_MISC_DATA or r[1] != kind:
             return None
         return (r[2] << 8) | r[3]
+
+    def read_flash(self, addr, length, progress=None):
+        """Read from the remote's flash. Read-only; see the safety note above.
+
+        Per libconcord/remote.cpp:ReadFlash. The request names an address and
+        a length, and the remote answers with a run of packets whose first
+        byte carries the payload size in its low nibble and whose second byte
+        is a sequence number stepping by 0x11 and wrapping at a byte.
+
+        Returns (data, error). A short read still returns what arrived, which
+        matters when the point of the exercise is finding out where the
+        readable region stops.
+        """
+        out = bytearray()
+        end = addr + length
+        while addr < end:
+            chunk = min(READ_FLASH_CHUNK, end - addr)
+            self.write(bytes([COMMAND_READ_FLASH | 0x05,
+                              (addr >> 16) & 0xFF, (addr >> 8) & 0xFF,
+                              addr & 0xFF,
+                              (chunk >> 8) & 0xFF, chunk & 0xFF]))
+            seq, got = 1, 0
+            while got < chunk:
+                r = self.read()
+                if not r:
+                    return bytes(out), f"timeout at 0x{addr + got:06X}"
+                if (r[0] & 0xF0) != RESPONSE_READ_FLASH_DATA:
+                    if (r[0] & 0xF0) == 0xF0:      # COMMAND_DONE, a short read
+                        break
+                    return bytes(out), (f"unexpected response 0x{r[0]:02X} "
+                                        f"at 0x{addr + got:06X}")
+                if r[1] != seq:
+                    return bytes(out), (f"sequence {r[1]:02X}, expected "
+                                        f"{seq:02X}, at 0x{addr + got:06X}")
+                seq = (seq + 0x11) & 0xFF
+                n = READ_FLASH_LENGTHS[r[0] & 0x0F]
+                if not n:
+                    break
+                out += r[2:2 + n]
+                got += n
+            # The remote closes each run of data packets with COMMAND_DONE.
+            # It has to be consumed here: left in the pipe it turns up as the
+            # first packet of the next request and looks like a short read.
+            tail = self.read(timeout_ms=500)
+            if tail and (tail[0] & 0xF0) != 0xF0:
+                return bytes(out), (f"expected DONE after 0x{addr:06X}, "
+                                    f"got 0x{tail[0]:02X}")
+            # Advance by what actually arrived rather than by what was asked
+            # for. The remote can answer short, and assuming otherwise leaves a
+            # gap in the middle of the result with nothing to say so.
+            if got == 0:
+                return bytes(out), f"no data at 0x{addr:06X}"
+            addr += got
+            if progress:
+                progress(len(out), length)
+        return bytes(out), None
 
     def read_misc_byte(self, addr, kind=MISC_STATE):
         self.write(bytes([COMMAND_READ_MISC | 0x02, kind, addr & 0xFF]))

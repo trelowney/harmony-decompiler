@@ -10,9 +10,10 @@ repository is an attempt to change that.
 
 > **Status: the round trip works.** A 525 config decompiles to JSON and compiles
 > back byte-identical, and a button can be remapped through it - changing exactly
-> one byte of the blob, with the container's checksum recomputed. About 5% of the
-> file is decoded so far and the rest passes through as opaque blobs, but that 5%
-> includes **952 pointers**, which the compiler recomputes rather than copies.
+> one byte of the blob, with the container's checksum recomputed. About 27% of the
+> file is decoded so far and the rest passes through as opaque blobs, but that
+> quarter includes **2,242 pointers**, which the compiler recomputes rather than
+> copies.
 >
 > **Length-changing edits work too**, as of the pointers becoming symbolic:
 > lengthen a name and every section after it shifts, every pointer relinks, and
@@ -71,7 +72,15 @@ claim than "it looks right":
 - the **header of all 114 records** in the region the section table does not
   cover, carrying another 249 pointers, and **124 references buried in the record
   bodies** that were previously being copied as opaque hex
-- record bodies are eight blocks, **one per row of the keyboard matrix**
+- record bodies are blocks, **one per row of the keyboard matrix**, each with a
+  twelve-byte header carrying a pointer into section 17 - 1072 of them, and all
+  1072 point there
+- record trailers, holding a pointer into section 8, the suspected bytecode
+- **section 17 is four 96x64 LCD bitmaps**, which is what every block header
+  points at - `tools/show_bitmaps.py` draws them
+- **arch 8 works too**: all four 720/785/88x samples round-trip byte-identical,
+  and survive a length change. Its markers are not what mirroring arch 9 would
+  suggest, and its section table has a null in the middle
 - the name table, wrapped in `0xFEED ... 0xBEEF` with a length field, whose `index`
   is the address of a **live state variable readable over USB**
 - the **key table** format, `<u8 code> <u16 target> <0x7F>`, and that there is one
@@ -126,6 +135,7 @@ docs/OPEN-QUESTIONS.md  what is unknown, and what would answer it
 docs/BUTTON-LAYOUT.md   the buttons as Logitech documents them
 samples/harmony525/     a real arch 9 config, with checksums
 samples/arch8/          four 720/785/88x configs, mirrored from the thread
+patterns/               ImHex patterns, one hand written and the rest generated
 tools/                  Python scripts used for the analysis (read-only)
 ```
 

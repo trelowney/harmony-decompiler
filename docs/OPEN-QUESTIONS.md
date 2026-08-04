@@ -50,6 +50,98 @@ target than a 525.
 
 ---
 
+## 1a. What the instruction opcodes mean
+
+**The best question in this file to work on**, on the grounds that it can be
+answered from data and firmware we already have, by anyone, with no hardware.
+
+The question this replaces was "what does a key table's `target` mean", and it is
+answered: it indexes an array of **action lists** in section 10, each of them
+`<u8 count> <u16 operand> <u8 opcode>[count]`, the same instruction section 8 is
+built from. A key binding runs a list. See
+[FORMAT.md §4i](FORMAT.md#4i-section-10-indexes-action-lists--solved).
+
+So the question moves down a level. There are **1,043 instructions in the 525
+config and 3,311 in an arch 8 sample**, in a shared vocabulary, and nothing is
+known about what any opcode does:
+
+| opcode | arch 9 | arch 8 |
+|---|---|---|
+| `0x7F` | 235 | 828 |
+| `0x7E` | 134 | 521 |
+| `0x7D` | 200 | 239 |
+| `0x7C` | 203 | 242 |
+| `0x1F` | 57 | 252 |
+| `0x07` | 20 | 640 |
+
+Four of them carry three quarters of arch 9, so they will be the common
+operations: send an IR command, push or pop a menu, set a state variable, run
+another list.
+
+Some of it is already constrained, and `tools/actions.py` prints the working.
+`0x7F` references another list, every time, in both architectures. `0x7D` always
+opens a list with an operand unique to it and `0x7C` always closes one with a
+vocabulary of nine values. `0x7E` stays inside the record count on arch 9.
+`0x07`, `0x0F`, `0x1F` and `0x3F` carry a negative signed number in every single
+instance. The full argument is in
+[FORMAT.md §4i](FORMAT.md#4i-section-10-indexes-action-lists--solved).
+
+So the shape is not a mystery, only the meaning. Three routes, in the order they
+are likely to pay:
+
+- **The firmware.** These opcodes are dispatched by a switch in the config
+  interpreter, which is in a PIC18 image any owner can dump with
+  `concordance --dump-firmware`. A disassembly settles it rather than supporting
+  a guess. See
+  [discussion #7](https://github.com/trelowney/harmony-decompiler/discussions/7).
+- **Correlation.** List 79 is what every key runs in the catch-all table, so it
+  is a good candidate for "do nothing". Operands can be checked against things
+  whose ranges are already known: state variable addresses from the name table,
+  the 114 records in the low region, menu indices.
+- **Observation.** Point a key at a different list, load it, press the key, watch
+  what the remote does. That needs a remote somebody is willing to write to.
+
+Doing this for even two or three opcodes would turn the decompiler's output from
+a structure into something a person can read.
+
+## 1b. What is inside a block
+
+The largest remaining gap. Blocks are decoded down to their headers - twelve
+bytes, one per matrix row, each selecting an LCD bitmap - and terminated by
+`0x17`. What sits in between is not understood. Roughly 9,400 bytes across 1,072
+blocks, though 364 of those are empty.
+
+What is known about the payloads:
+
+- 45 distinct symbol values, almost all below 0x30
+- strings of them are terminated by `00`
+- a recurring shape `05 <n> 16 0F ...` where only the second position varies
+- pairs of strings differing in exactly one symbol and identical otherwise
+
+**A tested hypothesis that did not hold: they are not obviously text.** If these
+were names in a substitution alphabet the symbol frequencies should look like a
+natural language, and they do not - the most common symbol takes 8.6% against the
+12.7% English gives to `e`, and the distribution is much flatter than prose. 45
+symbols is about right for uppercase plus digits, so it is not ruled out, but the
+frequency evidence does not support it and nothing here should be written up as if
+it did.
+
+The pairs differing in one symbol are the most promising thread: whatever varies
+between two otherwise identical blocks is likely to be the thing a block is
+*about*. Two configs from the same remote differing by one deliberate change would
+settle it quickly, which is another reason samples matter.
+
+## 1c. What is in an arch 8 config
+
+Arch 8 decompiles and round-trips, but only about 2% of it is understood, and
+the recognisers that fire are the ones shared with arch 9. It has no block
+headers, and no bitmaps were found. Where its screen images live, and what fills
+the other 98%, is open.
+
+The four samples are in `samples/arch8/` and `roundtrip.py --all` covers them, so
+this is a self-checking place to start: add a recogniser, see whether the round
+trip still passes.
+
 ## 2. The bytecode instruction set (section 8)
 
 Section 8 fits the shape `<u16 operand> <u8 opcode>`, and every one of the 114
@@ -98,8 +190,12 @@ length. Running the decompiler settles it:
 - **Decoded structures:** section 0 is the name table; the four key tables sit in
   the region below 0xF35B.
 - **Still entirely opaque:** sections **1, 2, 3, 4, 8, 16, 17**, plus the bulk of
-  6, 9 and 14 that follows their pointer prefixes, plus the *bodies* of the 114
-  records - their headers are decoded.
+  6, 9 and 14 that follows their pointer prefixes. In the record array the
+  headers, trailers and block headers are decoded; what remains is the payload
+  inside each block.
+- **Section 17 is solved**: four 96x64 monochrome LCD bitmaps, which is what all
+  1072 block headers point at. So a block header selects a screen layout. What
+  the rest of a block says is still open.
 
 Pointers are now symbolic - `region + delta` - so the compiler relinks every one
 it knows about when something changes length. Digging into the record bodies
@@ -112,7 +208,21 @@ silently. That is now the main risk in the whole approach.
 So the remaining question is narrower and more concrete than it was: **do sections
 1, 2, 3, 4, 8 or 17 contain pointers in some shape the recogniser does not
 match?** Section 13 did, and was found by relaxing the requirement that addresses
-ascend - its last entry jumps backwards. If they do not, then length changes become possible as soon as the
+ascend - its last entry jumps backwards.
+
+There is now a specific reason to think the answer is yes. The original developer,
+asked about that first pointer table, says it points at per-subsystem data, that
+each subsystem has its own format, and that some of them hold *"nested data
+structures or structures containing **relative** pointers to other locations
+within the config"*
+([discussion #1](https://github.com/trelowney/harmony-decompiler/discussions/1)).
+
+Everything the recogniser looks for is a 24-bit **absolute** address offset from
+`config_base`, and it is deliberately strict about it. A relative offset - from
+the start of its own structure, or of its section - would be invisible to it, and
+would also be invisible in the round-trip test, because a pointer that is never
+recognised is copied as hex and passes through unchanged. That is precisely the
+failure mode that leaves an edited config quietly broken. If they do not, then length changes become possible as soon as the
 114-record array is understood. If they do, that shape needs finding. Section 4
 (2,551 B of 3-byte records) and section 17 (3,096 B) are the two worth looking at
 first, on size alone.

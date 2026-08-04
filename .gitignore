@@ -17,3 +17,6 @@ Thumbs.db
 # decompiler output
 *.json
 !.github/**/*.json
+
+# graphify, a local code-graph tool; the graph is rebuilt from the source
+graphify-out/
