@@ -64,7 +64,9 @@ this list survives a decompile/recompile cycle byte-for-byte, which is a stronge
 claim than "it looks right":
 
 - the `.EZHex` container: XML header + binary blob, size and XOR checksum
-- the blob header: `AHCM` magic, an 18-entry section pointer table
+- the blob header: `AHCM` magic, a section pointer table of 18 sections and a
+  trailing null. The same container carries arch 8, 12 and 14 under a different
+  four letter cookie, and the table lines up by slot index
 - pointers are **24-bit little-endian absolute flash addresses**;
   `config_base = 0x20000` - confirmed on arch 8 too
 - **which sections carry pointer tables** - 10 of the 18, holding 685 addresses.

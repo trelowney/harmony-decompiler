@@ -480,6 +480,13 @@ The opcode vocabulary is shared:
 Four opcodes carry three quarters of arch 9. **What any of them mean is not
 known**, and that is now the interesting question rather than what `target` was.
 
+**This table is arch 8 and arch 9 only, and it does not cover arch 12 and 14.**
+@dannybloe reports `0x6C` as the third most common opcode on arch 14, 2832
+occurrences in a Harmony 700 config, and it does not occur in the 525 sample at
+all. The inventories overlap heavily, so the likeliest reading is one instruction
+set with per architecture extensions, but anything derived from the table above
+should be treated as arch 9 until an arch 12 or 14 file says otherwise.
+
 ### What can be said about the instructions without knowing what they do
 
 `tools/actions.py` prints this; it is reproducible rather than a claim to be
@@ -1010,13 +1017,55 @@ byte-identical, as does the resize test. What differs is only in the header:
 | magic | `AHCM` | `TPTP` |
 | end-of-header marker | `CMAH` | **`WLWL`** |
 | end marker | `MCHA` | `DKDK` |
-| section pointers | 18, all present | 20, **one of them null** |
+| section pointers | 19, the last one null | 20, **two of them null** |
 
 Two things there are worth flagging because guessing would get them wrong. Arch 9
 mirrors its magic to make its markers and arch 8 does not - `WLWL` has nothing to
 do with `TPTP`. And arch 8's section table contains a **null pointer in the
-middle**, meaning that subsystem is absent; reading the table until the first zero,
-which is the obvious implementation, silently truncates it from 20 entries to 8.
+middle**, at slot 8, meaning that subsystem is absent; reading the table until the
+first zero, which is the obvious implementation, silently truncates it from 20
+entries to 8.
+
+Counting the slots, since an earlier version of this table got it wrong. Both
+architectures end on a null: slot 18 on arch 9, slot 19 on arch 8. So arch 8 has
+**two** nulls, slot 8 and the trailing one, and this document previously said one
+because it was counting the middle null and ignoring the trailing one. Where other
+people's notes say 19 slots for arch 9 and this one says 18, that is the same
+difference and not a disagreement about the file.
+
+### The same container goes on to arch 12 and 14
+
+Established by @dannybloe over a thirteen sample corpus and checked here against
+the arch 8 and arch 9 files, which he does not have. All four architectures use
+this container, with a different four letter cookie each:
+
+| arch | cookie | end marker | marker after the pointer table |
+|---|---|---|---|
+| 8 | `TPTP` | `DKDK` | `WLWL` |
+| 9 | `AHCM` | `MCHA` | `CMAH` |
+| 12, 14 | `GSPM` | `PTYY` | `LWJL` |
+
+The pointer table is one table with per architecture insertions, so **section
+numbers carry across by index**. Arch 9 and arch 14 are the base layout at 19
+slots; arch 8 inserts a null at slot 8 to make 20; arch 12 inserts that same null
+plus a real section at slot 18 to make 21. So section 10 here is raw slot 11 on
+arch 8 and arch 12.
+
+Checked from this side rather than taken on trust: raw slot 11 of `Update.EZHex`
+holds a `u16` count of 1318, which is the number of action lists the decompiler
+reads out of that file by an unrelated route, and `2 + 3 * 1318` is exactly the gap
+to raw slot 12.
+
+Two further consequences worth having:
+
+- `base` is recoverable from the file as `end_addr - (end marker - cookie)`, which
+  gives `0x020000` on both architectures here. concordance lists arch 9's
+  `config_base` as `0x820000`; bit 23 looks like a flag rather than an address bit.
+- the `u32` at `+8` is **not** an architecture id. Arch 9 and arch 14 both carry
+  `0x1400`. The architecture is stated outright by section slot 1, a seven byte
+  record of `<u8 arch> <u8 arch> <u16 version> 00 00 00`. The 525 reads
+  `09 09 16 0d 00 00 00`, so arch 9, version word 3350. That matters for a config
+  read off a remote over USB, which arrives with no XML header to consult.
 
 What the two share, decoded and verified by round trip on both: the container, the
 blob header shape, `config_base`, 24-bit pointers and their tables, the
