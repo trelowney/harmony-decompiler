@@ -1,0 +1,349 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/harmony-config.schema.json",
+  "title": "Harmony config",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$Metadata": {
+      "$ref": "#/$defs/metadata"
+    },
+    "StateVariables": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/stateVariable"
+      }
+    },
+    "InfraredDevices": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/infraredDevice"
+      }
+    },
+    "InfraredProtocols": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/infraredProtocol"
+      }
+    },
+    "InfraredLanguages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/infraredLanguage"
+      }
+    },
+    "Menus": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/menu"
+      }
+    },
+    "BindingLists": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/bindingList"
+      }
+    },
+    "ActionLists": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/actionList"
+      }
+    }
+  },
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "ConfigOffset": {
+          "type": "integer"
+        },
+        "SourceFile": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "stateVariable": {
+      "type": "object",
+      "properties": {
+        "$Metadata": {
+          "$ref": "#/$defs/metadata"
+        },
+        "InitialValue": {
+          "type": "integer"
+        },
+        "States": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/state"
+          }
+        }
+      },
+      "required": ["InitialValue", "States"],
+      "additionalProperties": false
+    },
+    "state": {
+      "type": "object",
+      "properties": {
+        "Transitions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/transition"
+          }
+        }
+      },
+      "required": ["Transitions"],
+      "additionalProperties": false
+    },
+    "transition": {
+      "type": "object",
+      "properties": {
+        "Options": {
+          "type": "integer"
+        },
+        "FromValue": {
+          "type": "integer"
+        },
+        "ToValue": {
+          "type": "integer"
+        },
+        "Action": {
+          "type": "integer"
+        }
+      },
+      "required": ["FromValue", "ToValue", "Action"],
+      "additionalProperties": false
+    },
+    "infraredDevice": {
+      "type": "object",
+      "properties": {
+        "$Metadata": {
+          "$ref": "#/$defs/metadata"
+        },
+        "Commands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/infraredCommand"
+          }
+        }
+      },
+      "required": ["Commands"],
+      "additionalProperties": false
+    },
+    "infraredCommand": {
+      "type": "object",
+      "properties": {
+        "Type": {
+          "type": "integer"
+        },
+        "InfraredProtocolIndex": {
+          "type": "integer"
+        },
+        "Variants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/infraredVariant"
+          }
+        }
+      },
+      "required": ["Type", "InfraredProtocolIndex", "Variants"],
+      "additionalProperties": false
+    },
+    "infraredVariant": {
+      "type": "object",
+      "properties": {
+        "Start": {
+          "$ref": "#/$defs/infraredSegment"
+        },
+        "Repeat": {
+          "$ref": "#/$defs/infraredSegment"
+        },
+        "Finish": {
+          "$ref": "#/$defs/infraredSegment"
+        }
+      },
+      "additionalProperties": false
+    },
+    "infraredSegment": {
+      "type": "object",
+      "properties": {
+        "InfraredLanguageIndex": {
+          "type": "integer"
+        },
+        "FragmentIndexes": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "infraredProtocol": {
+      "type": "object",
+      "properties": {
+        "CarrierPeriodNs": {
+          "type": "integer"
+        },
+        "CarrierPulseLengthNs": {
+          "type": "integer"
+        }
+      },
+      "required": ["CarrierPeriodNs", "CarrierPulseLengthNs"],
+      "additionalProperties": false
+    },
+    "infraredLanguage": {
+      "type": "object",
+      "properties": {
+        "Fragments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/fragment"
+          }
+        }
+      },
+      "required": ["Fragments"],
+      "additionalProperties": false
+    },
+    "fragment": {
+      "type": "object",
+      "properties": {
+        "IntervalStream": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        }
+      },
+      "required": ["IntervalStream"],
+      "additionalProperties": false
+    },
+    "menu": {
+      "type": "object",
+      "properties": {
+        "$Metadata": {
+          "$ref": "#/$defs/metadata"
+        },
+        "Pages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/menuPage"
+          }
+        }
+      },
+      "required": ["Pages"],
+      "additionalProperties": false
+    },
+    "menuPage": {
+      "type": "object",
+      "properties": {
+        "BindingIndex": {
+          "type": "integer"
+        },
+        "RenderStream": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/renderInstruction"
+          }
+        }
+      },
+      "required": ["BindingIndex", "RenderStream"],
+      "additionalProperties": false
+    },
+    "renderInstruction": {
+      "type": "object",
+      "properties": {
+        "Prepare": {
+          "type": "integer"
+        },
+        "DrawImage": {
+          "$ref": "#/$defs/drawImage"
+        },
+        "Commit": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "minProperties": 1
+    },
+    "drawImage": {
+      "type": "object",
+      "properties": {
+        "ScreenX": {
+          "type": "integer"
+        },
+        "ScreenY": {
+          "type": "integer"
+        },
+        "ImageX": {
+          "type": "integer"
+        },
+        "ImageY": {
+          "type": "integer"
+        },
+        "Width": {
+          "type": "integer"
+        },
+        "Height": {
+          "type": "integer"
+        },
+        "ImageIndex": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ScreenX",
+        "ScreenY",
+        "ImageX",
+        "ImageY",
+        "Width",
+        "Height",
+        "ImageIndex"
+      ],
+      "additionalProperties": false
+    },
+    "bindingList": {
+      "type": "object",
+      "properties": {
+        "Bindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/binding"
+          }
+        }
+      },
+      "required": ["Bindings"],
+      "additionalProperties": false
+    },
+    "binding": {
+      "type": "object",
+      "properties": {
+        "Options": {
+          "type": "integer"
+        },
+        "Event": {
+          "type": "integer"
+        },
+        "Action": {
+          "type": "integer"
+        }
+      },
+      "required": ["Event", "Action"],
+      "additionalProperties": false
+    },
+    "actionList": {
+      "type": "object",
+      "properties": {
+        "Actions": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        }
+      },
+      "required": ["Actions"],
+      "additionalProperties": false
+    }
+  }
+}
