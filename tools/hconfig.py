@@ -88,6 +88,26 @@ def blob_checksum(blob: bytes) -> int:
     return c
 
 
+TRAILER_CHECKSUM_SEED = 0x4321
+TRAILER_CHECKSUM_OFFSET = 6
+
+
+def trailer_checksum(blob: bytes) -> int:
+    """Firmware-validated u16 XOR stored immediately before the end marker.
+
+    The 525 boot validator loads 0x4321 at 0x04E8A, XORs successive little
+    endian words at 0x04EF8..0x04F02, and compares the stored two bytes at
+    0x04F54..0x04F5C. The checksum excludes itself and the four-byte marker.
+    """
+    if len(blob) < TRAILER_CHECKSUM_OFFSET:
+        raise ConfigError("blob is too short to hold its trailer checksum")
+    accumulator = TRAILER_CHECKSUM_SEED
+    end = len(blob) - TRAILER_CHECKSUM_OFFSET
+    for offset in range(0, end - 1, 2):
+        accumulator ^= blob[offset] | (blob[offset + 1] << 8)
+    return accumulator
+
+
 def split_container(raw: bytes):
     """Split an .EZHex into (xml_bytes, separator, blob). Tolerates a bare blob."""
     i = raw.find(END_TAG)
@@ -586,6 +606,194 @@ def find_action_lists(blob: bytes, regions):
     return frozenset(out)
 
 
+ARCH9_SCREEN_FIXED = {1: 6, 2: 5, 3: 9, 4: 5, 16: 1, 17: 3, 22: 1, 23: 0}
+
+
+def parse_arch9_screen_program(blob: bytes, start: int):
+    """Read one linear arch-9 screen-program path.
+
+    The parser mirrors the independently verified screen walker, but keeps the
+    control-transfer targets so a caller can follow shared tails.  ``None`` is
+    returned rather than guessing when any instruction is malformed.
+    """
+    result, offset, limit = [], start, len(blob)
+    while 0 <= offset < limit:
+        instruction = offset
+        opcode = blob[offset]
+        offset += 1
+        if opcode == 0:
+            result.append({"offset": instruction, "opcode": opcode,
+                           "length": 1, "operands": b"", "targets": []})
+            return result
+        if opcode == 20:
+            if offset + 3 > limit:
+                return None
+            operands = blob[offset:offset + 3]
+            target = int.from_bytes(operands, "little") - CONFIG_BASE
+            if not 0 <= target < limit:
+                return None
+            result.append({"offset": instruction, "opcode": opcode,
+                           "length": 4, "operands": operands,
+                           "targets": [target]})
+            return result
+        if opcode in ARCH9_SCREEN_FIXED:
+            width = ARCH9_SCREEN_FIXED[opcode]
+            if offset + width > limit:
+                return None
+            operands = blob[offset:offset + width]
+            result.append({"offset": instruction, "opcode": opcode,
+                           "length": 1 + width, "operands": operands,
+                           "targets": []})
+            offset += width
+            continue
+        if opcode == 5:
+            if offset + 2 > limit:
+                return None
+            body = offset
+            offset += 2
+            while offset < limit and blob[offset] != 0:
+                offset += 2 if blob[offset] & 0x80 else 1
+            if offset >= limit:
+                return None
+            offset += 1
+            result.append({"offset": instruction, "opcode": opcode,
+                           "length": offset - instruction,
+                           "operands": blob[body:offset], "targets": []})
+            continue
+        if opcode in (18, 19):
+            width = 2 if opcode == 19 else 1
+            body = offset
+            if offset >= limit:
+                return None
+            offset += 1                 # state-variable index
+            targets = []
+            for entry_width in (width + 3, 2 * width + 3):
+                if offset + width > limit:
+                    return None
+                count = int.from_bytes(blob[offset:offset + width], "little")
+                offset += width
+                if offset + count * entry_width > limit:
+                    return None
+                for index in range(count):
+                    pointer = offset + index * entry_width + entry_width - 3
+                    target = int.from_bytes(blob[pointer:pointer + 3], "little") - CONFIG_BASE
+                    if not 0 <= target < limit:
+                        return None
+                    targets.append(target)
+                offset += count * entry_width
+            result.append({"offset": instruction, "opcode": opcode,
+                           "length": offset - instruction,
+                           "operands": blob[body:offset], "targets": targets})
+            return result
+        return None
+    return None
+
+
+def arch9_screen_roots(blob: bytes, section_pointers) -> list[int]:
+    """Screen roots stated by slot 11 and every slot-6 mode page."""
+    roots = []
+
+    def offset_of(address):
+        offset = address - CONFIG_BASE
+        return offset if 0 <= offset < len(blob) else None
+
+    if len(section_pointers) > 11 and section_pointers[11]:
+        table = offset_of(section_pointers[11])
+        if table is not None and table + 2 <= len(blob):
+            count = int.from_bytes(blob[table:table + 2], "little")
+            if table + 2 + 3 * count <= len(blob):
+                for index in range(count):
+                    root = offset_of(int.from_bytes(
+                        blob[table + 2 + 3 * index:table + 5 + 3 * index], "little"))
+                    if root is not None:
+                        roots.append(root)
+
+    if len(section_pointers) > 6 and section_pointers[6]:
+        table = offset_of(section_pointers[6])
+        if table is not None and table + 3 <= len(blob):
+            count = int.from_bytes(blob[table:table + 3], "little")
+            if count <= 4096 and table + 3 + 3 * count <= len(blob):
+                for index in range(count):
+                    mode = offset_of(int.from_bytes(
+                        blob[table + 3 + 3 * index:table + 6 + 3 * index], "little"))
+                    if mode is None or mode + 6 > len(blob):
+                        continue
+                    pages = int.from_bytes(blob[mode + 4:mode + 6], "little")
+                    if pages > 256 or mode + 6 + 3 * pages > len(blob):
+                        continue
+                    for page_index in range(pages):
+                        page = offset_of(int.from_bytes(
+                            blob[mode + 6 + 3 * page_index:mode + 9 + 3 * page_index],
+                            "little"))
+                        if page is None or page + 6 > len(blob):
+                            continue
+                        root = offset_of(int.from_bytes(blob[page + 3:page + 6], "little"))
+                        if root is not None:
+                            roots.append(root)
+    return sorted(set(roots))
+
+
+def arch9_screen_text_regions(blob: bytes, section_pointers) -> list[dict]:
+    """Every opcode-4 pointer and the terminated glyph string it names.
+
+    These locations are derived from stated screen roots and control-flow
+    successors.  That makes an opcode-4 pointer stronger evidence than scanning
+    arbitrary bytes for ``04`` and is also what lets it supersede the older
+    generic ``16 <u24>`` recogniser when a y-coordinate happens to be 0x16.
+    """
+    pending = arch9_screen_roots(blob, section_pointers)
+    seen = set(pending)
+    references = {}
+    while pending:
+        root = pending.pop()
+        program = parse_arch9_screen_program(blob, root)
+        if program is None:
+            continue
+        for instruction in program:
+            if instruction["opcode"] == 4:
+                operands = instruction["operands"]
+                target = int.from_bytes(operands[2:5], "little") - CONFIG_BASE
+                if 0 <= target < len(blob):
+                    references[instruction["offset"]] = {
+                        "kind": "screen_reference",
+                        "offset": instruction["offset"],
+                        "length": 6,
+                        "opcode": "0x04",
+                        "x": operands[0],
+                        "y": operands[1],
+                        "targets": [target],
+                    }
+            for target in instruction["targets"]:
+                if target not in seen:
+                    seen.add(target)
+                    pending.append(target)
+
+    strings = {}
+    for reference in references.values():
+        start = reference["targets"][0]
+        end = start
+        while end < len(blob) and blob[end] != 0:
+            end += 2 if blob[end] & 0x80 else 1
+        if end >= len(blob):
+            continue
+        strings[start] = {
+            "kind": "glyph_string",
+            "offset": start,
+            "length": end + 1 - start,
+            "codes": list(blob[start:end]),
+            "terminator": "0x00",
+        }
+
+    known = sorted([*references.values(), *strings.values()],
+                   key=lambda region: region["offset"])
+    for left, right in zip(known, known[1:]):
+        if left["offset"] + left["length"] > right["offset"]:
+            raise ConfigError(
+                f"overlapping screen regions at 0x{left['offset']:X} and "
+                f"0x{right['offset']:X}")
+    return known
+
+
 RECOGNISERS = ("name_table", "pointer_table", "key_table", "bitmap")
 
 
@@ -797,6 +1005,76 @@ def _slice(parent, blob, a, b):
     return piece
 
 
+def _overlay_known_regions(blob: bytes, regions: list[dict], known: list[dict]):
+    """Overlay exact semantic spans on an already tiled region list.
+
+    Screen references are derived from control flow after the ordinary refine
+    passes.  A reference can cross a boundary introduced by a weaker recogniser
+    (notably an opcode-4 y-coordinate of ``0x16`` followed by its pointer), so
+    this overlay is allowed to replace whole recognised regions and to split
+    data-backed regions.  It refuses to cut only part of any recognised region.
+    """
+    if not known:
+        return regions
+
+    result = []
+    index = 0
+    cursor = 0
+
+    def raw_piece(region, start, stop):
+        parent = {"kind": "opaque"}
+        if "section" in region:
+            parent["section"] = region["section"]
+        parent["note"] = "raw remainder after a stronger semantic overlay"
+        return _slice(parent, blob, start, stop)
+
+    def advance(to: int, keep: bool):
+        nonlocal index, cursor
+        while cursor < to:
+            while index < len(regions) and (
+                    regions[index]["offset"] + regions[index]["length"] <= cursor):
+                index += 1
+            if index >= len(regions):
+                raise ConfigError("semantic overlay ran past the region tiling")
+            region = regions[index]
+            start = region["offset"]
+            stop = start + region["length"]
+            if not start <= cursor < stop:
+                raise ConfigError(f"gap in region tiling at 0x{cursor:X}")
+            finish = min(to, stop)
+            if keep:
+                if cursor == start and finish == stop:
+                    result.append(region)
+                elif "data" in region:
+                    result.append(_slice(region, blob, cursor, finish))
+                else:
+                    # A control-flow-derived screen span is stronger than the
+                    # generic byte-pattern recognisers. Its boundary can expose
+                    # that only part of an older `reference` was real. Preserve
+                    # the uncovered bytes verbatim rather than retaining a
+                    # semantic claim whose framing has been disproved.
+                    result.append(raw_piece(region, cursor, finish))
+            cursor = finish
+
+    for semantic in known:
+        start = semantic["offset"]
+        stop = start + semantic["length"]
+        if start < cursor:
+            raise ConfigError(f"overlapping semantic overlay at 0x{start:X}")
+        advance(start, keep=True)
+
+        touched = [r for r in regions
+                   if r["offset"] < stop and start < r["offset"] + r["length"]]
+        sections = {r["section"] for r in touched if "section" in r}
+        if len(sections) == 1:
+            semantic["section"] = sections.pop()
+        advance(stop, keep=False)
+        result.append(semantic)
+
+    advance(len(blob), keep=True)
+    return result
+
+
 # --------------------------------------------------------------------------
 # decompile
 
@@ -909,6 +1187,13 @@ def decompile(raw: bytes, filename=None) -> dict:
     regions = (_refine(blob, regions, records, bitmaps=targets, actions=actions)
                if targets or actions else first)
 
+    # The arch-9 screen parser is rooted in slot 11 and the slot-6 mode pages,
+    # not in byte-pattern guesses. Pull opcode-4 references and their strings
+    # out last so they take precedence over weaker recognisers they may cross.
+    if magic == b"AHCM":
+        regions = _overlay_known_regions(
+            blob, regions, arch9_screen_text_regions(blob, ptrs))
+
     doc = {
         "harmony_config_version": FORMAT_VERSION,
         "source": {
@@ -979,6 +1264,13 @@ def emit_region(r: dict, resolve=None) -> bytes:
     if kind == "reference":
         return (bytes([int(r["opcode"], 16)])
                 + (resolve(r["targets"][0]) + CONFIG_BASE).to_bytes(3, "little"))
+
+    if kind == "screen_reference":
+        return (bytes([int(r["opcode"], 16), r["x"], r["y"]])
+                + (resolve(r["targets"][0]) + CONFIG_BASE).to_bytes(3, "little"))
+
+    if kind == "glyph_string":
+        return bytes(r["codes"]) + bytes([int(r["terminator"], 16)])
 
     if kind == "bitmap":
         return (bytes([int(r["format"], 16)])
@@ -1101,6 +1393,12 @@ def compile_blob(doc: dict) -> bytes:
     for chunk in body:
         out += chunk
     out += header.get("end_marker", END_MAGIC.decode()).encode("ascii")
+    # The two bytes immediately before the end marker are checked by the
+    # remote's boot validator. They used to pass through as opaque section-17
+    # data, which made edited configs internally inconsistent even when the
+    # EZHex XML checksum was refreshed.
+    checksum_at = len(out) - TRAILER_CHECKSUM_OFFSET
+    out[checksum_at:checksum_at + 2] = trailer_checksum(out).to_bytes(2, "little")
     return bytes(out)
 
 
@@ -1205,6 +1503,10 @@ def region_length(r: dict) -> int:
         return 6 + 3 * len(r["targets"])
     if kind == "reference":
         return 4
+    if kind == "screen_reference":
+        return 6
+    if kind == "glyph_string":
+        return len(r["codes"]) + 1
     if kind == "block_header":
         return 12
     if kind == "record_trailer":

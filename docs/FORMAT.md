@@ -409,6 +409,14 @@ Of the four, three are referenced by block headers. The fourth is filled with
 
 So a block header is, among other things, choosing which screen layout to draw.
 
+> **What these are for, added later.** Section 4l reads the screen programs, and
+> these four are the *page backgrounds*. Opcode 3 draws them a 96x8 strip at a
+> time, eight strips to a page, and the text is drawn on top. So the dotted rule
+> and the divider are not furniture sitting beside the labels; they are the layer
+> the labels sit on. An earlier note in the project's working files described them
+> as separators and took their emptiness of words as a puzzle. There was no
+> puzzle: words are never in a bitmap here, they are glyph runs.
+
 > The bitmap recogniser is deliberately restricted to plausible screen sizes:
 > width and height both multiples of 8, width up to 256, height up to 128. A
 > looser test that accepts anything whose pixel count divides by eight finds
@@ -919,6 +927,13 @@ reading: `0x72`'s operands run from 13 to 1,805 while section 14 holds 11
 pointers, so whatever it does there, it is not a plain index. `0x80` never
 occurs in any config we have.
 
+> Two of these are answered further down and the table is left as it was, because
+> what it records is what this tool reported. Section 4k reads `0x80` as the base
+> of a family: `0x80 | n` writes state variable *n*, and the sample uses `0x8E`
+> through `0x96`. Opcode `0x80` itself is absent for the ordinary reason that it
+> would name variable 0. Section 4l names section 11: it is the screen-program
+> table, so `0x73` runs one.
+
 Two cautions are worth repeating here because both were mistakes first. A
 linear walk has to stop at an unconditional branch, since handlers sit end to
 end and each ends with a `BRA` back to the loop; without that, every opcode
@@ -982,6 +997,199 @@ which has not been done yet.
 > better evidence. That does not retrospectively justify the first attempt. A
 > guess that lands is still a guess, and the way to tell the difference is
 > whether anything would have contradicted it.
+
+## 4k. Three more opcodes, and section 8 closing to the byte - SOLVED
+
+`tools/verify_525_semantics.py` asserts everything in this subsection against the
+sample on every run, so these numbers are not a snapshot of one afternoon.
+
+### Section 8 is a leading action list plus every page's binding list
+
+The section runs `0x0319F8` to `0x031E36`, 1,086 bytes, and it is exactly two
+things back to back:
+
+| | bytes |
+|---|---:|
+| one ordinary action list, 11 instructions | 34 |
+| the 135 mode-page binding lists, packed | 1,052 |
+| | **1,086** |
+
+The 135 page-list addresses are unique, contiguous, and the last one ends on the
+section boundary, so there is no padding and no unclaimed record. The leading list
+is `0x7E:0, 0x7F:47..50, 0x7E:6, 0x7F:184, 0x7E:8, 0x7F:184, 0x7E:10, 0x7F:184`,
+which is startup behaviour, but calling the whole section "startup" is too narrow
+for what is in it.
+
+Those 135 lists hold 216 tagged entries between them and every tag is a press
+event whose scan code is 30, 31, 38 or 39. This is page navigation, not the
+50-button keypad census.
+
+### `0x75` sounds a tone
+
+The handler at `0x01DC4` copies the two operand bytes to `0x1FA`/`0x1F9` and calls
+`0x056D8`, which shifts the low byte twice into a delay, takes the high byte as a
+loop count, and calls `0x05798` twice per iteration. `0x05798` is `BTG LATA, 2`
+followed by the delay helper, so two calls are one square-wave period.
+
+```
+0x75  { high byte = cycles, low byte = half-period }
+```
+
+The unit of the low byte depends on the clock calibration and is not claimed.
+
+### `0x80 | n` writes state variable `n`
+
+The dispatcher at `0x01C9A` clears bit 7, keeps the index, copies the operand to
+`0x1A9`/`0x1AA` and calls into the section 13 machinery already identified. The
+sample closes it from the other side: 24 state variables, 23 of them one byte
+wide, 86 writes across the reachable lists using opcodes `0x8E` through `0x96`, no
+index out of range, and **no write to a narrow variable with a non-zero high
+operand byte**. That last one is the check worth keeping, because it is the one
+that would fail if the reading were wrong.
+
+### `0x7C` is a quantity, not a delay
+
+Over all 203 uses in the sample's action lists the high byte is always a valid IR
+group index (9, 68, 62 and 64 uses across the four groups) and the low byte is
+`{0: 17, 1: 178, 5: 5, 15: 2, 95: 1}`. A distribution that is 88% ones and tops out
+at 95 is a count of something, and it is not a standalone delay instruction. What
+that something is remains open.
+
+## 4l. Where the menu text lives - SOLVED
+
+Searching a config for its own menu labels finds nothing. Not in ASCII, not in
+UTF-16, not with bit 7 set. For a while this document treated that as evidence
+that the text was somewhere else entirely, perhaps in the firmware. It is not.
+**The text is in the config, drawn glyph by glyph, and the glyph numbers are
+local to the font that draws them.** There is nothing to search for.
+
+The format's designer said as much in discussion #1 - that menus are a stream of
+render instructions and text should be reached through a command naming a font and
+a string. This is that, made executable.
+
+### Section 11, and a screen program per page
+
+Section 11 is a `u16` count and 22 program pointers. In this sample all 22 are
+wrappers: `opcode 17 <u16 operand> <u8 opcode>` then `opcode 0`, that is, queue one
+action instruction and stop. The pages you actually see are reached through the
+pointer in each section 6 mode page record, not through these.
+
+All 114 modes hold 135 pages between them and 135 distinct program pointers. Every
+one decodes to its terminator with no unknown opcode and no overrun:
+
+| opcode | operand bytes | uses | what it does |
+|---:|---:|---:|---|
+| 0 | 0 | 135 | end |
+| 3 | 9 | 1,114 | draw a rectangle of a picture at a screen position |
+| 4 | 5 | 1,053 | x, y, then a `u24` naming a glyph string |
+| 5 | *string* | 179 | x, y, then the glyph string inline, `0x00` terminated |
+| 16 | 1 | 244 | select font set *n* from section 7 |
+| 20 | 3 | - | jump |
+| 22 | 1 | 1,080 | select display row 0..7 |
+| 23 | 0 | 1,080 | transfer the selected row to the panel |
+
+Opcodes 18 and 19 are switches on a state variable and end a linear path.
+
+### The framing, read out of the firmware
+
+Every page is exactly eight row blocks:
+
+```
+22(row)  3(the row's 96x8 background strip)  [font and text draws]  23(commit)
+```
+
+Ghidra on `mcu.bin` closes both ends of that. Opcode 22's handler reads one byte
+into `0xD9` and calls `0x038EC`, which computes `0xC0 = row`, `0xC1 = row * 8`,
+`0xC2 = row * 8 + 7`: an 8-pixel window, nothing more. Opcode 23 drives `LATA.5`
+low, loads width `0x60`, calls the pixel transfer at `0x03898`, and drives `LATA.5`
+high again. So 22 selects and 23 commits, on this architecture.
+
+The operands agree from the data side without the firmware: the opcode 3 that
+follows every opcode 22 begins `00, 8*row, 00, 8*row, 96, 8`, in all 1,080.
+
+**This is arch 9 only.** On arch 12 opcode 22 is a call and opcode 23 is its
+return, which is a different instruction wearing the same number. Do not carry
+these meanings across.
+
+### Section 7 is the fonts
+
+A `u16` count, then a pointer per font set. Five of them here. Each set is:
+
+```
++0x00  u8   glyph height in pixels
++0x01  u8   first glyph code
++0x02  u8   glyph count
++0x03  u24  glyph[count]      NULL where the config never draws that code
+```
+
+A glyph is one byte of width, then one row at a time until a `0x00` appears where
+a row leader would be. A row is `0x20 | n`, *n* being how many command bytes
+follow, and each command is `kind << 4 | (count - 1)`:
+
+| kind | meaning |
+|---:|---|
+| `0x5` | *count* literal pixels, two bits each, big endian |
+| `0x6` | a run of *count* background pixels |
+| `0xA` | a run of *count* ink pixels |
+
+Pixel value 2 is paper and 1 is ink. **This encoding is
+[@dannybloe](https://github.com/dannybloe)'s finding**, published 7 August 2026;
+the renderer here implements it rather than having worked it out.
+
+### It closes, and then it reads
+
+Walking all 135 programs while tracking the font opcode 16 last selected resolves
+1,053 external strings and 179 inline ones, 9,018 glyph references in total, with
+**zero out of range and zero landing on a NULL glyph**. That is the closure. What
+makes it worth having is the next step: `tools/render_525_screens.py` draws all
+135 pages as BMPs, and the sample's device list comes back as `XBOX 360`,
+`X96 Box`, `TV Panasonic`, `Amplifier Genius`.
+
+Which also settles a smaller thing this document had wrong by implication. `X96
+Box` was missing from the state-variable names, and that was never evidence the
+device was missing. Its name only ever existed as the glyph run that draws it.
+
+A glyph number means nothing outside its own font set, so a decompiled config must
+keep the raw numbers even once the characters are known. Adding text to a config
+means building a set and numbering it, not looking a character up.
+
+## 4m. The checksum the remote actually checks - SOLVED
+
+The `.EZHex` XML carries a `CHECKSUM` tag, and section 1 describes it. That is the
+one the host software checks. **There is a second one, inside the blob, and it is
+the one the remote checks.**
+
+```
+the u16 immediately before the four-byte end marker
+seed 0x4321
+XOR successive little-endian u16 words
+excluding the stored word itself and the marker
+```
+
+The 525 firmware loads `0x21, 0x43` at `0x04E8A`, XORs each fetched word at
+`0x04EF8`, and compares both stored bytes at `0x04F54`. The algorithm reproduces
+the stored word in every sample here:
+
+| sample | stored |
+|---|---|
+| 525 `config.EZHex` | `0xD145` |
+| arch 8 `Update-1` | `0xDDF6` |
+| arch 8 `Update-2` | `0xC59D` |
+| arch 8 `Update-3` | `0xBB10` |
+| arch 8 `Update` | `0xCF6F` |
+
+This is worth being blunt about, because it is the most consequential error this
+project has made. Those two bytes used to pass through as ordinary section 17
+residue. Any edited config generated before this was found would have carried a
+stale word, the remote's own validator would have rejected it, and the round-trip
+test could never have said so: a round trip compares against the original, and the
+original is always self-consistent. **The oracle was structurally incapable of
+seeing this class of bug.**
+
+What did see it was somebody else's parser. `@dannybloe`'s reader reported the
+trailer as invalid on the first edited artifacts produced here; the seed and the
+range were then found in the firmware and confirmed against all five samples.
+`compile_blob()` now recomputes the word before the outer XOR.
 
 ## 5. Samples from issue #66 - different architecture, SAME container
 
@@ -1464,9 +1672,10 @@ Both operands split into two bytes:
 ```
 
 Checked across **all 487 action lists**, not only the ones that suited the
-hypothesis: for both opcodes the high byte is only ever 0, 1, 2 or 3, and this
-config declares exactly three devices (`TV_Panasonic`, `Amplifier_Genius`,
-`XBOX_360`). The two opcodes then differ in their low byte exactly as the
+hypothesis: for both opcodes the high byte is only ever 0, 1, 2 or 3, and the
+state-variable names in this config mention three devices (`TV_Panasonic`,
+`Amplifier_Genius`, `XBOX_360`). The two opcodes then differ in their low byte
+exactly as the
 reading predicts: `0x7D` spreads evenly, the way a command index would, while
 `0x7C` is `1` in 87% of cases, the way a flag would. That asymmetry is the real
 evidence; the high-byte range on its own would be much weaker.
@@ -1474,6 +1683,20 @@ evidence; the high-byte range on its own would be much weaker.
 In this sample, key table 3 drives device 1 and tables 2 and 4 drive device 2,
 so tables are per activity and an activity is bound to a device. Tables 0 and 1
 are fallbacks: 47 of the 51 entries in table 0 run the same action list.
+
+> **Three names, four devices.** The high byte runs 0 to 3 and there are three
+> names, and this document once treated that as three devices plus a spare. It is
+> four devices. The fourth is `X96 Box` and it has no name in the state-variable
+> tree at all, because a device the user built by learning codes onto a database
+> profile gets its name written only into the pictures of the menus that show it.
+> Section 4l renders those menus and reads it off the screen. The four groups are
+> Amplifier Genius (mode 73, 8 records), TV Panasonic (78, 67), XBOX 360 (113, 61)
+> and X96 Box (111, 64), and `0x7D` reaches every command index in every group as
+> a closed range.
+>
+> This is the general shape of the mistake worth remembering: a count that matches
+> is not a count that closes. Three names and a high byte of 0..3 agreed with each
+> other and were both consistent with the wrong answer.
 
 ### The key count is NOT independently confirmed
 
@@ -1604,6 +1827,11 @@ See [`tools/`](../tools/). All are plain `python <script>.py`.
 | `compare_keytables.py` | compare tables across configs |
 | `keymatrix.py` | test the keyboard-matrix hypothesis, render the grid |
 | `diff_samples.py` | diff sample configs against each other |
+| `verify_525_semantics.py` | re-assert every claim in 4k and 4l against the sample; `--firmware` pins the handlers too |
+| `render_525_screens.py` | draw all 135 menu pages and the five font sheets as BMPs |
+| `analyze_525_ir.py` | expand the class 5 IR dictionaries, decode NEC, correlate with mode bindings |
+| `edit_525_label.py` | bounded proof: change one same-length screen label and check nothing else moved |
+| `relocate_525_label.py` | bounded proof: append a *longer* label and retarget every user of the old one |
 
 ### Live communication with the remote (read-only)
 

@@ -189,13 +189,25 @@ length. Running the decompiler settles it:
   headers add another 249, for 952 recomputed pointers in total.
 - **Decoded structures:** section 0 is the name table; the four key tables sit in
   the region below 0xF35B.
-- **Still entirely opaque:** sections **1, 2, 3, 4, 8, 16, 17**, plus the bulk of
+- **Still entirely opaque:** sections **1, 2, 3, 4, 16**, plus the bulk of
   6, 9 and 14 that follows their pointer prefixes. In the record array the
   headers, trailers and block headers are decoded; what remains is the payload
   inside each block.
 - **Section 17 is solved**: four 96x64 monochrome LCD bitmaps, which is what all
   1072 block headers point at. So a block header selects a screen layout. What
   the rest of a block says is still open.
+- **Sections 7, 8 and 11 came off this list.** 8 is a leading action list plus
+  every mode page's binding list, closing to the byte; 11 is the screen-program
+  table; 7 holds the five font sets. [FORMAT.md §4k and §4l](FORMAT.md).
+
+> The counts above are what the decompiler reported when this was written and are
+> left as a record of that pass. Reading the screen programs took the 525 from 952
+> to **3,171** recomputed pointers and from 27% to **41.5%** decoded, and it also
+> **removed 124** references the old recogniser had invented: it matched
+> `16 <u24>` inside an opcode 4 whose y coordinate happened to be `0x16`. Which is
+> the paragraph below arriving from the other direction. A recogniser that scans
+> for a shape invents things as readily as it misses them, and the round trip
+> cannot tell: a wrong claim about bytes that come back unchanged still passes.
 
 Pointers are now symbolic - `region + delta` - so the compiler relinks every one
 it knows about when something changes length. Digging into the record bodies
@@ -267,3 +279,6 @@ Kept here so nobody spends an evening on them twice.
 | Does the remote need a libusb/Zadig driver swap? | Not for the 525 - it runs on the native HID stack. That applies to the 900/1000 |
 | Does EEPROM/RAM/REGISTER hold anything readable? | No, only `kind=01` STATE returns data, and only in word mode |
 | Is there a published solution to this format already? | No, as of 2026-08 |
+| Where is the text the screen shows? | In the config, as runs of font-local glyph numbers drawn by the screen programs. There is nothing to search for and searching was the wrong idea - [§4l](FORMAT.md) |
+| Is the XML `CHECKSUM` the only checksum? | No. There is a second `u16` before the end marker and it is the one the remote checks - [§4m](FORMAT.md) |
+| How many devices does the 525 sample have? | Four, not the three its state-variable names imply. The fourth only exists as pixels - [§5i](FORMAT.md) |

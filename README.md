@@ -4,16 +4,27 @@ Reverse engineering the **Logitech Harmony configuration binary**, with the goal
 of decompiling a config into a readable text format and compiling it back -
 byte for byte.
 
-Logitech's servers for these remotes are gone. A config that is already on a
-remote can still be read off it, but nobody can generate a new one. This
+The service that configured these remotes is gone: `members.harmonyremote.com`
+now serves a discontinuation notice, and the models Logitech named in it are the
+older EasyZapper platform this repository is about. A config that is already on
+such a remote can still be read off it, but nobody can generate a new one. This
 repository is an attempt to change that.
+
+That sentence used to say "Logitech's servers are gone", flatly, and it was too
+broad. [@dannybloe](https://github.com/dannybloe) measured it on 7 August 2026:
+the later **MyHarmony** service does still answer, and it still compiles configs
+for the remotes it serves. It does not serve these.
 
 > **Status: the round trip works.** A 525 config decompiles to JSON and compiles
 > back byte-identical, and a button can be remapped through it - changing exactly
-> one byte of the blob, with the container's checksum recomputed. About 27% of the
-> file is decoded so far and the rest passes through as opaque blobs, but that
-> quarter includes **2,242 pointers**, which the compiler recomputes rather than
+> one byte of the blob, with both of the file's checksums recomputed. About 42% of
+> the file is decoded so far and the rest passes through as opaque blobs, but that
+> part includes **3,171 pointers**, which the compiler recomputes rather than
 > copies.
+>
+> **The menus render.** All 135 screens of the 525 sample draw as bitmaps offline,
+> and a device label on them can be edited and checked without going near a
+> remote.
 >
 > **Length-changing edits work too**, as of the pointers becoming symbolic:
 > lengthen a name and every section after it shifts, every pointer relinks, and
@@ -28,6 +39,8 @@ python roundtrip.py --resize              # lengthen a name, check it relinks
 python decompile.py --summary             # what is decoded and what is not
 python decompile.py config.EZHex out.json
 python compile.py out.json new.EZHex --against config.EZHex
+python verify_525_semantics.py                # re-check the 525 evidence
+python render_525_screens.py --out rendered   # draw all 135 menus as BMPs
 ```
 
 ## Scope
@@ -64,6 +77,11 @@ this list survives a decompile/recompile cycle byte-for-byte, which is a stronge
 claim than "it looks right":
 
 - the `.EZHex` container: XML header + binary blob, size and XOR checksum
+- **a second checksum, the one the remote itself checks**: the `u16` immediately
+  before the end marker is a `0x4321`-seeded XOR of the blob's little-endian
+  words. Until this was found it passed through as opaque data, so every *edited*
+  config this project produced carried a stale one and a remote would have
+  refused it. A byte-identical round trip never showed it, and could not have
 - the blob header: `AHCM` magic, a section pointer table of 18 sections and a
   trailing null. The same container carries arch 8, 12 and 14 under a different
   four letter cookie, and the table lines up by slot index
@@ -80,6 +98,20 @@ claim than "it looks right":
 - record trailers, holding a pointer into section 8, the suspected bytecode
 - **section 17 is four 96x64 LCD bitmaps**, which is what every block header
   points at - `tools/show_bitmaps.py` draws them
+- **where the menu text lives.** It is not in the file as text and never was.
+  Section 11 and every mode page hold a screen program; opcode 16 picks one of
+  the five font sets in section 7, and opcodes 4 and 5 draw runs of *font-local
+  glyph numbers*. `tools/render_525_screens.py` walks all 135 pages and draws
+  them, which is how the sample's four devices got their names back
+- **the 525's screen framing, from its firmware**: opcode 22 selects one of eight
+  8-pixel rows, opcode 3 lays down that row's 96x8 strip, text is drawn over it,
+  and opcode 23 transfers the finished row to the panel. Every one of the 135
+  pages is exactly eight of those blocks
+- **section 8 closes to the byte**: one leading action list of 34 bytes, then the
+  packed run of all 135 mode-page binding lists, 1,052 bytes, and nothing else
+- three more action opcodes: `0x75` sounds a tone through a counted GPIO toggle,
+  `0x80 | n` writes state variable `n`, and `0x7C` carries a per-group quantity
+  rather than the delay it was once guessed to be
 - **arch 8 works too**: all four 720/785/88x samples round-trip byte-identical,
   and survive a length change. Its markers are not what mirroring arch 9 would
   suggest, and its section table has a null in the middle
@@ -100,8 +132,8 @@ Full detail, including the negative results worth not repeating, is in
 
 Pointers decompile as `region + delta` rather than raw offsets, so the compiler
 recomputes them against wherever things end up. That is what makes a length
-change survivable: `roundtrip.py --resize` lengthens a name, and all 820 symbolic
-pointers come back referring to the same things they referred to before.
+change survivable: `roundtrip.py --resize` lengthens a name, and all 3,171
+symbolic pointers come back referring to the same things they referred to before.
 
 **This proves internal consistency, not that a remote would accept the result.**
 A pointer hidden inside a region that is still opaque is invisible to this code
@@ -187,6 +219,22 @@ write experiments on a remote you care about.**
 The format was designed by [@glenharris](https://github.com/glenharris), who has
 been generous with guidance in the concordance thread. Neither he nor anyone else
 credited here is responsible for anything claimed in this repository.
+
+[@dannybloe](https://github.com/dannybloe)'s
+**[harmony-explorations](https://github.com/dannybloe/harmony-explorations)** is a
+parallel effort, MIT licensed, and further along as a general codec: it covers
+architectures 8, 9, 12 and 14 with one parser. No code has moved between the two
+projects in either direction, and the licence boundary is the reason. Two findings
+here are his and are used with attribution rather than rediscovered:
+
+- **how a glyph is packed on arch 9** - two bits to a pixel, with run and literal
+  commands - which he published on 7 August 2026 and which the renderer in
+  `tools/render_525_screens.py` implements
+- **that the trailer `u16` is checked at all.** His parser is what showed that
+  this project's first edited configs were internally invalid; the seed and the
+  algorithm were then confirmed against the 525 firmware and all five samples here
+
+He also measured the server claim corrected at the top of this file.
 
 This work leans directly on
 **[concordance / libconcord](https://github.com/jaymzh/concordance)**

@@ -114,3 +114,57 @@ device with `GENERIC_READ` only, so Windows itself would reject a write.
 
 Please leave that in place - see [../CONTRIBUTING.md](../CONTRIBUTING.md) for the
 reasoning.
+
+# Semantic evidence checks
+
+`verify_525_semantics.py` pins the public Harmony 525 evidence for slot 8,
+state-variable writes, `0x7C` operand closure, the four rendered device modes
+against their infrared groups, and every reachable screen program. It can
+optionally verify the `0x75` tone handler and screen opcodes 22/23 against a
+local 32 KiB firmware image; firmware is never included in or copied into this
+repository.
+
+```sh
+python tools/verify_525_semantics.py
+python tools/verify_525_semantics.py --firmware path/to/mcu.bin
+```
+
+`render_525_screens.py` reconstructs all public 525 menu pages and font sheets
+as ordinary 24-bit BMP files without third-party packages:
+
+```sh
+python tools/render_525_screens.py --out rendered-525
+```
+
+`analyze_525_ir.py` expands the 525's class-5 symbol dictionaries, reports
+structural outliers and decodes valid NEC frames. Its default view correlates
+the X96 group with mode 111 without writing a config or contacting a remote:
+
+```sh
+python tools/analyze_525_ir.py
+```
+
+`edit_525_label.py` is a deliberately bounded offline authoring proof. It
+changes the public sample's one shared `X96 Box` glyph string to the same-length
+`X96 BOX`, rebuilds both the firmware trailer checksum and the EZHex checksum,
+checks that only the two expected glyph bytes and the two-byte trailer field can
+change, confirms that exactly five device-selection variants and six X96 pages
+render differently, and requires the edited output to round-trip byte for byte.
+It refuses to overwrite either its source or an existing output:
+
+```sh
+python tools/edit_525_label.py --out edited.EZHex --proof edited-proof.json
+```
+
+`relocate_525_label.py` is the bounded longer-string experiment. It appends
+`X96 Boxx` immediately before the firmware checksum, retargets all 24 existing
+opcode-4 users, converts the one inline opcode-5 draw into an opcode-4 draw plus
+an opcode-20 continuation, and proves that all 25 symbolic users reach the new
+string without moving an existing section or payload:
+
+```sh
+python tools/relocate_525_label.py --out relocated.EZHex --proof relocated-proof.json
+```
+
+Both scripts are arch-9/Harmony-525-specific. Screen opcode meanings are not
+assumed to carry over to architectures 8, 12 or 14.
