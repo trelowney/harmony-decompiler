@@ -132,7 +132,7 @@ const FirstGuess = {
   ],
   ActionLists: [
     {
-      Actions: [0x123456, 0x789101, ...more],
+      ReversedActions: [0x123456, 0x789012, ...more], // Note that these actions are stored in reversed order - actual order would be 0x789012 followed by 0x123456.
     },
     ...more,
   ],

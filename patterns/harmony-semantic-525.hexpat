@@ -142,13 +142,14 @@ struct BindingSubsystem {
     Ptr24<BindingList> pBindingLists[numBindingLists];
 };
 
-struct ActionList {
+// ???GMH.  Note that actions are stored in reversed order.  This allows the firmare to prepend actions to the beginning of the 'pending action' list.
+struct ActionReversedList {
      u8 numActions;
-     Action actions[numActions];  
+     Action reversedActions[numActions];  
 };
 struct ActionSubsystem {
     u16 numActionLists;
-    ActionList actionLists[numActionLists];
+    ActionReversedList reversedActionLists[numActionLists];
 };
 struct MenuItem {
     u24 unk1;

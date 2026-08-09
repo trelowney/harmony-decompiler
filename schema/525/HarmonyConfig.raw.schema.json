@@ -335,14 +335,14 @@
     "actionList": {
       "type": "object",
       "properties": {
-        "Actions": {
+        "ReversedActions": {
           "type": "array",
           "items": {
             "type": "integer"
           }
         }
       },
-      "required": ["Actions"],
+      "required": ["ReversedActions"],
       "additionalProperties": false
     }
   }
