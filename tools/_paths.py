@@ -12,11 +12,15 @@ SAMPLE_DIR = REPO / "samples" / "harmony525"
 SAMPLE_BLOB = SAMPLE_DIR / "config.bin"
 SAMPLE_EZHEX = SAMPLE_DIR / "config.EZHex"
 
-# Arch 8 samples (720/785/88x) are not redistributed here. Download
-# EZHex.Samples.zip from the concordance thread and unpack it into this
-# directory if you want the cross-architecture comparisons to run:
-#   https://github.com/user-attachments/files/22412763/EZHex.Samples.zip
+# Arch 8 samples (720/785/88x). Thirteen of them, mirrored with permission from
+# two contributors; samples/arch8/README.md says who and from where. Anything
+# that iterates this directory picks up new files on its own.
 ARCH8_DIR = REPO / "samples" / "arch8"
+
+# Protocols 10 (Harmony 890) and 14 (Harmony 650). Nothing here reads either, so
+# they are deliberately outside the round trip. They are kept as the evidence
+# for docs/FORMAT.md section 5j and for whoever takes them on next.
+UNREAD_DIRS = (REPO / "samples" / "harmony890", REPO / "samples" / "harmony650")
 
 END_TAG = b"</INFORMATION>"
 CONFIG_BASE = 0x20000

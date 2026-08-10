@@ -190,16 +190,32 @@ docs/FORMAT.md          everything known about the format, with evidence
 docs/OPEN-QUESTIONS.md  what is unknown, and what would answer it
 docs/BUTTON-LAYOUT.md   the buttons as Logitech documents them
 samples/harmony525/     a real arch 9 config, with checksums
-samples/arch8/          four 720/785/88x configs, mirrored from the thread
+samples/arch8/          thirteen 720/785/88x configs from two contributors
+samples/harmony890/     two protocol 10 configs, which nothing here reads yet
+samples/harmony650/     one protocol 14 config, same
 patterns/               ImHex patterns, one hand written and the rest generated
+schema/                 @glenharris's sketch of what a decompiled config should
+                        look like, from the person who designed the format
 tools/                  Python scripts used for the analysis (read-only)
 ```
 
 ## Samples wanted
 
 The single most useful thing you can contribute is **a config dumped off a real
-remote**, especially one that is not a 525. Four arch 8 samples (720/785/88x) are
-already public in the thread linked above; every other model is unrepresented.
+remote**, especially one from a model nobody has posted yet. What is here now:
+one 525, thirteen 720/785/88x, two 890s and one 650, from four people.
+
+Two of those arrived in August 2026 and immediately paid for themselves. The
+890 and the 650 use protocols nothing here supports, and simply having them
+showed that both are the familiar container with a different base address, which
+is a much smaller gap than "unsupported" sounded like. See
+[FORMAT.md §5j](docs/FORMAT.md).
+
+Better still is a config **plus a note of what the remote actually shows** -
+devices, activities, the labels on the custom buttons, and which button
+positions are blank. [@kkong42](https://github.com/kkong42) did that for an 885
+in [issue #20](https://github.com/trelowney/harmony-decompiler/issues/20), and it
+is the only thing in this repository against which an answer can be checked.
 
 ```sh
 concordance --dump-config my-remote.EZHex
