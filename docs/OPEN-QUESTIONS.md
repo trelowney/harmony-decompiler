@@ -47,7 +47,7 @@ What would answer it:
   where somebody can say what the remote is supposed to be doing
 
 The assignment appears to be **shared across models**: arch 8 (720/785/88x) uses
-the same code groups in the same order, 34 codes overlapping with the 525
+the same code groups in the same order, 41 of the 525's 51 codes overlapping
 ([§5f](FORMAT.md#5f-key-codes-are-shared-across-architectures)). So solving it for
 *one* remote in the family carries most of the way to the others - and arch 8
 layouts are far better documented publicly. A 720 or an 880 is probably an easier
