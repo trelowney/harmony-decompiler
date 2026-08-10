@@ -1955,6 +1955,52 @@ permuted differently in each pair of rows:
 link is a map from matrix position to physical button. See
 [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md).
 
+## 5j. `config_base` is not always `0x20000` - two more protocols
+
+Samples uploaded to this repository's issues on 3 and 10 August 2026 by
+[@psolyca](https://github.com/psolyca) and
+[@kkong42](https://github.com/kkong42) carry two protocols nothing here had
+seen. Both were rejected outright by the decompiler, and in both cases for the
+same shallow reason.
+
+| protocol | remote | magic | end marker | `config_base` |
+|---:|---|---|---|---|
+| 8 | 720, 785, 88x | `TPTP` | `DKDK` | `0x20000` |
+| 9 | 525 | `AHCM` | `MCHA` | `0x20000` |
+| 10 | 890 | `TPTP` | `DKDK` | **`0x30000`** |
+| 14 | 650 | `GSPM` | `PTYY` | **`0x30000`** |
+
+The base is stated nowhere in the file. What gives it away is that the `u32` at
+offset 4 is the address of the end marker: subtract where the marker actually
+sits and the base falls out. On protocol 10 and 14 the answer is `0x30000`, and
+with that one change both files stop looking exotic. The 890 in particular has
+arch 8's magic *and* arch 8's end marker, and was being rejected only because
+the marker is not at the end of the file: 702 bytes of zero padding follow it.
+
+The trailer checksum from 4m then verifies on both, with the same seed and the
+same algorithm found in 525 firmware:
+
+| file | stored | recomputed |
+|---|---|---|
+| 650, protocol 14 | `0x4045` | `0x4045` |
+| 890, protocol 10 | `0x5AC7` | `0x5AC7` |
+
+Which is the strongest evidence so far that 4m is a property of the format and
+not of one remote. It has now been checked on protocols 8, 9, 10 and 14, across
+twelve configs from four different owners, having been read out of exactly one
+firmware image.
+
+**None of this is support for those protocols.** The decompiler still refuses
+them, and the interesting question of what is inside is untouched. It is only
+the envelope. But it moves both from "unknown architecture" to "known container,
+different base", which is a much shorter distance than it looked.
+
+> One of the two 890 dumps does not verify: its header says the config ends at
+> `0x90BBD`, the marker is at `0x90F1D`, and the checksum does not reproduce. Its
+> sibling is exactly self-consistent under the same reading. Either this reading
+> is incomplete in a way that spares one file, or that dump is damaged. A second
+> read of the same remote would say which, and has been asked for.
+
 ## 6. Prior art
 
 The key thread is
