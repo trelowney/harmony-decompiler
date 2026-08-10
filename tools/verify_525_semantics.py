@@ -150,15 +150,15 @@ def verify_action_closures(blob: bytes, sections: list[int | None]) -> dict:
     assert writes and all(index < state_count for index, _ in writes)
     assert all(operand < 0x100 for index, operand in writes if index < narrow)
 
-    quantities = [(operand >> 8, operand & 0xFF) for opcode, operand in actions
-                  if opcode == 0x7C]
+    queue_delays = [(operand >> 8, operand & 0xFF) for opcode, operand in actions
+                    if opcode == 0x7C]
     ir = sections[5]
     assert ir is not None
     ir_groups = blob[ir]
     group_addresses = [u24(blob, ir + 1 + 3 * k) - CONFIG_BASE
                        for k in range(ir_groups)]
     group_sizes = [u16(blob, address + 1) for address in group_addresses]
-    assert quantities and all(group < ir_groups for group, _ in quantities)
+    assert queue_delays and all(group < ir_groups for group, _ in queue_delays)
 
     sends = [(operand >> 8, operand & 0xFF) for opcode, operand in actions
              if opcode == 0x7D]
@@ -177,9 +177,9 @@ def verify_action_closures(blob: bytes, sections: list[int | None]) -> dict:
         "ir_group_records": group_sizes,
         "ir_sends": len(sends),
         "ir_send_groups": dict(sorted(collections.Counter(g for g, _ in sends).items())),
-        "quantity_uses": len(quantities),
-        "quantity_groups": dict(sorted(collections.Counter(g for g, _ in quantities).items())),
-        "quantity_values": dict(sorted(collections.Counter(v for _, v in quantities).items())),
+        "queue_delay_uses": len(queue_delays),
+        "queue_delay_groups": dict(sorted(collections.Counter(g for g, _ in queue_delays).items())),
+        "queue_delay_values": dict(sorted(collections.Counter(v for _, v in queue_delays).items())),
     }
 
 

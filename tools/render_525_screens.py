@@ -175,7 +175,15 @@ def render_page(blob: bytes, font_sets: list[Font], root: int):
     for item in semantics.screen_program_path(blob, root):
         opcode, operands = item["opcode"], item["operands"]
         if opcode == 3:
-            sx, sy, dx, dy, width, height = operands[:6]
+            # Destination first, then source. The 1,080 background strips have
+            # dx == sx and dy == sy, so they cannot tell the two orders apart;
+            # the 34 draws that copy from the all-ink bitmap can. Every one of
+            # them is (0, 12, 0, 0, 96, 1) and sits in the program between the
+            # row-1 select and the text at y=13, so the 12 is where the line
+            # lands and the 0 is the row it is copied from. Reading it the other
+            # way puts a full-width rule at y=0, in a band that has already been
+            # transferred. See docs/FORMAT.md section 4f.
+            dx, dy, sx, sy, width, height = operands[:6]
             address = u24(operands, 6)
             source = image_cache.setdefault(address, picture(blob, address))
             draw_picture(canvas, source, sx, sy, dx, dy, width, height)

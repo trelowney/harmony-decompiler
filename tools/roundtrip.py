@@ -54,10 +54,10 @@ def check_resize(path: Path) -> bool:
     same pointers - the same *symbolic* pointers, meaning each still refers to
     the thing it referred to before - the relinking worked.
 
-    What it does not prove is that a remote would accept the result. Pointers
-    hidden inside regions that are still opaque are invisible to this code and
-    would have been silently left behind. That is the risk, and it is the reason
-    the remaining sections are worth decoding.
+    On arch 9 it additionally renders every mode page before and after. This
+    caught pointer families that a graph-only comparison could not see while
+    they were still opaque. It still does not prove hardware acceptance; an
+    unread opaque pointer can remain outside every exercised root.
     """
     raw = path.read_bytes()
     try:
@@ -93,6 +93,54 @@ def check_resize(path: Path) -> bool:
     if ptrs(doc) != ptrs(again):
         problems.append("pointers do not refer to the same regions afterwards")
 
+    render_note = ""
+    if before[:4] == b"AHCM":
+        import analyze_525_ir as ir
+        import render_525_screens as renderer
+        import verify_525_semantics as semantics
+
+        def rendered(blob):
+            sections = semantics.section_offsets(blob)
+            fonts = renderer.fonts(blob, sections)
+            return {
+                (entry["mode"], entry["page"]): renderer.render_page(
+                    blob, fonts, entry["root"])[0]
+                for entry in renderer.page_roots(blob, sections)
+            }
+
+        before_screens = rendered(before)
+        after_screens = rendered(after)
+        if before_screens != after_screens:
+            problems.append("rendered arch-9 screens changed after a relocation-only resize")
+        else:
+            render_note = f", {len(after_screens)} screens pixel-identical"
+
+        def expanded_ir(blob):
+            sections = semantics.section_offsets(blob)
+            groups = ir.ir_groups(blob, sections)
+            result = []
+            for group in groups:
+                records = []
+                for address in group:
+                    start = address - ir.BASE - 7
+                    pointer_groups = blob[start + 11]
+                    pointers = [ir.u24(blob, start + 12 + 3 * slot)
+                                for slot in range(3 * pointer_groups)]
+                    streams = tuple(
+                        None if pointer == 0 else tuple(ir.body(blob, pointer)["words"])
+                        for pointer in pointers
+                    )
+                    records.append((ir.u24(blob, start + 1), streams))
+                result.append(records)
+            return result
+
+        before_ir = expanded_ir(before)
+        after_ir = expanded_ir(after)
+        if before_ir != after_ir:
+            problems.append("expanded arch-9 class-5 IR changed after relocation-only resize")
+        else:
+            render_note += f", {sum(map(len, after_ir))} IR records exact"
+
     # A bare blob has no XML header, so there is nothing to check the size and
     # checksum against. That is not a failure, it just means this file cannot
     # exercise the container half of the test.
@@ -114,7 +162,7 @@ def check_resize(path: Path) -> bool:
 
     n = sum(len(r.get("targets", [])) for r in doc["blob"]["regions"])
     print(f"  {path.name:<28} OK    +{delta} B absorbed, {n} pointers relinked, "
-          f"structure unchanged{note}")
+          f"structure unchanged{render_note}{note}")
     return True
 
 

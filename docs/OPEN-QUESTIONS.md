@@ -39,7 +39,12 @@ What would answer it:
 - **buzzing out a matrix with a multimeter** - definitive, and only needs doing
   once for one model
 - **a config whose key assignment is already known** - e.g. one built with a known,
-  deliberately unusual button layout, so codes can be matched against intent
+  deliberately unusual button layout, so codes can be matched against intent.
+  [@kkong42](https://github.com/kkong42) supplied close to this on 10 August 2026
+  for a Harmony 885 in daily use: the config, plus a written list of every device,
+  every activity and every custom button label including the blank positions. It
+  is arch 8 rather than arch 9, but it is the first sample in this repository
+  where somebody can say what the remote is supposed to be doing
 
 The assignment appears to be **shared across models**: arch 8 (720/785/88x) uses
 the same code groups in the same order, 34 codes overlapping with the 525
@@ -62,8 +67,20 @@ built from. A key binding runs a list. See
 [FORMAT.md §4i](FORMAT.md#4i-section-10-indexes-action-lists--solved).
 
 So the question moves down a level. There are **1,043 instructions in the 525
-config and 3,311 in an arch 8 sample**, in a shared vocabulary, and nothing is
-known about what any opcode does:
+config and 3,311 in an arch 8 sample**, in a shared vocabulary. Six of them are
+now identified, four of those from the firmware and one from the person who
+designed it:
+
+| opcode | meaning | how |
+|---|---|---|
+| `0x7D` | send an IR command from a group | corpus closure against the IR groups |
+| `0x7C` | `QueueDelay`, per device | [@glenharris](https://github.com/glenharris), [discussion #14](https://github.com/trelowney/harmony-decompiler/discussions/14) |
+| `0x75` | sound a tone | handler `0x01DC4`, a counted GPIO toggle |
+| `0x80 \| n` | write state variable `n` | dispatcher `0x01C9A`, closed against the name table |
+| `0x7E` | select a mode | corpus, and the fifth-device experiment |
+| `0x7F` | run another list | references another list every time, both architectures |
+
+What the rest do is still open:
 
 | opcode | arch 9 | arch 8 |
 |---|---|---|
@@ -104,74 +121,102 @@ are likely to pay:
 Doing this for even two or three opcodes would turn the decompiler's output from
 a structure into something a person can read.
 
-## 1b. What is inside a block
+> **One caution about how to count them.** An earlier revision of this file
+> talked about 59 second-level sub-opcodes, from 24 comparisons on the low byte
+> and 35 on the high byte in the dispatcher.
+> [@glenharris](https://github.com/glenharris) points out that this is not how
+> the machine is built: an instruction is 24 bits wide, and its fixed pattern
+> can run through bytes 1 and 2, leaving anywhere from 0 to 16 bits of data. An
+> instruction with two data bits has a 22-bit fixed pattern. So those 59
+> comparisons are successive tests of one pattern, not 59 operations, and the
+> right thing to recover from the firmware is a set of masks and data widths.
 
-The largest remaining gap. Blocks are decoded down to their headers - twelve
-bytes, one per matrix row, each selecting an LCD bitmap - and terminated by
-`0x17`. What sits in between is not understood. Roughly 9,400 bytes across 1,072
-blocks, though 364 of those are empty.
+## 1b. What is inside a block - ANSWERED, and the answer retires the question
 
-What is known about the payloads:
+This section used to describe the largest remaining gap: roughly 9,400 bytes of
+payload inside 1,072 blocks, made of "45 distinct symbol values, almost all
+below `0x30`", in runs terminated by `00`, with pairs of runs differing in
+exactly one symbol.
 
-- 45 distinct symbol values, almost all below 0x30
-- strings of them are terminated by `00`
-- a recurring shape `05 <n> 16 0F ...` where only the second position varies
-- pairs of strings differing in exactly one symbol and identical otherwise
+There are no blocks. Those bytes are screen programs, and those runs are the
+menu labels, written as glyph numbers that are local to whichever font opcode 16
+last selected. Counted over the 183 glyph strings the current decompiler
+recovers: 67 distinct codes, 47 of them below `0x30`, the most common taking
+9.0% of all glyphs. Which is the same population the old note was describing.
 
-**A tested hypothesis that did not hold: they are not obviously text.** If these
-were names in a substitution alphabet the symbol frequencies should look like a
-natural language, and they do not - the most common symbol takes 8.6% against the
-12.7% English gives to `e`, and the distribution is much flatter than prose. 45
-symbols is about right for uppercase plus digits, so it is not ruled out, but the
-frequency evidence does not support it and nothing here should be written up as if
-it did.
+The pairs differing in one symbol were labels differing by one letter.
 
-The pairs differing in one symbol are the most promising thread: whatever varies
-between two otherwise identical blocks is likely to be the thing a block is
-*about*. Two configs from the same remote differing by one deliberate change would
-settle it quickly, which is another reason samples matter.
+**The negative result in this section was also wrong, and instructively so.** It
+said the payloads are "not obviously text", because a frequency count did not
+look like English: the most common symbol took 8.6% where English gives `e`
+12.7%. The bytes were text the whole time. The test could not work, for two
+reasons that were both knowable at the time. The codes are indices into a font,
+so the same letter has a different number in a different font set and the counts
+are smeared across five alphabets. And the corpus is menu labels for one
+person's four devices, which is not prose and has no reason to follow prose
+statistics. A negative result is only as good as the assumption it tests, and
+this one silently assumed a single global alphabet.
+
+See [FORMAT.md §4l](FORMAT.md).
 
 ## 1c. What is in an arch 8 config
 
-Arch 8 decompiles and round-trips, but only about 2% of it is understood, and
-the recognisers that fire are the ones shared with arch 9. It has no block
-headers, and no bitmaps were found. Where its screen images live, and what fills
-the other 98%, is open.
+Arch 8 decompiles and round-trips, but under 5% of it is understood, and the
+recognisers that fire are the ones shared with arch 9. No bitmaps were found.
+Where its screen images live, and what fills the other 95%, is open here.
 
-The four samples are in `samples/arch8/` and `roundtrip.py --all` covers them, so
-this is a self-checking place to start: add a recogniser, see whether the round
-trip still passes.
+Two things to do before starting. First, read
+[@dannybloe](https://github.com/dannybloe)'s
+[harmony-explorations](https://github.com/dannybloe/harmony-explorations), which
+covers arch 8 with the same parser as 9, 12 and 14; there is little point
+rediscovering it. Second, there are now many more samples than the four in
+`samples/arch8/`: [@kkong42](https://github.com/kkong42) posted eleven 880, 885
+and 890 configs in this repository's issues on 10 August 2026, and for one
+885 also wrote down what the remote actually shows, device by device and button
+by button. That last one is ground truth of a kind this project has never had.
 
-## 2. The bytecode instruction set (section 8)
+`roundtrip.py --all` covers whatever is in `samples/`, so this is a
+self-checking place to start: add a recogniser, see whether the round trip still
+passes.
 
-Section 8 fits the shape `<u16 operand> <u8 opcode>`, and every one of the 114
-records carries a pointer into it, which suggests each record references its own
-bytecode. The original developer described the remote as *"a Von-Neumann style
-computing device with a 16 bit instruction"*, which matches independently.
+## 2. The bytecode instruction set (section 8) - ANSWERED as a structure
 
-Unknown: what the opcodes mean. Observed so far are `0x7E, 0x7F, 0x9E, 0x9F, 0xA6,
-0xA7`. Currently a hypothesis, not a verified finding -
-[FORMAT.md §4c](FORMAT.md#4c-section-8-looks-like-bytecode--hypothesis).
+Section 8 closes to the byte on arch 9: a leading action list of 34 bytes, 11
+instructions, then the packed run of all 135 mode-page binding lists, 1,052
+bytes, and nothing else. It is not an array of per-record programs, which is
+what an earlier revision of this file guessed from the pointer in what it called
+a record trailer. That pointer belonged to the page record behind it.
 
-Note this does **not** block the round-trip work: section 8 can travel as an
-opaque blob for as long as it needs to.
+What the instructions *mean* is question 1a above, and this section no longer
+duplicates it. See [FORMAT.md §4k](FORMAT.md).
 
 ---
 
-## 3. How IR signals are encoded in flash
+## 3. How IR signals are encoded in flash - ANSWERED for arch 9
 
-The 114-record array in the low region is almost certainly the IR codes - right
-size, right count, and each record carries a bytecode pointer. The record header
-and trailer are decoded
-([§4d](FORMAT.md#4d-the-114-record-array--header-solved)); the payload is not.
+Base slot 5 holds one group per device, each group a list of record addresses.
+An arch-9 record is class 5: a carrier period and on-time, then up to sixteen
+groups of three pointers into bodies, each body an index list into a symbol
+table, each symbol a counted run of duration words.
 
-What is known is only the *wire* format used to send IR data to the (now dead)
-Logitech server, from `libconcord/web.cpp:252`: `F<carrier>P<mark>S<space>...`
-in microseconds. Whether flash uses anything resembling that is unknown.
+**That layout is [@dannybloe](https://github.com/dannybloe)'s**, from
+[harmony-explorations](https://github.com/dannybloe/harmony-explorations), where
+it was also checked against firmware. Reproduced and used here with attribution;
+see [FORMAT.md §4n](FORMAT.md). On the 525 sample this expands all 200 records,
+and the user's learned X96 group reduces to six distinct NEC frames on address
+`01 FE`.
 
-Anyone who has matched a known IR command - a specific button on a specific
-device, ideally captured with a receiver - against bytes in a config would move
-this a long way.
+What is still open:
+
+- **the other classes.** Class 5 is what this one arch-9 config happens to use
+  throughout. Nothing here says what classes 1 to 4 are, and arch 8, 12 and 14
+  are untouched.
+- **what the three pointer slots per group mean** for a signal captured from a
+  real remote. Press, repeat and release is the obvious guess and it is a guess.
+  NULL slots are common and significant.
+- **whether the dictionary is required.** `tools/class5_ir_encoder.py` packs
+  literally, one symbol per stream, which is not what Logitech's compiler
+  produces. Whether the firmware minds is untested.
 
 ---
 
@@ -191,35 +236,58 @@ length. Running the decompiler settles it:
   the region below 0xF35B.
 - **Still entirely opaque:** sections **1, 2, 3, 4, 16**, plus the bulk of
   6, 9 and 14 that follows their pointer prefixes. In the record array the
-  headers, trailers and block headers are decoded; what remains is the payload
-  inside each block.
-- **Section 17 is solved**: four 96x64 monochrome LCD bitmaps, which is what all
-  1072 block headers point at. So a block header selects a screen layout. What
-  the rest of a block says is still open.
-- **Sections 7, 8 and 11 came off this list.** 8 is a leading action list plus
-  every mode page's binding list, closing to the byte; 11 is the screen-program
-  table; 7 holds the five font sets. [FORMAT.md §4k and §4l](FORMAT.md).
+  headers are decoded and most of what follows them turns out to be screen
+  programs; what is left over is smaller than it was and no longer has a name.
+- **Section 17 is solved**: four 96x64 monochrome LCD bitmaps. Rooted screen
+  control flow contains 1,114 opcode-3 picture draws; 1,080 immediately follow
+  an opcode 22 page selection and 34 do not, and those 34 are all the same
+  one-pixel rule under a menu heading.
+- **Sections 5, 7, 8 and 11 came off this list.** 5 is the infrared groups, down
+  to every pointer inside every record, on
+  [@dannybloe](https://github.com/dannybloe)'s published class-5 layout; 8 is a
+  leading action list plus every mode page's binding list, closing to the byte;
+  11 is the screen-program table; 7 holds the five font sets.
+  [FORMAT.md §4k, §4l and §4n](FORMAT.md).
 
 > The counts above are what the decompiler reported when this was written and are
-> left as a record of that pass. Reading the screen programs took the 525 from 952
-> to **3,171** recomputed pointers and from 27% to **41.5%** decoded, and it also
-> **removed 124** references the old recogniser had invented: it matched
-> `16 <u24>` inside an opcode 4 whose y coordinate happened to be `0x16`. Which is
-> the paragraph below arriving from the other direction. A recogniser that scans
-> for a shape invents things as readily as it misses them, and the round trip
-> cannot tell: a wrong claim about bytes that come back unchanged still passes.
+> left as a record of that pass. Reading the screen programs first took the 525
+> from 952 to 3,171 pointers. The relocation/render audit later corrected the
+> model to **3,609** recomputed pointers and **36.8%** structurally decoded. A
+> later independent-reader failure exposed one more opaque pointer graph: the
+> class-5 IR records. Typing all four IR groups, 200 record headers, 380 bodies,
+> five symbol tables and 43 symbol blocks raises the current resize closure to
+> **5,015** recomputed pointers and **76.46%** structurally decoded.
+>
+> The percentage dipped in the middle of that because 1,080 twelve-byte runs
+> formerly claimed as block headers are really `opcode 22 + opcode 3` pairs; the
+> stronger reading claims the ten-byte picture draw and leaves the two-byte page
+> selection to the screen walker. No known bytes or pointers were discarded. The
+> same audit had already **removed 124** references an earlier recogniser
+> invented, by matching `16 <u24>` inside an opcode 4 whose y coordinate happened
+> to be `0x16`. A recogniser that scans for a shape invents things as readily as
+> it misses them, and the round trip cannot tell: a wrong claim about bytes that
+> come back unchanged still passes.
 
 Pointers are now symbolic - `region + delta` - so the compiler relinks every one
-it knows about when something changes length. Digging into the record bodies
-turned up 124 more that had been sitting in hex the decompiler was copying
-verbatim, which is a fair warning about how many might still be hidden. The same-size restriction is
+it knows about when something changes length. The same-size restriction is
 therefore lifted for *known* pointers. It is emphatically not lifted for unknown
 ones: anything pointer-shaped inside a still-opaque region gets left behind
-silently. That is now the main risk in the whole approach.
+silently. That is the main risk in the whole approach, and it is not theoretical.
+It has now happened twice:
+
+| what was left behind | what it cost | who found it |
+|---|---|---|
+| the trailer `u16` checksum | every edited config the remote would have refused | [@dannybloe](https://github.com/dannybloe)'s parser |
+| body, table and symbol pointers inside the IR records | all 200 infrared commands ruined by any length change | [@dannybloe](https://github.com/dannybloe)'s class-5 reader |
+
+Both times every test in this repository passed. Both times an outside reader of
+the same format found it in one attempt. That is worth more than the two fixes:
+it says that a round trip against a file's own former self is not an oracle, and
+the only cheap substitute is somebody else's parser.
 
 So the remaining question is narrower and more concrete than it was: **do sections
-1, 2, 3, 4, 8 or 17 contain pointers in some shape the recogniser does not
-match?** Section 13 did, and was found by relaxing the requirement that addresses
+1, 2, 3, 4 or 16 contain pointers in some shape the recogniser does not match?**
+Section 13 did, and was found by relaxing the requirement that addresses
 ascend - its last entry jumps backwards.
 
 There is now a specific reason to think the answer is yes. The original developer,
@@ -278,7 +346,12 @@ Kept here so nobody spends an evening on them twice.
 | Are pointers 32-bit? | No, 24-bit little-endian |
 | Does the remote need a libusb/Zadig driver swap? | Not for the 525 - it runs on the native HID stack. That applies to the 900/1000 |
 | Does EEPROM/RAM/REGISTER hold anything readable? | No, only `kind=01` STATE returns data, and only in word mode |
-| Is there a published solution to this format already? | No, as of 2026-08 |
+| Is there a published solution to this format already? | Yes, and it is further along than this one. [@dannybloe](https://github.com/dannybloe)'s [harmony-explorations](https://github.com/dannybloe/harmony-explorations) reads architectures 8, 9, 12 and 14 with one parser, MIT licensed. This row said "No, as of 2026-08" and was out of date within days |
 | Where is the text the screen shows? | In the config, as runs of font-local glyph numbers drawn by the screen programs. There is nothing to search for and searching was the wrong idea - [§4l](FORMAT.md) |
 | Is the XML `CHECKSUM` the only checksum? | No. There is a second `u16` before the end marker and it is the one the remote checks - [§4m](FORMAT.md) |
 | How many devices does the 525 sample have? | Four, not the three its state-variable names imply. The fourth only exists as pixels - [§5i](FORMAT.md) |
+| Are record bodies blocks, one per keyboard-matrix row? | No. There are no blocks. Those bytes are screen programs and the payload inside them is menu text - [§4f](FORMAT.md) and question 1b above |
+| Does each record end with a trailer pointing at its own bytecode? | No. That was the next page record, read from the wrong offset - [§4g](FORMAT.md) |
+| Does `0x7C` carry a quantity rather than a delay? | No. It is `QueueDelay`, per device, from [@glenharris](https://github.com/glenharris) who designed it. The measurements were right and the inference was wrong - [§4k](FORMAT.md) |
+| Are there 59 second-level sub-opcodes? | Probably not. An instruction is 24 bits with a fixed pattern that can run through all three bytes, so those comparisons are one pattern being tested, not 59 operations. [@glenharris](https://github.com/glenharris), question 1a above |
+| How is infrared stored? | Class 5: carrier, then bodies indexing a symbol table of duration runs. Layout by [@dannybloe](https://github.com/dannybloe) - [§4n](FORMAT.md) |

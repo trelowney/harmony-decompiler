@@ -197,7 +197,16 @@ a valid 24-bit address" looks convincing but is *partly circular* - it follows
 mostly from `0x02` being such a common byte. The real evidence is the monotonic
 table above, not that percentage.
 
-## 4c. Section 8 looks like bytecode - HYPOTHESIS
+## 4c. Section 8 looks like bytecode - CONFIRMED, and closed in 4k
+
+Kept as written because it is where the reading started; section 4k finishes it
+and section 8 now closes to the byte. One sentence below did not survive: the
+`0x9E, 0x9F, 0xA6, 0xA7` that "appear further on with the same shape" are not
+instructions at all. The leading action list ends after 34 bytes, and everything
+after it is the mode-page binding lists. All 216 entries in those lists carry a
+tag of `flags | code`, and across the whole config the codes take exactly four
+values: 30, 31, 38 and 39, which is where `0x9E`, `0x9F`, `0xA6` and `0xA7` come
+from. `tools/verify_525_semantics.py` prints the set.
 
 Interpreting it as pointers **fails** (addresses out of range). The shape
 `<u16 operand> <u8 opcode>` does fit:
@@ -243,50 +252,46 @@ u24[count]  addresses
 > it was done, because all three were in the 108. Decoding the field and letting
 > the round trip check all 114 did.
 
-Record trailer: `00 <u24 into section 8> <u24 back into itself>`.
-
-That pointer into section 8 is strong evidence that **each record references its
-own bytecode** - exactly as the original developer described.
-
-The headers account for 249 of the pointers the compiler recomputes. Record
-bodies are still opaque, apart from the key table in record #0.
-
-### Record bodies: eight blocks, one per matrix row
-
-Each body is eight blocks indexed 0-7. A block opens with
+The pointer lands on the entry at the **end** of a mode record. Its u24 back
+pointer names the tagged list where that mode starts, then a u16 page count and
+one page-record address per page follow. The shape of a mode entry and a page
+record is
+[@dannybloe](https://github.com/dannybloe)'s, from
+[harmony-explorations](https://github.com/dannybloe/harmony-explorations); it is
+reproduced here because the rooted screen walker independently lands on the same
+records:
 
 ```
-16 <i> 03 00 <i*8> 00 <i*8> 60 08 8B 2F 03
+mode entry:  00  u24 tagged-list-start  u16 pages  u24 page[pages]
+page record: u24 binding-list           u24 screen-program
 ```
 
-and closes with `17`. That `i*8` is `row << 3` from the key-code arithmetic in
-section 5g, so **there is one block per row of the keyboard matrix**. Blocks are
-often empty; where they are not, the payload sits between the header and the
-`17`.
+There are 114 modes and 135 page records. The material between a mode's tagged
+list and entry is primarily its page screen programs and page records, not an
+unknown keyboard-matrix payload.
 
-That is as far as the bodies are decoded. What the payload means is unknown, and
-it is the largest single gap left in the format.
+### Two more byte-pattern readings withdrawn
 
-### References hiding in the bodies - 124 of them
+The previous release of this decompiler emitted 1,072 regions of kind
+`block_header` and 113 of kind `record_trailer`. Reading the screen programs
+from their stated roots supersedes both, and the current decompiler emits
+**zero of either**:
 
-The same `0x16` also appears followed by a **valid 24-bit address**:
-
+```sh
+python tools/roundtrip.py --all      # counts every region kind it emits
 ```
-16 <u24 address>
-```
 
-There is no ambiguity with the block headers, whose next three bytes read as
-`<row> 03 00`, around 0x0300 and never a valid config address.
+The apparent trailer is a screen program's `00` end opcode with the next page
+record, six bytes, sitting immediately behind it. The apparent block header is
+two screen instructions, proved in 4f below. Both byte patterns were real. The
+boundaries drawn around them were not, and a shape scan cannot tell the
+difference, because the shape is all it has.
 
-124 turn up in the 525 config. Roughly one would be expected by chance, and they
-arrive in pairs referring to the same target, so they are real. 123 point within
-the region below 0xF35B and one into the section area.
-
-These matter out of proportion to their number. They were sitting inside regions
-the decompiler was copying as opaque hex, which means a length-changing edit would
-have left every one of them pointing at whatever had moved into its place, with
-nothing to report it. They are decoded and relinked now. **The lesson generalises:
-assume more of them are still hidden in the sections that remain opaque.**
+> This is the third one. An earlier pass had already withdrawn 124 regions of
+> kind `reference`, which matched `16 <u24>` inside an opcode 4 whose y
+> coordinate happened to be `0x16`. Same failure, same cause. What finally
+> separates a real structure from a coincidence here is not a better pattern but
+> a **root**: something the firmware is known to start reading from.
 
 ## 4e. KEY TABLE - SOLVED
 
@@ -342,52 +347,91 @@ shapes, or whether the wider form means something else entirely, is unknown.
 It went unnoticed until now because the detector strode four bytes at a time, and
 a five-byte table read that way dissolves into noise.
 
-## 4f. Block headers - SOLVED
+## 4f. The alleged block header is screen opcodes 22 + 3 - CORRECTED
 
-Earlier revisions described `16 <i> 03 00 <i*8> 00 <i*8> 60 08 8B 2F 03` as a
-repeating constant of unknown meaning, counted at 472 occurrences. Both parts of
-that were wrong.
-
-It is a **block header**, twelve bytes, and its tail is not constant:
+Earlier revisions called this a twelve-byte keyboard-matrix block header:
 
 ```
 16 <row> 03 00 <row*8> 00 <row*8> 60 08 <u24 address>
 ```
 
-The `8B 2F 03` that looked like part of a fixed pattern is an address. It only
-appeared constant because the records read by hand happened to share a value; a
-different record has `81 29 03` in the same place. Searching for the literal bytes
-is what capped the count at 472 - there are **1072**.
+The bytes are real; the boundary is not. `0x16` is screen opcode 22 carrying a
+one-byte row, and `0x03` is screen opcode 3 with its nine operands. The two
+`row * 8` values are y coordinates, and `60 08` is `96, 8`: the width and height
+of one display band.
 
-Every one of the 1072 carries a valid address, and **every one points into section
-17**. Not most: all of them. Section 17 is 3,096 bytes, was listed as unknown, and
-has address-shaped bytes at 0.3x the chance rate, so it holds no pointers of its
-own. It is a destination, not a source.
+A scan of the whole blob finds 1,080 of these runs. **Every one** is also
+reached from a stated screen root, as opcode 22 immediately followed by opcode
+3. Not most of them. The old decompiler emitted 1,072 rather than 1,080 only
+because it looked inside record bodies and eight of them lie outside.
 
-`<row>` is `row << 3` from the key-code arithmetic in section 5g, so **each block
-belongs to one row of the keyboard matrix**. Most records carry eight blocks, one
-per row; a few carry 16, 32, 40 or 48, and one carries none.
+So the keyboard-matrix reading is gone. Both domains number things 0 to 7 and
+both multiply by eight, which felt like corroboration and was coincidence.
 
-A block runs from its header to a `17` terminator. What sits in between is not
-decoded and is the largest remaining gap in the format.
+### What the nine operands are, and which way round
 
-## 4g. Record trailers - SOLVED
+Rooted traversal finds **1,114** opcode-3 draws. They come in exactly two
+shapes:
 
-The last seven bytes of a record:
+| operands | count | image |
+|---|---:|---|
+| `(0, row*8, 0, row*8, 96, 8)` for row 0-7 | 1,080 | three page backgrounds |
+| `(0, 12, 0, 0, 96, 1)` | 34 | the all-ink bitmap |
+
+The first four operands are two coordinate pairs, and the 1,080 cannot say which
+pair is the destination, because in every one of them the two are equal. The 34
+can, and they settle it. Here is one, in context, from the Devices menu at
+`0x009372`:
+
+```
+op22 row=1                              select the band y=8..15
+op3  (0, 8, 0, 8, 96, 8)  <background>  its slice of the page background
+op4  x=0 y=0                            the title, whose descender reaches in
+op3  (0, 12, 0, 0, 96, 1) <all ink>     <- this one
+op16 font=0
+op5  x=0 y=13                           first menu entry
+op5  x=81 y=13
+op23 transfer                           push the band to the panel
+```
+
+The draw sits inside the band that covers y=8 to y=15, between a title that ends
+at y=10 and text at y=13. A one-pixel line at **y=12** is a rule under the
+heading. The other reading puts it at y=0, in a band that was transferred two
+instructions earlier and can no longer change. So:
+
+```
+03 <dest x> <dest y> <src x> <src y> <width> <height> <u24 image>
+```
+
+Destination first. `tools/render_525_screens.py` had these the other way round
+until this was noticed; the 1,080 background strips hid it perfectly, because
+swapping two equal numbers changes nothing. All 34 rules were being drawn at the
+top edge of the screen instead of under the heading.
+
+## 4g. The alleged record trailer is a page record - CORRECTED
+
+The old seven-byte shape was:
 
 ```
 00 <u24 into section 8> <u24 back into this record>
 ```
 
-113 of the 114 records end this way. The second address lands on the record's own
-start + 11. The first points into section 8, the suspected bytecode, which is what
-supports the reading that **each record carries its own program**, as the original
-developer described.
+The zero is the end opcode of the screen program in front of it. The six bytes
+behind it are one page record, which is a binding-list pointer and a
+screen-program pointer and nothing else. 113 of the 114 mode records appeared to
+finish this way because of how the compiler laid them out, not because there is
+a trailer grammar. Reading the page table instead recovers all 135 page records
+and leaves no `record_trailer` regions at all.
+
+The address that looked like "a pointer into section 8, so each record carries
+its own program" was the binding-list pointer of the following page. The
+conclusion happened to be close to true anyway, which is the uncomfortable part:
+a wrong structure can support a right-sounding sentence for weeks.
 
 ## 4h. Section 17 is LCD bitmaps - SOLVED
 
-Every one of the 1072 block headers points into section 17, and there are only
-**three distinct targets**, spaced 773 bytes apart. Section 17 is 3,096 bytes:
+All 1,114 rooted opcode-3 picture draws point into section 17, across **four
+distinct targets** spaced 773 bytes apart. Section 17 is 3,096 bytes:
 two bytes, four chunks of 773, two more bytes.
 
 Each chunk is a bitmap:
@@ -404,13 +448,33 @@ the 768 bytes that follow. Rendering the pixels produces axis-aligned dotted rul
 and a vertical divider rather than noise, which is the other half of the argument.
 `tools/show_bitmaps.py` prints them so this can be checked by looking.
 
-Of the four, three are referenced by block headers. The fourth is filled with
-`0xFF` - erased flash - and one of the referenced ones is entirely blank.
+All four are referenced, and the split is not what an earlier revision of this
+document assumed:
 
-So a block header is, among other things, choosing which screen layout to draw.
+| address | draws | pixels set | what it is |
+|---|---:|---:|---|
+| `0x01267C` | 224 | 38 | dotted rule and divider |
+| `0x012981` | 384 | 38 | dotted rule and divider |
+| `0x012C86` | 34 | 6,144 of 6,144 | every pixel ink |
+| `0x012F8B` | 472 | 0 | every pixel paper |
+
+The all-ink one is **not erased flash**, which is what this document previously
+called it. It is a source of ink: all 34 of its draws copy a 96x1 slice of it to
+y=12, which is the rule under a menu heading, and they are the only 34 draws in
+the config that do not follow a row select. Nothing is ever copied from it that
+is not a solid run. The all-paper one, drawn 472 times, is the plain background
+for pages that want no furniture at all.
+
+Reproduce the table with:
+
+```sh
+python tools/render_525_screens.py --out screens/   # and then look at them
+python tools/verify_525_semantics.py                # counts every draw
+python tools/show_bitmaps.py                        # prints the four as text
+```
 
 > **What these are for, added later.** Section 4l reads the screen programs, and
-> these four are the *page backgrounds*. Opcode 3 draws them a 96x8 strip at a
+> three of the four are *page backgrounds*. Opcode 3 draws them a 96x8 strip at a
 > time, eight strips to a page, and the text is drawn on top. So the dotted rule
 > and the divider are not furniture sitting beside the labels; they are the layer
 > the labels sit on. An earlier note in the project's working files described them
@@ -1047,13 +1111,30 @@ index out of range, and **no write to a narrow variable with a non-zero high
 operand byte**. That last one is the check worth keeping, because it is the one
 that would fail if the reading were wrong.
 
-### `0x7C` is a quantity, not a delay
+### `0x7C` is `QueueDelay`, per device - CORRECTED
 
-Over all 203 uses in the sample's action lists the high byte is always a valid IR
-group index (9, 68, 62 and 64 uses across the four groups) and the low byte is
-`{0: 17, 1: 178, 5: 5, 15: 2, 95: 1}`. A distribution that is 88% ones and tops out
-at 95 is a count of something, and it is not a standalone delay instruction. What
-that something is remains open.
+An earlier revision of this section concluded that `0x7C` carries a quantity
+*rather than* a delay. That was wrong, and it is worth leaving the reasoning
+visible rather than quietly deleting it.
+
+[@glenharris](https://github.com/glenharris), who designed this firmware,
+explained it in
+[discussion #14](https://github.com/trelowney/harmony-decompiler/discussions/14).
+The remote has one queue holding commands and delays for every device, and it
+behaves as if each device had its own. A delay at the head of one device's
+subqueue holds that device up while commands for other devices keep going. That
+is what buys a pause after a command, or a guaranteed silence before the next
+one, without stalling the whole remote.
+
+The measurements were right; only the inference from them was wrong. Over all
+203 uses in the sample's action lists the high byte is always a valid IR group
+index, 9, 68, 62 and 64 uses across the four groups, and the low byte is
+distributed `{0: 17, 1: 178, 5: 5, 15: 2, 95: 1}`. What that distribution rules
+out is milliseconds, not a delay: eight bits cannot hold a useful millisecond
+range, so the value is encoded. Reading 88% ones and a ceiling of 95 as "this is
+a count of something" was a guess dressed as a conclusion. The exact unit is
+still open, and those five values are now the evidence for working it out rather
+than an argument against the name.
 
 ## 4l. Where the menu text lives - SOLVED
 
@@ -1098,11 +1179,23 @@ Every page is exactly eight row blocks:
 22(row)  3(the row's 96x8 background strip)  [font and text draws]  23(commit)
 ```
 
-Ghidra on `mcu.bin` closes both ends of that. Opcode 22's handler reads one byte
-into `0xD9` and calls `0x038EC`, which computes `0xC0 = row`, `0xC1 = row * 8`,
-`0xC2 = row * 8 + 7`: an 8-pixel window, nothing more. Opcode 23 drives `LATA.5`
-low, loads width `0x60`, calls the pixel transfer at `0x03898`, and drives `LATA.5`
-high again. So 22 selects and 23 commits, on this architecture.
+Ghidra on `mcu.bin` closes both ends of that. Opcode 22's handler at `0x046D6`
+reads one byte into `0xD9` and calls `0x038EC`, which computes `0xC0 = row`,
+`0xC1 = row * 8`, `0xC2 = row * 8 + 7`: an 8-pixel window, nothing more. Opcode
+23's handler at `0x046E8` drives a control line low, loads width `0x60`, calls
+the pixel transfer at `0x03898`, and drives it high again. So 22 selects and 23
+commits, on this architecture.
+
+> **Two corrections to that paragraph, both from
+> [@dannybloe](https://github.com/dannybloe)**, who checked these four addresses
+> against a separate 525 image he read over USB rather than taking them on
+> trust. First, opcode 23 brackets its transfer with **`LATE` bit 2 as well as
+> `LATA` bit 5**, and restores both; an earlier revision here named only
+> `LATA.5`, which is not enough to drive the panel by hand. Second, `0x03898`
+> emits `0xB0 | page`, the page-address command of the **SSD1306 family** of
+> monochrome controllers. That settles what a "row" is: not a menu line and not
+> a touch region, but one of the panel's eight 8-pixel pages. Eight of them make
+> the 525's 96x64 screen.
 
 The operands agree from the data side without the firmware: the opcode 3 that
 follows every opcode 22 begins `00, 8*row, 00, 8*row, 96, 8`, in all 1,080.
@@ -1191,6 +1284,114 @@ trailer as invalid on the first edited artifacts produced here; the seed and the
 range were then found in the firmware and confirmed against all five samples.
 `compile_blob()` now recomputes the word before the outer XOR.
 
+## 4n. Arch-9 class-5 IR pointer graph - SOLVED structurally
+
+Base slot 5 begins with a one-byte device count followed by one `u24` pointer
+per infrared group. On this 525, one group is one device. Each group is:
+
+```text
++0  u8   zero
++1  u16  command count
++3  u24  record address[command count]
+```
+
+The record address lands on the class byte, seven bytes into a variable header:
+
+```text
+-7  u8   zero
+-6  u24  carrier period in ns
+-3  u24  carrier on-time in ns
++0  u8   class = 5
++1  u24  pointer back to the header start
++4  u8   group count, 1..16
++5  u24  body pointer[3 * group count], NULL slots significant
+```
+
+Class 5 then forms a four-level pointer graph:
+
+```text
+body:         u24 symbol_table; u16 n; u8 index[n]
+symbol table: u8 count; u24 symbol[count]
+symbol block: u16 count; u16 duration[count]; u16 zero
+```
+
+**None of the layout below is this project's.** The header, the body, the symbol
+table, the symbol block and the firmware reading behind them were published by
+[@dannybloe](https://github.com/dannybloe) in
+[harmony-explorations](https://github.com/dannybloe/harmony-explorations) and
+verified there against firmware. It is written out here because the rest of this
+section depends on it, and because a reader should be able to check the
+relocation work without leaving the page. What is added here is that closure,
+and nothing about the format itself. The public 525 contains:
+
+| layer | count |
+|---|---:|
+| IR groups | 4 |
+| record headers | 200 |
+| class-5 bodies | 380 |
+| symbol tables | 5 |
+| symbol blocks | 43 |
+
+Bodies, tables and symbols are shared between records, so each is emitted once
+and every reference to it is symbolic. That took the resize proof from 3,609 to
+**5,015 recomputed pointers**, and the structurally decoded share of the 525
+from 41.5% to **76.5%**.
+
+### The failure that this closes, in detail
+
+Before this, every one of those pointers was opaque. Lengthen anything in the
+config and the symbol tables move, but the bodies keep the old absolute
+addresses, so all 200 IR commands decode as garbage. Everything else still
+passes: both checksums recompute, all 135 screens render pixel-identical, group
+and mode counts close, and an independent high-level reader accepts the file.
+Nothing in the file complains, because nothing in the file is wrong except the
+meaning.
+
+Two generated artifacts in this project's working files were built and checked
+before this was found, and both are kept as the record of it rather than
+deleted. What exposed them was expanding an *original*, untouched IR record
+through an independent reader after the edit, which is now a standing check:
+
+```sh
+python tools/roundtrip.py --resize
+# +13 B absorbed, 5015 pointers relinked, structure unchanged,
+# 135 screens pixel-identical, 200 IR records exact
+```
+
+The last clause is the new one. It expands all 200 records before and after the
+shift and compares carrier, slot population including NULL slots, and every
+duration word.
+
+> This is the same shape of mistake as the trailer checksum in 4m, and it was
+> caught the same way: not by our tests, which compare a file against a version
+> of itself, but by a reader written by somebody else against the same format.
+> Two for two. Where a third is hiding, the honest answer is that we do not
+> know, which is why the opaque share of the file is still worth counting.
+
+### Writing one, offline
+
+`tools/class5_ir_encoder.py` builds a self-contained relocatable record from
+already-normalised duration words. It packs literally, one symbol per unique
+complete stream, which is simple to audit and is certainly not what Logitech's
+compiler does. `tools/verify_525_class5_encoder.py` repacks the six learned X96
+NEC signals out of the public sample and requires an exact decode afterwards:
+
+```sh
+python tools/verify_525_class5_encoder.py
+# PASS: 6 X96 golden vectors, 12 refusal rails
+# command 09: NEC 01 FE 4E B1, 472 bytes
+```
+
+`tools/clone_525_device.py --place-x96-record-9` goes one step further and puts
+a generated record into a config at a computed address, where an independent
+reader expands it to the same NEC frame as the original.
+
+What none of that shows is that a remote would accept any of it. It also does
+not say what the three header slots mean for a signal captured from a real
+remote, or whether the dictionary compression Logitech uses is an optimisation
+or a requirement. **Nothing generated by these tools has been written to
+hardware**, and nothing here should be read as saying it is safe to.
+
 ## 5. Samples from issue #66 - different architecture, SAME container
 
 Downloaded from `github.com/user-attachments/files/22412763/EZHex.Samples.zip`.
@@ -1277,15 +1478,19 @@ Two further consequences worth having:
 
 What the two share, decoded and verified by round trip on both: the container, the
 blob header shape, `config_base`, 24-bit pointers and their tables, the
-`0xFEED ... 0xBEEF` name table, key tables, the record array with its headers and
-trailers, and the `16 <u24>` references.
+`0xFEED ... 0xBEEF` name table, key tables, and the record array with its
+headers.
 
-What arch 8 does not appear to have: block headers, and therefore no LCD bitmaps
-found by way of them.
+> This paragraph used to end "and trailers, and the `16 <u24>` references", and
+> to note that arch 8 has no block headers and therefore no bitmaps reachable
+> through them. All three of those structures have since been withdrawn on arch 9
+> as well; see 4d, 4f and 4g. Nothing that was shared has stopped being shared,
+> but two of the things listed as shared were never structures on either side.
 
-Only about 2% of an arch 8 config decodes, against 27% for the 525, but that is
-mostly because the files are six times larger rather than because less is
-understood.
+About 4% of an arch 8 config decodes, against 76% for the 525. Part of that is
+that the files are six times larger, and part of it is that everything learned
+since has been learned from one arch 9 config. The gap is a statement about
+where the effort went, not about the architectures.
 
 ### Negative result: diffing samples does not work
 
@@ -1830,8 +2035,13 @@ See [`tools/`](../tools/). All are plain `python <script>.py`.
 | `verify_525_semantics.py` | re-assert every claim in 4k and 4l against the sample; `--firmware` pins the handlers too |
 | `render_525_screens.py` | draw all 135 menu pages and the five font sheets as BMPs |
 | `analyze_525_ir.py` | expand the class 5 IR dictionaries, decode NEC, correlate with mode bindings |
+| `class5_ir_encoder.py` | build and decode a relocatable arch-9 literal class-5 record |
+| `verify_525_class5_encoder.py` | repack the six learned X96 signals and require an exact decode; `--bundle` writes golden vectors |
+| `clone_525_device.py` | offline fifth-device proof, optionally placing one new IR record; never hardware-safe |
+| `roundtrip.py --resize` | relocate a config and require the symbolic shape, all 135 screens and all 200 expanded IR records to come back exact |
 | `edit_525_label.py` | bounded proof: change one same-length screen label and check nothing else moved |
-| `relocate_525_label.py` | bounded proof: append a *longer* label and retarget every user of the old one |
+| `relocate_525_label.py` | bounded proof: append a *longer* label and retarget every user of the old one. Superseded, see below |
+| `relocate_525_label_in_place.py` | the same longer label without appending: the file keeps its length and its picture bank |
 
 ### Live communication with the remote (read-only)
 

@@ -393,12 +393,16 @@ REF_OPCODE = 0x16
 
 
 def parse_block_header(blob: bytes, start: int, end: int):
-    """The header of one block inside a record body.
+    """Legacy weak recogniser for a byte shape once called a block header.
 
         16 <row> 03 00 <row*8> 00 <row*8> 60 08 <u24 address>
 
-    Twelve bytes. The `row*8` is `row << 3` from the key-code arithmetic in
-    section 5g, so a block belongs to one row of the keyboard matrix.
+    Twelve bytes. Rooted screen control flow later proved this exact shape is
+    two instructions: opcode 22 selects display row ``row`` and opcode 3 draws
+    its 96x8 picture strip. All 1,080 global matches in the public 525 sample
+    are rooted screen rows; none survives the stronger screen overlay. The weak
+    recogniser remains only so an unrooted occurrence is preserved on other
+    inputs rather than silently reinterpreted.
 
     The three bytes after `60 08` were written up as part of a fixed constant,
     `60 08 8B 2F 03`. They are not constant: they are an address, and the value
@@ -734,7 +738,7 @@ def arch9_screen_roots(blob: bytes, section_pointers) -> list[int]:
 
 
 def arch9_screen_text_regions(blob: bytes, section_pointers) -> list[dict]:
-    """Every opcode-4 pointer and the terminated glyph string it names.
+    """Every opcode-3/4 pointer and the terminated glyph strings opcode 4 names.
 
     These locations are derived from stated screen roots and control-flow
     successors.  That makes an opcode-4 pointer stronger evidence than scanning
@@ -750,6 +754,17 @@ def arch9_screen_text_regions(blob: bytes, section_pointers) -> list[dict]:
         if program is None:
             continue
         for instruction in program:
+            if instruction["opcode"] == 3:
+                operands = instruction["operands"]
+                target = int.from_bytes(operands[6:9], "little") - CONFIG_BASE
+                if 0 <= target < len(blob):
+                    references[instruction["offset"]] = {
+                        "kind": "screen_picture",
+                        "offset": instruction["offset"],
+                        "length": 10,
+                        "coordinates": list(operands[:6]),
+                        "targets": [target],
+                    }
             if instruction["opcode"] == 4:
                 operands = instruction["operands"]
                 target = int.from_bytes(operands[2:5], "little") - CONFIG_BASE
@@ -768,7 +783,13 @@ def arch9_screen_text_regions(blob: bytes, section_pointers) -> list[dict]:
                     seen.add(target)
                     pending.append(target)
 
-    strings = {}
+    # Two pointers can name the same terminated run of glyphs at different
+    # starts, which makes the later one a suffix of the earlier string. Keep one
+    # maximal region for the run: `symbolise` then writes the suffix pointer as
+    # that region plus a delta, which is what the generic pointer representation
+    # is for. The alternative is two overlapping writable regions, which is a
+    # contradiction the compiler cannot resolve.
+    candidates = {}
     for reference in references.values():
         start = reference["targets"][0]
         end = start
@@ -776,13 +797,22 @@ def arch9_screen_text_regions(blob: bytes, section_pointers) -> list[dict]:
             end += 2 if blob[end] & 0x80 else 1
         if end >= len(blob):
             continue
-        strings[start] = {
+        candidates[start] = {
             "kind": "glyph_string",
             "offset": start,
             "length": end + 1 - start,
             "codes": list(blob[start:end]),
             "terminator": "0x00",
         }
+
+    strings = {}
+    ends = set()
+    for start, string in sorted(candidates.items()):
+        end = start + string["length"]
+        if end in ends:
+            continue
+        strings[start] = string
+        ends.add(end)
 
     known = sorted([*references.values(), *strings.values()],
                    key=lambda region: region["offset"])
@@ -792,6 +822,288 @@ def arch9_screen_text_regions(blob: bytes, section_pointers) -> list[dict]:
                 f"overlapping screen regions at 0x{left['offset']:X} and "
                 f"0x{right['offset']:X}")
     return known
+
+
+def arch9_font_regions(blob: bytes, section_pointers) -> list[dict]:
+    """The five arch-9 font-set pointer arrays, including significant NULLs."""
+    if len(section_pointers) <= 7 or not section_pointers[7]:
+        return []
+    table = section_pointers[7] - CONFIG_BASE
+    if not 0 <= table <= len(blob) - 2:
+        return []
+    count = int.from_bytes(blob[table:table + 2], "little")
+    if count > 64 or table + 2 + 3 * count > len(blob):
+        return []
+    result = []
+    for index in range(count):
+        address = int.from_bytes(blob[table + 2 + 3 * index:table + 5 + 3 * index], "little")
+        start = address - CONFIG_BASE
+        if not 0 <= start <= len(blob) - 3:
+            return []
+        glyph_count = blob[start + 2]
+        length = 3 + 3 * glyph_count
+        if start + length > len(blob):
+            return []
+        targets = []
+        for glyph in range(glyph_count):
+            value = int.from_bytes(blob[start + 3 + 3 * glyph:start + 6 + 3 * glyph], "little")
+            if value == 0:
+                targets.append(None)
+                continue
+            offset = value - CONFIG_BASE
+            if not 0 <= offset < len(blob):
+                return []
+            targets.append(offset)
+        result.append({
+            "kind": "font_set",
+            "offset": start,
+            "length": length,
+            "height": blob[start],
+            "first": blob[start + 1],
+            "targets": targets,
+        })
+    return result
+
+
+def arch9_mode_page_regions(blob: bytes, section_pointers) -> list[dict]:
+    """Every arch-9 mode page's binding-list and screen-program pointers."""
+    if len(section_pointers) <= 6 or not section_pointers[6]:
+        return []
+    table = section_pointers[6] - CONFIG_BASE
+    if not 0 <= table <= len(blob) - 3:
+        return []
+    count = int.from_bytes(blob[table:table + 3], "little")
+    if count > 4096 or table + 3 + 3 * count > len(blob):
+        return []
+    pages = {}
+    for mode_index in range(count):
+        entry_address = int.from_bytes(
+            blob[table + 3 + 3 * mode_index:table + 6 + 3 * mode_index], "little")
+        entry = entry_address - CONFIG_BASE
+        if not 0 <= entry <= len(blob) - 6:
+            return []
+        page_count = int.from_bytes(blob[entry + 4:entry + 6], "little")
+        if page_count > 256 or entry + 6 + 3 * page_count > len(blob):
+            return []
+        for page_index in range(page_count):
+            page_address = int.from_bytes(
+                blob[entry + 6 + 3 * page_index:entry + 9 + 3 * page_index], "little")
+            page = page_address - CONFIG_BASE
+            if not 0 <= page <= len(blob) - 6:
+                return []
+            targets = []
+            for pointer in (page, page + 3):
+                target = int.from_bytes(blob[pointer:pointer + 3], "little") - CONFIG_BASE
+                if not 0 <= target < len(blob):
+                    return []
+                targets.append(target)
+            pages[page] = {
+                "kind": "mode_page",
+                "offset": page,
+                "length": 6,
+                "targets": targets,
+            }
+    return list(pages.values())
+
+
+def arch9_class5_ir_regions(blob: bytes, section_pointers) -> list[dict]:
+    """Every pointer-bearing layer of the arch-9 class-5 IR graph.
+
+    Danny Bloemendaal published and firmware-verified the class-5
+    header/body/table/symbol-block layout in ``harmony-explorations``. This
+    overlay applies that model to hconfig relocation: IR groups point to record
+    class bytes, record headers point to bodies, bodies point to symbol tables,
+    and symbol tables point to counted pulse blocks. Shared bodies, tables and
+    symbols are emitted once.
+    """
+    if len(section_pointers) <= 5 or not section_pointers[5]:
+        return []
+    table = section_pointers[5] - CONFIG_BASE
+    if not 0 <= table < len(blob):
+        return []
+    group_count = blob[table]
+    if group_count == 0 or table + 1 + 3 * group_count > len(blob):
+        return []
+
+    regions = {}
+
+    def remember(region: dict) -> None:
+        offset = region["offset"]
+        previous = regions.get(offset)
+        if previous is not None and previous != region:
+            raise ConfigError(f"conflicting class-5 regions at 0x{offset:X}")
+        regions[offset] = region
+
+    record_addresses = []
+    for group_index in range(group_count):
+        address = int.from_bytes(
+            blob[table + 1 + 3 * group_index:table + 4 + 3 * group_index], "little")
+        group = address - CONFIG_BASE
+        if not 0 <= group <= len(blob) - 3 or blob[group] != 0:
+            return []
+        records = int.from_bytes(blob[group + 1:group + 3], "little")
+        length = 3 + 3 * records
+        if records > 4096 or group + length > len(blob):
+            return []
+        targets = []
+        for command in range(records):
+            target = int.from_bytes(
+                blob[group + 3 + 3 * command:group + 6 + 3 * command], "little")
+            offset = target - CONFIG_BASE
+            if not 0 <= offset < len(blob):
+                return []
+            targets.append(offset)
+            record_addresses.append(target)
+        remember({
+            "kind": "ir_group", "offset": group, "length": length,
+            "targets": targets,
+        })
+
+    body_addresses = set()
+    for record_address in sorted(set(record_addresses)):
+        record = record_address - CONFIG_BASE
+        start = record - 7
+        if (start < 0 or record + 5 > len(blob) or blob[start] != 0
+                or blob[record] != 5):
+            return []
+        back = int.from_bytes(blob[record + 1:record + 4], "little") - CONFIG_BASE
+        groups = blob[start + 11]
+        length = 12 + 9 * groups
+        if not 1 <= groups <= 16 or start + length > len(blob) or back != start:
+            return []
+        targets = []
+        for slot in range(3 * groups):
+            address = int.from_bytes(
+                blob[start + 12 + 3 * slot:start + 15 + 3 * slot], "little")
+            if address == 0:
+                targets.append(None)
+                continue
+            offset = address - CONFIG_BASE
+            if not 0 <= offset <= len(blob) - 5:
+                return []
+            targets.append(offset)
+            body_addresses.add(address)
+        remember({
+            "kind": "ir_record_header", "offset": start, "length": length,
+            "period_ns": int.from_bytes(blob[start + 1:start + 4], "little"),
+            "on_ns": int.from_bytes(blob[start + 4:start + 7], "little"),
+            "ir_class": 5,
+            "back_reference": back,
+            "targets": targets,
+        })
+
+    table_addresses = set()
+    for body_address in sorted(body_addresses):
+        body = body_address - CONFIG_BASE
+        table_address = int.from_bytes(blob[body:body + 3], "little")
+        count = int.from_bytes(blob[body + 3:body + 5], "little")
+        length = 5 + count
+        if count > 8192 or body + length > len(blob):
+            return []
+        table_offset = table_address - CONFIG_BASE
+        if not 0 <= table_offset < len(blob):
+            return []
+        table_addresses.add(table_address)
+        remember({
+            "kind": "ir_class5_body", "offset": body, "length": length,
+            "targets": [table_offset],
+            "indices": list(blob[body + 5:body + length]),
+        })
+
+    symbol_addresses = set()
+    for table_address in sorted(table_addresses):
+        symbol_table = table_address - CONFIG_BASE
+        count = blob[symbol_table]
+        length = 1 + 3 * count
+        if count == 0 or symbol_table + length > len(blob):
+            return []
+        targets = []
+        for index in range(count):
+            address = int.from_bytes(
+                blob[symbol_table + 1 + 3 * index:symbol_table + 4 + 3 * index], "little")
+            offset = address - CONFIG_BASE
+            if not 0 <= offset <= len(blob) - 4:
+                return []
+            targets.append(offset)
+            symbol_addresses.add(address)
+        remember({
+            "kind": "ir_symbol_table", "offset": symbol_table,
+            "length": length, "targets": targets,
+        })
+
+    for symbol_address in sorted(symbol_addresses):
+        symbol = symbol_address - CONFIG_BASE
+        count = int.from_bytes(blob[symbol:symbol + 2], "little")
+        length = 4 + 2 * count
+        if (count > 8192 or symbol + length > len(blob)
+                or blob[symbol + length - 2:symbol + length] != b"\x00\x00"):
+            return []
+        remember({
+            "kind": "ir_symbol_block", "offset": symbol, "length": length,
+            "words": [int.from_bytes(blob[at:at + 2], "little")
+                      for at in range(symbol + 2, symbol + length - 2, 2)],
+        })
+
+    known = sorted(regions.values(), key=lambda region: region["offset"])
+    for left, right in zip(known, known[1:]):
+        if left["offset"] + left["length"] > right["offset"]:
+            raise ConfigError(
+                f"overlapping class-5 regions at 0x{left['offset']:X} and "
+                f"0x{right['offset']:X}")
+    return known
+
+
+def arch9_value_map_references(blob: bytes, section_pointers) -> list[dict]:
+    """Pointers inside base-slot-14 value maps.
+
+    The record layout and the fact that its targets are screen roots are Danny
+    Bloemendaal's firmware/corpus-backed finding, published in
+    ``harmony-explorations`` and pinned locally at commit ``a6516c7``.  Records
+    can share tails, so this overlays only the u24 fields rather than claiming
+    a second ownership of overlapping record bytes.
+    """
+    if len(section_pointers) <= 14 or not section_pointers[14]:
+        return []
+    table = section_pointers[14] - CONFIG_BASE
+    if not 0 <= table < len(blob):
+        return []
+    record_count = blob[table]
+    if table + 1 + 3 * record_count > len(blob):
+        return []
+    pointers = {}
+    for record_index in range(record_count):
+        address = int.from_bytes(
+            blob[table + 1 + 3 * record_index:table + 4 + 3 * record_index], "little")
+        record = address - CONFIG_BASE
+        if not 0 <= record <= len(blob) - 2:
+            return []
+        entry_count = blob[record + 1]
+        entries = record + 2
+        spans = entries + 5 * entry_count
+        if spans >= len(blob):
+            return []
+        for entry in range(entry_count):
+            pointer = entries + 5 * entry + 2
+            target = int.from_bytes(blob[pointer:pointer + 3], "little") - CONFIG_BASE
+            if not 0 <= target < len(blob):
+                return []
+            pointers[pointer] = {
+                "kind": "raw_pointer", "offset": pointer, "length": 3,
+                "targets": [target],
+            }
+        span_count = blob[spans]
+        if spans + 1 + 7 * span_count > len(blob):
+            return []
+        for span in range(span_count):
+            pointer = spans + 1 + 7 * span + 4
+            target = int.from_bytes(blob[pointer:pointer + 3], "little") - CONFIG_BASE
+            if not 0 <= target < len(blob):
+                return []
+            pointers[pointer] = {
+                "kind": "raw_pointer", "offset": pointer, "length": 3,
+                "targets": [target],
+            }
+    return list(pointers.values())
 
 
 RECOGNISERS = ("name_table", "pointer_table", "key_table", "bitmap")
@@ -1191,8 +1503,13 @@ def decompile(raw: bytes, filename=None) -> dict:
     # not in byte-pattern guesses. Pull opcode-4 references and their strings
     # out last so they take precedence over weaker recognisers they may cross.
     if magic == b"AHCM":
+        known = [*arch9_class5_ir_regions(blob, ptrs),
+                 *arch9_font_regions(blob, ptrs),
+                 *arch9_mode_page_regions(blob, ptrs),
+                 *arch9_value_map_references(blob, ptrs),
+                 *arch9_screen_text_regions(blob, ptrs)]
         regions = _overlay_known_regions(
-            blob, regions, arch9_screen_text_regions(blob, ptrs))
+            blob, regions, sorted(known, key=lambda region: region["offset"]))
 
     doc = {
         "harmony_config_version": FORMAT_VERSION,
@@ -1304,6 +1621,107 @@ def emit_region(r: dict, resolve=None) -> bytes:
         for t in r["targets"]:
             out += (resolve(t) + CONFIG_BASE).to_bytes(3, "little")
         return bytes(out)
+
+    if kind == "ir_group":
+        targets = r["targets"]
+        if len(targets) > 0xFFFF:
+            raise ConfigError("IR group record count does not fit u16")
+        out = bytearray(b"\x00")
+        out += len(targets).to_bytes(2, "little")
+        for target in targets:
+            out += (resolve(target) + CONFIG_BASE).to_bytes(3, "little")
+        return bytes(out)
+
+    if kind == "ir_record_header":
+        targets = r["targets"]
+        if (not targets or len(targets) % 3 or len(targets) // 3 > 16
+                or int(r["ir_class"]) != 5):
+            raise ConfigError("invalid arch-9 class-5 record header")
+        out = bytearray(b"\x00")
+        out += int(r["period_ns"]).to_bytes(3, "little")
+        out += int(r["on_ns"]).to_bytes(3, "little")
+        out += bytes((5,))
+        out += (resolve(r["back_reference"]) + CONFIG_BASE).to_bytes(3, "little")
+        out += bytes((len(targets) // 3,))
+        for target in targets:
+            address = 0 if target is None else resolve(target) + CONFIG_BASE
+            out += address.to_bytes(3, "little")
+        return bytes(out)
+
+    if kind == "ir_class5_body":
+        if len(r["targets"]) != 1 or len(r["indices"]) > 0xFFFF:
+            raise ConfigError("invalid class-5 body")
+        return ((resolve(r["targets"][0]) + CONFIG_BASE).to_bytes(3, "little")
+                + len(r["indices"]).to_bytes(2, "little")
+                + bytes(r["indices"]))
+
+    if kind == "ir_symbol_table":
+        if not r["targets"] or len(r["targets"]) > 0xFF:
+            raise ConfigError("invalid class-5 symbol table")
+        out = bytearray((len(r["targets"]),))
+        for target in r["targets"]:
+            out += (resolve(target) + CONFIG_BASE).to_bytes(3, "little")
+        return bytes(out)
+
+    if kind == "ir_symbol_block":
+        if len(r["words"]) > 8192 or any(not 0 < word <= 0xFFFF for word in r["words"]):
+            raise ConfigError("invalid class-5 symbol block")
+        out = bytearray(len(r["words"]).to_bytes(2, "little"))
+        for word in r["words"]:
+            out += int(word).to_bytes(2, "little")
+        out += b"\x00\x00"
+        return bytes(out)
+
+    if kind == "tagged_list":
+        entries = r["entries"]
+        if not entries or len(entries) > 0xFF:
+            raise ConfigError("tagged list must contain 1..255 entries")
+        wide = r.get("wide", any("flags" in entry for entry in entries))
+        out = bytearray((0, len(entries))) if wide else bytearray((len(entries),))
+        for entry in entries:
+            tag, operand = entry["tag"], entry["operand"]
+            opcode = entry["opcode"]
+            if not 0 <= tag <= 0xFF or not 0 <= operand <= 0xFFFF or not 0 <= opcode <= 0xFF:
+                raise ConfigError("tagged-list field is outside its stored width")
+            if wide:
+                flags = entry.get("flags", 0)
+                if not 0 <= flags <= 0xFF:
+                    raise ConfigError("tagged-list flags do not fit u8")
+                out += bytes((flags, tag))
+            else:
+                out += bytes((tag,))
+            out += operand.to_bytes(2, "little") + bytes((opcode,))
+        return bytes(out)
+
+    if kind == "mode_page":
+        if len(r["targets"]) != 2:
+            raise ConfigError("an arch-9 mode page needs list and program pointers")
+        out = bytearray()
+        for target in r["targets"]:
+            out += (resolve(target) + CONFIG_BASE).to_bytes(3, "little")
+        return bytes(out)
+
+    if kind == "screen_picture":
+        coordinates = bytes(r["coordinates"])
+        if len(coordinates) != 6:
+            raise ConfigError("screen-picture coordinates must be six bytes")
+        return (bytes((3,)) + coordinates
+                + (resolve(r["targets"][0]) + CONFIG_BASE).to_bytes(3, "little"))
+
+    if kind == "font_set":
+        targets = r["targets"]
+        if len(targets) > 0xFF:
+            raise ConfigError("font-set glyph count does not fit u8")
+        out = bytearray((r["height"], r["first"], len(targets)))
+        for target in targets:
+            address = 0 if target is None else resolve(target) + CONFIG_BASE
+            out += address.to_bytes(3, "little")
+        return bytes(out)
+
+    if kind == "raw_pointer":
+        if len(r["targets"]) != 1:
+            raise ConfigError("raw pointer must carry exactly one target")
+        return (resolve(r["targets"][0]) + CONFIG_BASE).to_bytes(3, "little")
 
     if kind == "pointer_table":
         targets = r["targets"]
@@ -1501,6 +1919,27 @@ def region_length(r: dict) -> int:
                 + 3 * len(r["targets"]))
     if kind == "record_header":
         return 6 + 3 * len(r["targets"])
+    if kind == "ir_group":
+        return 3 + 3 * len(r["targets"])
+    if kind == "ir_record_header":
+        return 12 + 3 * len(r["targets"])
+    if kind == "ir_class5_body":
+        return 5 + len(r["indices"])
+    if kind == "ir_symbol_table":
+        return 1 + 3 * len(r["targets"])
+    if kind == "ir_symbol_block":
+        return 4 + 2 * len(r["words"])
+    if kind == "tagged_list":
+        wide = r.get("wide", any("flags" in entry for entry in r["entries"]))
+        return (2 if wide else 1) + (5 if wide else 4) * len(r["entries"])
+    if kind == "mode_page":
+        return 6
+    if kind == "screen_picture":
+        return 10
+    if kind == "font_set":
+        return 3 + 3 * len(r["targets"])
+    if kind == "raw_pointer":
+        return 3
     if kind == "reference":
         return 4
     if kind == "screen_reference":

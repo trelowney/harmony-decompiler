@@ -17,9 +17,9 @@ for the remotes it serves. It does not serve these.
 
 > **Status: the round trip works.** A 525 config decompiles to JSON and compiles
 > back byte-identical, and a button can be remapped through it - changing exactly
-> one byte of the blob, with both of the file's checksums recomputed. About 42% of
+> one byte of the blob, with both of the file's checksums recomputed. About 76% of
 > the file is decoded so far and the rest passes through as opaque blobs, but that
-> part includes **3,171 pointers**, which the compiler recomputes rather than
+> part includes **5,015 pointers**, which the compiler recomputes rather than
 > copies.
 >
 > **The menus render.** All 135 screens of the 525 sample draw as bitmaps offline,
@@ -27,8 +27,12 @@ for the remotes it serves. It does not serve these.
 > remote.
 >
 > **Length-changing edits work too**, as of the pointers becoming symbolic:
-> lengthen a name and every section after it shifts, every pointer relinks, and
-> the file comes back with the same structure. See the caveat under *Editing*.
+> lengthen a name and every section after it shifts, every known pointer relinks,
+> the file comes back with the same structure, all 135 screens still render
+> pixel-identical and all 200 infrared commands still expand to the same
+> timings. Those last two clauses exist because the pointer check on its own
+> once passed a file in which every IR command was ruined. See the caveat under
+> *Editing*.
 > See [`docs/FORMAT.md`](docs/FORMAT.md) for what is known and
 > [`docs/OPEN-QUESTIONS.md`](docs/OPEN-QUESTIONS.md) for what is not.
 
@@ -90,14 +94,10 @@ claim than "it looks right":
 - **which sections carry pointer tables** - 10 of the 18, holding 685 addresses.
   Section 10 turns out to be nothing but a 487-entry pointer array
 - the **header of all 114 records** in the region the section table does not
-  cover, carrying another 249 pointers, and **124 references buried in the record
-  bodies** that were previously being copied as opaque hex
-- record bodies are blocks, **one per row of the keyboard matrix**, each with a
-  twelve-byte header carrying a pointer into section 17 - 1072 of them, and all
-  1072 point there
-- record trailers, holding a pointer into section 8, the suspected bytecode
-- **section 17 is four 96x64 LCD bitmaps**, which is what every block header
-  points at - `tools/show_bitmaps.py` draws them
+  cover, carrying another 249 pointers
+- **section 17 is four 96x64 LCD bitmaps** - `tools/show_bitmaps.py` draws them.
+  Three are page backgrounds. The fourth is solid ink, and the only thing ever
+  copied out of it is the one-pixel rule under a menu heading
 - **where the menu text lives.** It is not in the file as text and never was.
   Section 11 and every mode page hold a screen program; opcode 16 picks one of
   the five font sets in section 7, and opcodes 4 and 5 draw runs of *font-local
@@ -110,8 +110,8 @@ claim than "it looks right":
 - **section 8 closes to the byte**: one leading action list of 34 bytes, then the
   packed run of all 135 mode-page binding lists, 1,052 bytes, and nothing else
 - three more action opcodes: `0x75` sounds a tone through a counted GPIO toggle,
-  `0x80 | n` writes state variable `n`, and `0x7C` carries a per-group quantity
-  rather than the delay it was once guessed to be
+  `0x80 | n` writes state variable `n`, and `0x7C` is Glen Harris's per-device
+  `QueueDelay`; its low-byte delay encoding/unit remains open
 - **arch 8 works too**: all four 720/785/88x samples round-trip byte-identical,
   and survive a length change. Its markers are not what mirroring arch 9 would
   suggest, and its section table has a null in the middle
@@ -120,10 +120,28 @@ claim than "it looks right":
 - the **key table** format, `<u8 code> <u16 target> <0x7F>`, and that there is one
   overlay table per activity
 - key codes are **keyboard matrix addresses**: `code = 0x80 | (row << 3) | column`
+- **every pointer inside the infrared records**: four groups, 200 record headers,
+  380 bodies, five symbol tables and 43 symbol blocks, on the layout
+  [@dannybloe](https://github.com/dannybloe) published and verified against
+  firmware. Until this was typed, lengthening a config quietly ruined all 200
+  commands while every other check passed
 - the vendor HID protocol, reimplemented and cross-checked against concordance
 
 Two errors in this document's own earlier revisions were caught by the round-trip
-test within an hour of it working, which is roughly the point of having it.
+test within an hour of it working, which is roughly the point of having it. Four
+more, listed below, were caught by other people or by a stronger test, which is
+the point of having those.
+
+**Withdrawn, and worth knowing about.** Earlier revisions of this repository
+claimed record bodies were blocks with a twelve-byte header, one per row of the
+keyboard matrix; that records ended with a trailer pointing into section 8; that
+124 references were buried in the bodies; and that `0x7C` carried a quantity
+rather than a delay. All four are wrong. The first three were byte patterns that
+really do occur and really are not structures, and reading the screen programs
+from their roots dissolved all of them. The fourth was corrected by
+[Glen Harris](https://github.com/glenharris), who designed the thing. See
+[`docs/FORMAT.md`](docs/FORMAT.md) sections 4d, 4f, 4g and 4k, which keep the
+old readings visible next to what replaced them.
 
 Full detail, including the negative results worth not repeating, is in
 [`docs/FORMAT.md`](docs/FORMAT.md).
@@ -132,15 +150,19 @@ Full detail, including the negative results worth not repeating, is in
 
 Pointers decompile as `region + delta` rather than raw offsets, so the compiler
 recomputes them against wherever things end up. That is what makes a length
-change survivable: `roundtrip.py --resize` lengthens a name, and all 3,171
+change survivable: `roundtrip.py --resize` lengthens a name, and all 5,015
 symbolic pointers come back referring to the same things they referred to before.
+On arch 9 the resize check also requires all 135 rendered screens to remain
+pixel-identical and all 200 original class-5 IR records to expand exactly.
 
 **This proves internal consistency, not that a remote would accept the result.**
 A pointer hidden inside a region that is still opaque is invisible to this code
-and would be silently left behind by exactly the kind of edit above. Sections 1,
-2, 3, 4, 8, 16 and 17 and all 114 record bodies are still opaque, so treat
-length-changing edits as an experiment rather than a feature, and read the safety
-note below before going anywhere near hardware.
+and would be silently left behind by exactly the kind of edit above. That is not
+hypothetical: it has now happened twice, with the trailer checksum and with the
+infrared records, and both times an outside reader found it rather than any test
+here. Sections 1, 2, 3, 4 and 16 and most of the 114 record bodies are still
+opaque, so treat length-changing edits as an experiment rather than a feature,
+and read the safety note below before going anywhere near hardware.
 
 ## The main thing standing in the way
 
@@ -217,15 +239,20 @@ write experiments on a remote you care about.**
 ## Credit and prior work
 
 The format was designed by [@glenharris](https://github.com/glenharris), who has
-been generous with guidance in the concordance thread. Neither he nor anyone else
-credited here is responsible for anything claimed in this repository.
+been generous with guidance in the concordance thread and in this repository's
+discussions. Neither he nor anyone else credited here is responsible for anything
+claimed here. Two things in this document are his directly: `0x7C` is
+`QueueDelay`, a per-device queued delay rather than the quantity an earlier
+revision called it, and an instruction is 24 bits wide with a fixed pattern that
+can run through all three bytes, which is why this repository no longer talks
+about 59 second-level sub-opcodes.
 
 [@dannybloe](https://github.com/dannybloe)'s
 **[harmony-explorations](https://github.com/dannybloe/harmony-explorations)** is a
 parallel effort, MIT licensed, and further along as a general codec: it covers
 architectures 8, 9, 12 and 14 with one parser. No code has moved between the two
-projects in either direction, and the licence boundary is the reason. Two findings
-here are his and are used with attribution rather than rediscovered:
+projects in either direction, and the licence boundary is the reason. These
+findings are his and are used with attribution rather than rediscovered:
 
 - **how a glyph is packed on arch 9** - two bits to a pixel, with run and literal
   commands - which he published on 7 August 2026 and which the renderer in
@@ -233,8 +260,20 @@ here are his and are used with attribution rather than rediscovered:
 - **that the trailer `u16` is checked at all.** His parser is what showed that
   this project's first edited configs were internally invalid; the seed and the
   algorithm were then confirmed against the 525 firmware and all five samples here
+- **the class-5 infrared layout**, header to body to symbol table to symbol
+  block, published and checked against firmware. The relocation closure built on
+  top of it here is this project's, and it exists because his reader refused a
+  file that everything here had passed
+- **one infrared group is one device**, and the shape of the mode and page
+  records this repository's screen walker now reads from
+- **the section 17 picture bank is self-verifying**, which is how an appended
+  label edit here was caught leaving the file without a bank at all
 
-He also measured the server claim corrected at the top of this file.
+He independently verified this project's arch-9 screen firmware lead against his
+own 525 image, identified the panel as SSD1306-family from the `0xB0 | page`
+command, and found that opcode 23 brackets its transfer with `LATE` bit 2 as
+well as the `LATA` bit 5 reported here. He also measured the server claim
+corrected at the top of this file.
 
 This work leans directly on
 **[concordance / libconcord](https://github.com/jaymzh/concordance)**
@@ -253,6 +292,18 @@ This work leans directly on
 
 Where a file here documents or reimplements something learned from that codebase,
 it says so at the point it does.
+
+Samples came from people who had no reason to bother:
+[@kkong42](https://github.com/kkong42) posted eleven 880, 885 and 890 configs
+and, for one 885 in daily use, wrote out every device, activity and custom
+button label to go with it, which is the closest thing this repository has to
+ground truth. [@dmrzzz](https://github.com/dmrzzz) offered to press buttons on
+hardware. Earlier samples came out of the
+[concordance thread](https://github.com/jaymzh/concordance/issues/66).
+
+The short version of all of the above: a good deal of what this repository
+documents was worked out by other people first, and where that is the case it
+should say so on the line where the claim is made, not only here.
 
 ## Licence
 

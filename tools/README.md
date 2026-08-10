@@ -44,14 +44,25 @@ at - and then resolves each against the new layout. Pass `--absolute` to
 
 That is what `roundtrip.py --resize` checks: it lengthens a name, which shifts
 every section after it, then confirms the rebuilt config has the same region
-structure and the same *symbolic* pointers as before.
+structure and the same *symbolic* pointers as before. On arch 9 it does two more
+things, and both were added because the pointer comparison on its own said
+everything was fine when it was not:
+
+- it renders all 135 mode pages before and after and requires the pixels to
+  match, which is what exposed the font-set, mode-page, value-map and
+  non-row picture pointers;
+- it expands all 200 class-5 IR records before and after and requires the
+  carrier, the slots including the NULLs, and every duration word to match,
+  which is what exposed the IR pointer graph. See `docs/FORMAT.md` section 4n.
 
 **The caveat that matters.** All of that covers only the pointers this code can
-see. Sections 1, 2, 3, 4, 8, 16 and 17 are still opaque, as are all 114 record
-bodies, and anything pointer-shaped in there is just hex being copied. A
-length-changing edit will leave such a pointer aimed at whatever moved into its
-place, and nothing here will notice. Length-neutral edits - retargeting a key,
-renaming something to a name of the same length - do not have that problem.
+see, and twice now the ones it could not see were the ones that mattered. On
+arch 9 sections 1, 2, 3, 4 and 16 are still opaque, along with most of what sits
+inside the 114 record bodies; on arch 8 almost everything is. Anything
+pointer-shaped in there is hex being copied. A length-changing edit will leave
+such a pointer aimed at whatever moved into its place, and nothing here will
+notice. Length-neutral edits, retargeting a key or renaming something to a name
+of the same length, do not have that problem.
 
 ## Offline analysis
 
@@ -144,6 +155,57 @@ the X96 group with mode 111 without writing a config or contacting a remote:
 python tools/analyze_525_ir.py
 ```
 
+`class5_ir_encoder.py` goes the other way. It takes already-normalised duration
+words and emits a self-contained, relocatable class-5 record, preserving all
+three header pointer slots including the NULLs. It packs literally, one symbol
+per unique complete stream, which is deliberately simpler than what Logitech's
+compiler does. It does not turn a single physical capture into press and repeat
+streams, and it does not put anything into a config.
+
+`verify_525_class5_encoder.py` is the check on it: repack the six learned X96
+signals out of the public sample and require an exact decode afterwards, plus
+twelve inputs it has to refuse.
+
+```sh
+python tools/verify_525_class5_encoder.py
+python tools/verify_525_class5_encoder.py --bundle class5-vectors.json
+```
+
+The byte layout is credited to Danny Bloemendaal's `harmony-explorations` at
+`a6516c7`. The literal packing and the X96 golden harness are this project's.
+
+`clone_525_device.py` is an arch-9-only, offline fifth-device proof. It clones
+the smallest existing device (`Amplifier Genius`, IR group 0 / mode 73) as IR
+group 4 / mode 114, duplicates only its eight action lists, adds a second page
+to the Devices menu, and shares the donor's IR records and two screen programs.
+It refuses to overwrite its source or an existing output:
+
+```sh
+python tools/clone_525_device.py --out cloned.EZHex --proof cloned-proof.json
+```
+
+For the narrower class-5 placement proof, command 0 of the clone can instead
+point to a newly packed copy of the known X96 record 9 while commands 1 through
+7 remain shared:
+
+```sh
+python tools/clone_525_device.py --place-x96-record-9 \
+  --out cloned-with-ir.EZHex --proof cloned-with-ir-proof.json
+```
+
+The resize and clone regressions expand all 200 original class-5 records before
+and after relocation. The header/body/table/symbol-block layout and independent
+reader are credited to Danny Bloemendaal's `harmony-explorations`; the literal
+packer, placement construction and exact-corpus regression are from this
+project.
+
+The output is a structural artifact, not hardware-safe. It deliberately keeps
+the same visible name, does not invent a state-variable identity, and omits the
+three compiler-era page-list copies that Danny's firmware audit established are
+unread. Danny Bloemendaal is credited for the device-as-IR-group model, mode
+reader, value-map layout and independent codec oracle. The minimal clone layout
+and proof harness are this project's work.
+
 `edit_525_label.py` is a deliberately bounded offline authoring proof. It
 changes the public sample's one shared `X96 Box` glyph string to the same-length
 `X96 BOX`, rebuilds both the firmware trailer checksum and the EZHex checksum,
@@ -166,5 +228,28 @@ string without moving an existing section or payload:
 python tools/relocate_525_label.py --out relocated.EZHex --proof relocated-proof.json
 ```
 
-Both scripts are arch-9/Harmony-525-specific. Screen opcode meanings are not
+**Its output should not be used, and the reason is worth reading.** Appending
+puts the new string between the last picture in section 17 and the trailer.
+Section 17 is self-describing: its four pictures run back to back, so their
+total length is an invariant the file states about itself, and `@dannybloe`'s
+reader checks it. Under that check the edited file has no picture bank at all.
+Every test written here passed it: both checksums, all 25 pointer users, the
+round trip, the rendered pages. None of them knew the bank existed.
+
+`relocate_525_label_in_place.py` does the same edit without appending anything.
+It grows the inline string by one byte into the instruction behind it, rewrites
+that instruction as a jump to a suffix of the string, and leaves the file the
+same length. Nine old users are preserved as aliases into the longer string and
+24 external pointers keep their targets:
+
+```sh
+python tools/relocate_525_label_in_place.py --out relocated.EZHex
+```
+
+The container size, the end address, the section table and the position of the
+picture bank all come back unchanged, which is what the appending version could
+not manage. It is still an offline structural proof. Neither file has been
+written to a remote.
+
+All of these are arch-9/Harmony-525-specific. Screen opcode meanings are not
 assumed to carry over to architectures 8, 12 or 14.
