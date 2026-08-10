@@ -1986,9 +1986,10 @@ same algorithm found in 525 firmware:
 | 890, protocol 10 | `0x5AC7` | `0x5AC7` |
 
 Which is the strongest evidence so far that 4m is a property of the format and
-not of one remote. It has now been checked on protocols 8, 9, 10 and 14, across
-twelve configs from four different owners, having been read out of exactly one
-firmware image.
+not of one remote. It has now been checked on protocols 8, 9, 10 and 14, and it
+holds on **sixteen of the seventeen configs in this repository**, from four
+different owners, having been read out of exactly one firmware image. The
+seventeenth is the suspect 890 dump described below.
 
 **None of this is support for those protocols.** The decompiler still refuses
 them, and the interesting question of what is inside is untouched. It is only
