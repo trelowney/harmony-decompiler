@@ -286,10 +286,13 @@ findings are his and are used with attribution rather than rediscovered:
   label edit here was caught leaving the file without a bank at all
 
 He independently verified this project's arch-9 screen firmware lead against his
-own 525 image, identified the panel as SSD1306-family from the `0xB0 | page`
-command, and found that opcode 23 brackets its transfer with `LATE` bit 2 as
-well as the `LATA` bit 5 reported here. He also measured the server claim
-corrected at the top of this file.
+own 525 image, and found that opcode 23 brackets its transfer with `LATE` bit 2
+as well as the `LATA` bit 5 reported here. He then corrected his own first
+reading of the panel, and this repository's copy of it: `0xB0 | page` is shared
+by several controller families and does not identify an SSD1306. The whole
+bring-up sequence puts it in the **ST7565 / UC1701 class**, and the SSD1306's
+mandatory charge-pump command appears nowhere in the firmware. He also measured
+the server claim corrected at the top of this file.
 
 This work leans directly on
 **[concordance / libconcord](https://github.com/jaymzh/concordance)**

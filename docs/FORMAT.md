@@ -1192,10 +1192,36 @@ commits, on this architecture.
 > trust. First, opcode 23 brackets its transfer with **`LATE` bit 2 as well as
 > `LATA` bit 5**, and restores both; an earlier revision here named only
 > `LATA.5`, which is not enough to drive the panel by hand. Second, `0x03898`
-> emits `0xB0 | page`, the page-address command of the **SSD1306 family** of
-> monochrome controllers. That settles what a "row" is: not a menu line and not
-> a touch region, but one of the panel's eight 8-pixel pages. Eight of them make
-> the 525's 96x64 screen.
+> emits `0xB0 | page`, a page-address command. That settles what a "row" is: not
+> a menu line and not a touch region, but one of the panel's eight 8-pixel
+> pages. Eight of them make the 525's 96x64 screen.
+
+> **A third correction, also his, to what that one command implies.** An earlier
+> revision here read `0xB0 | page` as identifying an **SSD1306**. It does not:
+> several controller families share that command, so one byte cannot name a
+> part. Danny followed the panel's whole bring-up sequence instead, and it comes
+> out **ST7565 / UC1701 class**.
+>
+> That sequence is in this repository's own image too, at `0x0357A..0x03600`: a
+> run of `MOVLW` values fed to the one-byte command writer at `0x03C12`.
+>
+> ```
+> C0  common output normal        A2  LCD bias
+> 89  RAM address control         25  resistor ratio
+> 81  set contrast, plus a value  2F  power control, all three stages
+> 24  resistor ratio              F8  booster ratio, plus a value
+> E2  internal reset              40  display start line 0
+> AE  display off                 AF  display on
+> A4  all points normal           A5  all points on
+> ```
+>
+> Every one of those is an ST7565 or UC1701 command, `0x89` sitting in the
+> `0x88..0x8F` RAM-address-control band that UC1701 defines and the SSD1306 has
+> nothing at. **The SSD1306's own mandatory bring-up is missing**: no `0xA8`
+> multiplex ratio, no `0xD5` clock divide, no `0x8D` charge pump. `MOVLW 0x8D`
+> does not occur **anywhere in the 32 KiB image**, which is a stronger statement
+> than not finding it in one routine. Naming the exact part would still mean
+> getting the panel out of the case; the family is as far as the firmware goes.
 
 The operands agree from the data side without the firmware: the opcode 3 that
 follows every opcode 22 begins `00, 8*row, 00, 8*row, 96, 8`, in all 1,080.
@@ -1537,6 +1563,43 @@ read  : 65 B = [0x00 report id][64 B payload]
 **Validation:** the time read this way, `2024-02-21 14:36:19 dow=3`, is identical
 to `concordance --get-time` -> `2024/02/21 Wed 14:36:19`. The transport is
 demonstrably correct, so subsequent reads can be trusted.
+
+### The word reply says `C2` when it means `C3`, and the firmware says why
+
+Worth writing down, because a fresh implementation gets this wrong and the
+symptom is a value of zero rather than an error. The reply to `B3` is
+`C2 <kind> <hi> <lo>`: four bytes under a header whose low nibble claims two.
+libconcord has carried the warning since 2007 - *"the 880 responds with C2
+rather than C3"* - and reads `(rsp[2] << 8) | rsp[3]` anyway. `tools/hid_query.py`
+inherited that and has been correct since its first commit.
+
+The 525's own firmware closes it. The `0xB0` handler sets state 10 at `0x03090`
+and takes the selector into `0x27E`; state 10 runs the executor at `0x03412`.
+That executor emits `0xC2`, echoes
+the selector, clears its two result bytes, and **only `kind=01` enters a body**:
+
+```
+03414:  MOVLW 0xC2               the header, hardcoded
+03426:  MOVF 0x7E, W             the selector
+03428:  XORLW 0x01
+0342A:  BNZ 0x03458              anything but STATE skips the body
+0344C:  CALL 0x04B72             the accessor
+03450:  MOVFF PRODL, 0x710
+03454:  MOVFF PRODH, 0x711
+03458:  MOVFF 0x711, ...         high byte out first
+0345E:  MOVFF 0x710, ...         then the low byte
+```
+
+So a decoder that trusts the length nibble reads the high byte as the value and
+throws the low byte away. On this remote the high byte is always zero and every
+value observed lives in the low one, which is exactly how a working reader and
+a broken one produce the same shape of output. The byte-return path clears
+`PRODH` deliberately, so the zero is not padding either.
+
+That also settles the negative side: `kind=07` never reaches the body, which is
+why arbitrary data RAM cannot be read on this architecture no matter what
+address is asked for. Confirmed on hardware at `0x02DE`, the keypad scan-code
+candidate, which answers `C2 07 00 00`.
 
 ## 5c. Config names are addresses of live state variables
 
@@ -2001,6 +2064,135 @@ different base", which is a much shorter distance than it looked.
 > sibling is exactly self-consistent under the same reading. Either this reading
 > is incomplete in a way that spares one file, or that dump is damaged. A second
 > read of the same remote would say which, and has been asked for.
+>
+> **It was damaged, and the damage has a shape.** See 5k.
+
+## 5k. The 890 read path duplicates 54-byte blocks - SOLVED
+
+[@kkong42](https://github.com/kkong42) re-read both of his Harmony 890s and
+uploaded the results to issue #28. That second read answers the question above
+and then some.
+
+The healthy unit reads the same twice: the payload is byte-for-byte what it was,
+and the only difference is that the tail after `DKDK` came back as 108 zero bytes
+instead of 702. **Padding after the end marker is not a stable file length**, so
+two dumps of one config can differ in size and both be right.
+
+The other unit failed both times, and comparing the two failures is what gives
+it away. Align the two dumps against each other and they agree everywhere except
+at twelve points, and at every one of them they resynchronise after an exact
+multiple of 54 bytes. Nothing in between is corrupted; whole blocks are in the
+wrong place.
+
+They are duplicates. **At each divergence the 54 bytes are an exact copy of the
+54 bytes in front of them**, so the reader has occasionally delivered the same
+chunk twice. Remove them and both dumps repair:
+
+| dump | bytes too many | duplicate blocks | after removal |
+|---|---:|---:|---|
+| first read | 864 | 16 | 396,225 bytes |
+| second read | 108 | 2 | 396,225 bytes |
+
+Both repairs land on **the same SHA-256**, `0aacc332796db449...`, with `DKDK` at
+`0x60BBD`, exactly where that file's own header said it would be, and a trailer
+checksum of `0x5DE1`, exactly the value stored in the file. Two independent bad
+reads converging on one blob that satisfies two constraints it was not fitted to
+is not a coincidence: that is the remote's real config, and it was never
+damaged. The reader is.
+
+`tools/repair_890_dump.py` does this. It refuses unless the result reproduces
+both the stated end address and the stored checksum, so it cannot quietly hand
+back a plausible-looking blob.
+
+Where 54 comes from is not known. It is not one of libconcord's response
+payload sizes (1, 2, 3, 4, 5, 6, 14, 30, 62), so it is not one dropped USB
+report. The 890 is also the model Concordance reads twice, 1,665 KiB then
+1,664 KiB, before writing about 390 KiB, and it is the model whose firmware read
+libconcord does not implement at all. Something about that remote's read path is
+different, and this is a measurement of it rather than an explanation.
+
+## 5l. Arch 8 stores the build time twice, and that is the whole diff
+
+Two of @kkong42's H880 configs share a trailer checksum and are not the same
+file (4m). They differ in exactly four bytes:
+
+```
+0x0011A1  22 -> 30      0x01E237  22 -> 30
+0x0011A8  19 -> 1F      0x01E238  19 -> 1F
+```
+
+The second pair is inside base slot 3, whose eleven-byte framed record
+[@dannybloe](https://github.com/dannybloe) placed and published: cookie `0xADDF`,
+then second, minute, hour, day, weekday, month, year offset, then `0xEFBF`.
+Reading it gives the answer:
+
+```
+DF AD 22 19 15 0E 04 04 19 BF EF    2025-05-14 21:25:34, Wednesday
+DF AD 30 1F 15 0E 04 04 19 BF EF    2025-05-14 21:31:48, Wednesday
+```
+
+Six minutes apart. **Nothing was changed between them**: no device, no activity,
+no delay, no ordering. They are the same configuration compiled twice, and the
+XOR checksum cancels because one logical edit lands twice at the same word
+parity.
+
+The first pair, 118 kB earlier, is the same two values again - `22 00` and
+`19 00` as little-endian words, each followed by `3B 00`, which is 59 - and it
+sits in a region this decompiler still passes through as opaque. So the seconds
+and minutes are stored twice, in two different shapes, and only one of the two
+is understood.
+
+## 5m. The 525 can learn infrared, and the firmware says how - NOT TESTED
+
+This one starts with a correction of the obvious kind: **the protocol is not new
+and it is not ours.** libconcord has had it since 2007.
+
+```c
+#define COMMAND_START_IRCAP  0x70
+#define COMMAND_STOP_IRCAP   0x80
+#define RESPONSE_IRCAP_DATA  0x90
+```
+
+`CRemote::LearnIR` writes `0x70`, reads `0x90` reports until the signal has been
+quiet long enough, writes `0x80`, and drains to `RESPONSE_DONE`. Its inner loop
+already recovers the carrier frequency and the mark/space list, and
+`concordance --learn-ir` exposes the whole thing, gated behind a Logitech job
+file listing the key names to learn. All of that is © Phil Dibowitz and Kevin
+Timmerman.
+
+What nobody knew is whether the **525** implements any of it. It does, and the
+path is all in this repository's firmware image:
+
+| address | what it does |
+|---|---|
+| `0x02F56` | command `0x70` sets state 5, clears the buffers at `0x0500` and `0x0542`, sets the toggle at `0x0584` |
+| `0x060BE` | the producer. Gates on state 5, takes the buffer the toggle is not on, and writes status, length, `0x90`, a sequence that steps by `0x10`, then big-endian `u16` samples |
+| `0x015A2` | the transport. Zero-fills a 64-byte report, repeats the real length in byte 63, points EP1 IN at buffer + 2 and arms it |
+| `0x030F8` | command `0x80` moves to state 6; states 6 and 7 share the `F0 70` acknowledgement |
+
+Two things follow that matter more than the addresses.
+
+**The reports are pushed, not answered.** Nothing polls. The producer fills a
+buffer whenever the capture hardware has samples, and the transport arms an
+interrupt-in report. A host that writes `0x70` and then waits for one reply per
+request reads one report and concludes the remote is broken. Danny Bloemendaal
+([@dannybloe](https://github.com/dannybloe)) described exactly this asynchronous
+push mechanism on architectures 12 and 14 in his section 98. This is the same
+mechanism on architecture 9 with different buffer addresses, and his description
+is what made it recognisable here.
+
+**The samples are timings, and this repository already knows what to do with
+them.** 4n's duration words are microseconds with bit 15 as the mark flag, and
+the carrier is stored per infrared group. A learned signal and a stored one are
+the same kind of object, which makes this the missing first link in the button
+map: press a key on the original remote, capture it, match it against the 200
+expanded class-5 records, and the command index names the key.
+
+> **Nothing here has been sent to a remote.** `0x70` and `0x80` do not touch
+> flash - they are runtime state - but they are still writes, and this project's
+> tools refuse writes on purpose. `tools/hid_query.py`'s allowlist does not
+> contain them, and this section is not a reason to add them. It is a map of
+> what is possible, not an instruction.
 
 ## 6. Prior art
 
@@ -2079,6 +2271,7 @@ See [`tools/`](../tools/). All are plain `python <script>.py`.
 | `compare_keytables.py` | compare tables across configs |
 | `keymatrix.py` | test the keyboard-matrix hypothesis, render the grid |
 | `diff_samples.py` | diff sample configs against each other |
+| `repair_890_dump.py` | remove the duplicated 54-byte blocks a Harmony 890 read leaves behind; refuses unless the result reproduces the stated end address and the stored checksum |
 | `verify_525_semantics.py` | re-assert every claim in 4k and 4l against the sample; `--firmware` pins the handlers too |
 | `render_525_screens.py` | draw all 135 menu pages and the five font sheets as BMPs |
 | `analyze_525_ir.py` | expand the class 5 IR dictionaries, decode NEC, correlate with mode bindings |

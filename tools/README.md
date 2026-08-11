@@ -80,6 +80,7 @@ of the same length, do not have that problem.
 | `find_text.py` | search for device names across encodings |
 | `hexdump.py` | hexdump of a region |
 | `diff_samples.py` | diff configs against each other |
+| `repair_890_dump.py` | undo the duplicated 54-byte blocks a Harmony 890 read leaves behind |
 | `manual_layout.py` | pull button labels with coordinates out of a manual PDF |
 
 `_paths.py` is a shared helper, not a script.
@@ -89,9 +90,8 @@ it does not report 51 entries at `0x0000FB`, the detector is broken rather than
 the input being interesting.
 
 `compare_keytables.py` and `diff_samples.py` need the arch 8 samples
-(720/785/88x), which are not redistributed here. Download
-[EZHex.Samples.zip](https://github.com/user-attachments/files/22412763/EZHex.Samples.zip)
-from the concordance thread and unpack it into `samples/arch8/`.
+(720/785/88x). Those are in `samples/arch8/` now, mirrored from what their owners
+uploaded to this repository's issues and to the concordance thread.
 
 `manual_layout.py` needs `pypdf` and a manual PDF, also not redistributed.
 Logitech's documentation server is still up:

@@ -45,6 +45,16 @@ What would answer it:
   every activity and every custom button label including the blank positions. It
   is arch 8 rather than arch 9, but it is the first sample in this repository
   where somebody can say what the remote is supposed to be doing
+- **going round the outside, through infrared.** The remote will learn a signal
+  and hand back its carrier and timings, and the same timings are already stored
+  in the config against a command index that a key binding names. So: press a
+  button on the *original* device remote, capture it, match it, and the config
+  says which key sends it. That does not identify a key that sends no infrared,
+  and it cannot separate two keys that send the same command, but it is the first
+  route here that does not need a document nobody has. The protocol is
+  libconcord's and the 525's own firmware implements it -
+  [FORMAT.md §5m](FORMAT.md#5m-the-525-can-learn-infrared-and-the-firmware-says-how--not-tested).
+  Nothing has been tried on hardware yet
 
 The assignment appears to be **shared across models**: arch 8 (720/785/88x) uses
 the same code groups in the same order, 41 of the 525's 51 codes overlapping
@@ -342,7 +352,7 @@ Kept here so nobody spends an evening on them twice.
 |---|---|
 | Can key presses be read over USB? | No. Three approaches, all fail - [§5d](FORMAT.md#5d-identifying-keys-over-usb-is-impossible--closed) |
 | Can configs be diffed to isolate a change? | No. A small logical change moves 73-84% of bytes - [§5](FORMAT.md#negative-result-diffing-samples-does-not-work) |
-| Is `config_base` the same across architectures? | Yes, `0x20000` on both arch 8 and arch 9 |
+| Is `config_base` the same across architectures? | No. `0x20000` on arch 8 and arch 9, `0x30000` on protocols 10 and 14 - [§5j](FORMAT.md#5j-config_base-is-not-always-0x20000--two-more-protocols). This row said "yes" until the 890 and 650 samples arrived |
 | Are pointers 32-bit? | No, 24-bit little-endian |
 | Does the remote need a libusb/Zadig driver swap? | Not for the 525 - it runs on the native HID stack. That applies to the 900/1000 |
 | Does EEPROM/RAM/REGISTER hold anything readable? | No, only `kind=01` STATE returns data, and only in word mode |
