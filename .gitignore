@@ -21,3 +21,6 @@ Thumbs.db
 
 # graphify, a local code-graph tool; the graph is rebuilt from the source
 graphify-out/
+
+# strings_blob.py writes this next to wherever it is run
+blob_strings.txt
