@@ -83,11 +83,20 @@ So the 525 needs its own measurement. On the evidence so far the ranking is:
 1. **Buzz out a 525 board.** This is what worked, it took one contributor one
    evening, and the arch 8 write-up says exactly which two numbers per key to
    record so nobody repeats the false start of measuring only one pad.
-2. **Infrared, going round the outside.** Danny Bloemendaal has this working on
-   arch 12 and arch 14 by decoding the stored signal and matching it against the
-   command catalogue and button map of the account that generated the config,
-   his `reference/button-maps.md`. It needs an account you control, so it is a
-   route for somebody's own remote rather than for a contributed sample.
+2. **Infrared, going round the outside.** Press a key with a receiver pointed at
+   the remote and match the burst against the config's own IR records, which
+   names the scan code without writing anything to the remote and without an
+   account. `tools/ir_keymap_oracle.py` does the matching and, more usefully,
+   says in advance how many keys a given config can name and which activity to
+   press each one in. On the 525 sample here that is 41 of the 50 keys: 8 send
+   nothing at all, and one falls out by elimination. Not yet run on hardware.
+
+   Danny Bloemendaal reached the same place from the other side on arch 12 and
+   arch 14, decoding the stored signal and matching it against the command
+   catalogue and button map of the account that generated the config, his
+   `reference/button-maps.md`. That route needs an account you control; this one
+   uses the config as its own catalogue, so it also works on a contributed
+   sample.
 3. **Anything from Logitech.** Still the cheapest answer if it exists.
 
 Sniffing over USB is now understood well enough to rule out permanently rather
