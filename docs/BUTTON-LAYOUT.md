@@ -81,6 +81,8 @@ fragment - so the per-key x is lost even though the row structure is solid.
         Menu   Info
         Exit   Guide
 
+        Mute   previous channel
+
           [+]                 [+]
          rocker    OK       rocker         labelled Vol and Ch
           [-]                 [-]
@@ -93,8 +95,13 @@ fragment - so the per-key x is lost even though the row structure is solid.
          *   0   #                         clear / enter
 ```
 
-Mute and previous-channel appear in the manual's callout column but not in the
-diagram itself, so their position is not established here.
+This used to say that mute and previous-channel appear in the manual's callout
+column but not in the diagram, so their position was not established.
+@kkong42 pointed out that they are in fact both in the diagram on page 5, and he
+is right: mute sits directly below Exit and previous-channel directly below
+Guide. The text extraction missed them because neither is a text run. Mute is
+set as a rotated glyph and previous-channel is a bare curved arrow, so a tool
+reading the PDF's text layer sees nothing there at all.
 
 Which rocker is volume and which is channel is **not** resolved by the
 extraction: the label fragment comes out merged as `Vol Ch` on the left of the

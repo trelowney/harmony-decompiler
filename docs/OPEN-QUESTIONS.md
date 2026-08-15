@@ -11,6 +11,16 @@ issue or a discussion.
 **This is the blocker.** Everything else can proceed without it; a usable editor
 cannot.
 
+> **Answered for arch 8 on 12 August 2026, still open for the 525.**
+> [@kkong42](https://github.com/kkong42) opened an 880 and an 885 and buzzed out
+> both pads of every key position. That settles the board as 4 inputs by 16
+> lines with `scan = (line - 1) * 4 + input`, names four positions outright and
+> the rest to one relabelling out of 11,520. [FORMAT.md §5n](FORMAT.md) has it
+> and `tools/verify_arch8_key_matrix.py` reproduces it from the samples here.
+> **The numbers do not carry to the 525**, whose matrix is a different shape, so
+> everything below still stands for arch 9. What the arch 8 result does supply
+> is one method that works and a clear warning about one that cannot.
+
 Key codes are keyboard-matrix coordinates, `code = 0x80 | (row << 3) | column`,
 giving a clean 8 x 7 grid with 50 occupied positions and no collisions
 ([FORMAT.md §5g](FORMAT.md#5g-key-codes-are-keyboard-matrix-addresses)). The
@@ -36,8 +46,11 @@ What would answer it:
   configuration software once
 - **a service manual or schematic** for any remote in this family
 - **a photo of a bare PCB** - enough to trace which switch sits on which row/column
-- **buzzing out a matrix with a multimeter** - definitive, and only needs doing
-  once for one model
+- **buzzing out a matrix with a multimeter** - definitive. This is what answered
+  arch 8. It needs doing once **per model**, not once for the family, and it
+  needs **both** pads of each key: the first pass on the 880 recorded one pad
+  only, which produces four disconnected groups instead of a matrix and cannot
+  address more than 16 keys. Record two nets per key and it falls out
 - **a config whose key assignment is already known** - e.g. one built with a known,
   deliberately unusual button layout, so codes can be matched against intent.
   [@kkong42](https://github.com/kkong42) supplied close to this on 10 August 2026
@@ -56,12 +69,30 @@ What would answer it:
   [FORMAT.md §5m](FORMAT.md#5m-the-525-can-learn-infrared-and-the-firmware-says-how--not-tested).
   Nothing has been tried on hardware yet
 
-The assignment appears to be **shared across models**: arch 8 (720/785/88x) uses
-the same code groups in the same order, 41 of the 525's 51 codes overlapping
-([§5f](FORMAT.md#5f-key-codes-are-shared-across-architectures)). So solving it for
-*one* remote in the family carries most of the way to the others - and arch 8
-layouts are far better documented publicly. A 720 or an 880 is probably an easier
-target than a 525.
+**This section used to end by saying the assignment is shared across models**, on
+the grounds that arch 8 uses the same code groups in the same order with 41 of
+the 525's 51 codes overlapping, and that solving one remote in the family would
+carry most of the way to the others. The 880 is now solved and it does not
+carry. The 525 has printed digits 3, 5, 6 and 9 and contains none of 58, 61, 59
+or 62, which is what those buttons are on an 880. What the two architectures
+share is the numbering and the ordering; the boards are not even the same shape,
+4 by 16 against 8 by 7. See [§5n](FORMAT.md) and [§5f](FORMAT.md).
+
+So the 525 needs its own measurement. On the evidence so far the ranking is:
+
+1. **Buzz out a 525 board.** This is what worked, it took one contributor one
+   evening, and the arch 8 write-up says exactly which two numbers per key to
+   record so nobody repeats the false start of measuring only one pad.
+2. **Infrared, going round the outside.** Danny Bloemendaal has this working on
+   arch 12 and arch 14 by decoding the stored signal and matching it against the
+   command catalogue and button map of the account that generated the config,
+   his `reference/button-maps.md`. It needs an account you control, so it is a
+   route for somebody's own remote rather than for a contributed sample.
+3. **Anything from Logitech.** Still the cheapest answer if it exists.
+
+Sniffing over USB is now understood well enough to rule out permanently rather
+than just report as negative: see the addition to
+[§5d](FORMAT.md#5d-identifying-keys-over-usb-is-impossible--closed).
 
 ---
 

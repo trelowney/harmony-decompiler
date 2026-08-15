@@ -1676,6 +1676,20 @@ Byte mode returns zeros everywhere, consistent with arch >= 8 using word variant
 presses. The meaning of codes `0x81-0xB9` has to come from the config or the
 hardware, not from the USB interface.
 
+**Why, and it is worth knowing.** The three results above are black box. Danny
+Bloemendaal reached the same negative on a Harmony 600 and then read the reason
+out of the firmware: in USB mode the keypad handler never runs, so no scan code
+is ever computed. What the part does instead is park every row line low at once
+and enable interrupt on change on the column port, so a key wakes it without a
+scan. His section 48. Credit is his; it is quoted here because it explains our
+result rather than repeating it.
+
+On arch 14 that parked state leaks a quarter of the answer, because a press
+still pulls its own column down and the column is readable: `(code - 1) mod 4`.
+That does not carry to the 525, whose scanner has a single sense line on `PORTB`
+bit 7 rather than a column port, so there is nothing equivalent to observe. See
+5h.
+
 ## 5e. There are several key tables - one per activity
 
 Detector: runs of 4-byte groups terminated by `0x7F`, ranked by **ratio of unique
@@ -1744,7 +1758,7 @@ like it was smart"* ([discussion
 `0x06` as an unexplained 51st entry; it is not an anomaly, it is a different kind
 of thing.
 
-## 5f. Key codes are shared across architectures
+## 5f. Key codes are shared across architectures, buttons are not
 
 Arch 8 turns out to carry **two** distinct key tables, which is worth stating
 plainly because an earlier revision of this document conflated them:
@@ -1787,12 +1801,19 @@ arch 9:  89 8B 8A 8D 8C 06 8F 8E 81 83 82 85 84 87 86  99 9A 9B 9C ...
 Same groups (`0x8x` -> `0x9x` -> `0xAx` -> `0xBx`), same order within them, with a
 few codes inserted or omitted.
 
--> **The code <-> physical key assignment is shared across models**, and the table
-order is canonical (Logitech's standard key ordering).
+-> **What is shared is the ordering and the event namespace, not the buttons.**
+The table order is canonical, Logitech's standard key ordering, and 41 codes
+appear in both architectures as an ordered subsequence.
 
-**Practical consequence:** obtaining the mapping for *one* model in this family
-would carry most codes over to the 525. Arch 8 = Harmony 720/785/88x, whose key
-layouts are publicly documented.
+**This section used to end with the opposite conclusion.** It said the code to
+physical key assignment is shared across models, and that obtaining the mapping
+for one model in this family would carry most codes over to the 525. Both
+sentences were wrong, and section 5n is the measurement that refutes them: the
+880/885 mapping now exists, and it does not transfer. The 525 has printed digits
+3, 5, 6 and 9, but its scan set contains none of 58, 61, 59 and 62, which are
+what those buttons are on an 880. Equal numeric codes are electrical coordinates
+local to one board, and the three architectures do not even share a matrix
+shape. See 5g and 5n.
 
 ## 5g. Key codes are keyboard-matrix addresses - CONFIRMED FROM THE FIRMWARE
 
@@ -1815,16 +1836,27 @@ Harmony 525 matrix (`.` = not wired):
 ```
 
 **8 rows x 7 columns**, 50 occupied positions, zero collisions. Column 8 is
-unwired. Arch 8 (720/785/88x) fills column 8 and has gaps elsewhere - a
-different wiring, the same scheme. That is why codes agree across models.
+unwired.
+
+**This is the 525 only. Do not carry it to another architecture.** An earlier
+revision of this section read arch 8 as the same 8-wide grid with column 8
+filled in, and offered that as the reason codes agree across models. Arch 8 is
+not 8 wide. Its scanner is 4 inputs by 16 lines and its scan code is
+`(line - 1) * 4 + input`, measured on the board and read out of the firmware in
+5n. Arch 14 is 4 by 14 on the same scheme. Three architectures, three matrix
+shapes, and the codes agree because the numbering and the ordering are shared,
+not because the boards are.
 
 This section used to say "column 0-7, column 0 unwired". Same bits, and the
 config alone cannot choose between the two readings: no 525 code has
 `code & 7 == 0`, and running both conventions over the arch 8 samples produces
 equally ragged grids, so that data does not discriminate either. The firmware
 settles it for the 525 - the scan returns a column number that is a bit index
-**plus one** - and 5f's evidence that the encoding is shared then carries it to
-arch 8. See 5h.
+**plus one**. See 5h.
+
+That reading is for the 525 alone. This paragraph used to carry it on to arch 8
+through 5f's claim that the encoding is shared, and that inference is void:
+arch 8 is settled by its own firmware, differently, in 5n.
 
 The 51st entry of the main table is code `0x06` (target 155). It does not fit the
 matrix; it is not a physical key but a virtual event.
@@ -2193,6 +2225,172 @@ expanded class-5 records, and the command index names the key.
 > tools refuse writes on purpose. `tools/hid_query.py`'s allowlist does not
 > contain them, and this section is not a reason to add them. It is a map of
 > what is possible, not an instruction.
+
+## 5n. The arch 8 keypad is 4 by 16, and 4 keys are named outright - MEASURED
+
+The 880 and the 885 do not use the 525's matrix shape. Their keypad is
+**4 inputs by 16 lines**, and the scan code is
+
+```
+scan = (line - 1) * 4 + input        input 1-4, line 1-16, 0 means no key
+```
+
+which gives 63 usable positions and is why the tables hold codes 1 to 63.
+
+**This exists because @kkong42 opened two remotes and buzzed out the board.**
+He had an 880 and an 885 that had been robbed for parts over the years, and he
+recorded both pads of every key position, first as a 63 by 63 continuity table
+and then, when the first one turned out to cover only one of the two pads, as
+two nets per key. Discussion 6, comments `17981708` and `17992392`. Nothing
+below is derivable from the files alone.
+
+Reproduce with the samples in this repository:
+
+```
+python tools/verify_arch8_key_matrix.py
+```
+
+### The three layers, and how much each one settles
+
+| layer | what it gives |
+|---|---|
+| board | 55 populated cells of 4 x 16, 8 unpopulated, `K19` and `K60` on the 885 only |
+| configs | 53 codes on the 880 and 55 on the 885, the two extra being exactly 19 and 60 |
+| firmware | a `PORTB<4:7>` selector returning 1 to 4, and the combiner above |
+
+The firmware layer is optional and the images are not in this repository. Pass
+`--firmware-dir` at your own copies to run it. Both models carry the routine
+twice, in the application image and in the safe mode image, and it is the same
+code with its two variables at different offsets: `0x890A`/`0x8C26` in both
+application images, `0x4A0C`/`0x4D06` and `0x4A1A`/`0x4D14` in the safe mode
+ones. Searching for literal bytes finds only the safe mode pair, which is the
+copy that does *not* generate the codes a config holds, so the search is written
+as a template with the two file numbers as holes.
+
+### What is proved, and what is only argued
+
+Occupancy leaves **11,520** electrical relabellings, because five fully
+populated lines can be permuted without changing which cells are occupied. So
+most of the table below is not proved.
+
+Four positions are. Of the 24 ways to assign the pad letters to inputs only two
+survive both code sets, and both put **C on input 3 and D on input 4**; net 5
+can only be line 5 and net 15 only line 15. Every surviving relabelling
+therefore agrees on these:
+
+| PCB | scan | button |
+|---|---:|---|
+| K19 | 19 | Green, 885 only |
+| K20 | 20 | screen arrow down, Red on the 885 |
+| K59 | 59 | 6 |
+| K60 | 60 | Yellow, 885 only |
+
+The two colour keys were **predicted before the board was measured**, on the
+grounds that the 885 binds two codes the 880 does not and has two keys the 880
+does not. That prediction is now a consequence rather than a coincidence.
+
+The rest of the table is one relabelling out of 11,520, chosen because it agrees
+with Logitech's own K numbering on 49 of the 55 populated positions. That is a
+design argument and not a traced wire. Its six disagreements are exactly the
+non-sequential net 13/14 routing @kkong42 flagged himself: `K51`-`K54` land on
+53-56 and `K55`, `K56` on 51, 52. One operationally named key on any of the five
+ambiguous lines would settle it, or a trace from a line to the latch output.
+
+### The same scheme on arch 14, from the other side
+
+Danny Bloemendaal read the arch 14 scanner out of the firmware as **4 by 14**,
+`row * 4 + column`, 1 to 56, and separately pressed all 54 buttons of a Harmony
+600 while watching it over USB. His sections 13, 48 and 133. His per column
+census came out `[14, 14, 13, 13]`; the 885's per input census here is
+`[14, 14, 14, 13]`. Two architectures, two people, two methods, one scheme.
+
+The two methods turn out to be complementary rather than redundant, which is
+worth stating because it says what to do next. A live remote parks all of its
+row lines low and watches the column port for an interrupt, so a press reports
+its column and nothing else: `(code - 1) mod 4`, one quarter of the answer, and
+no amount of care gets further. Opening the case and buzzing the pads gets the
+half that method structurally cannot. @kkong42's first table happened to be the
+same quarter Danny can already read; his second one is the part nobody could
+have got any other way.
+
+### Do not carry the numbers to another model
+
+Scan codes are electrical coordinates local to one board. The 525 has printed
+digits 3, 5, 6 and 9 and does not contain 58, 61, 59 or 62, which is what those
+buttons are here. It has Replay, 0, Previous and Enter while several of their
+arch 8 values are absent from it entirely. Section 5f used to say the assignment
+carries across models and it does not.
+
+### The full table
+
+One relabelling of 11,520, as above. The four rows marked with a dagger are the
+proved ones.
+
+| scan | PCB | printed button |
+|---:|---|---|
+| 1 | K1 | Activities |
+| 2 | K2 | Power |
+| 3 | K3 | Help |
+| 4 | - | not populated |
+| 5 | K5 | Custom 1, top left |
+| 6 | K6 | Custom 3, second left |
+| 7 | K7 | Custom 5, third left |
+| 8 | K8 | Custom 7, bottom left |
+| 9 | - | not populated |
+| 10 | K10 | Device |
+| 11 | K11 | Mute |
+| 12 | K12 | screen arrow left |
+| 13 | K13 | Volume + |
+| 14 | K14 | D-pad left |
+| 15 | K15 | Volume - |
+| 16 | K16 | D-pad up |
+| 17 | K17 | Menu |
+| 18 | K18 | Exit |
+| 19 | K19 &dagger; | Green, 885 only |
+| 20 | K20 &dagger; | screen arrow down, Red on the 885 |
+| 21 | K21 | Stop |
+| 22 | K22 | Record |
+| 23 | K23 | Rewind |
+| 24 | K24 | Replay |
+| 25 | K25 | 1 |
+| 26 | K26 | 4 |
+| 27 | K27 | 8 |
+| 28 | - | not populated |
+| 29 | K29 | 7 |
+| 30 | - | not populated |
+| 31 | K31 | Clear |
+| 32 | K32 | 0 |
+| 33 | K33 | D-pad OK |
+| 34 | K34 | D-pad down |
+| 35 | K35 | D-pad right |
+| 36 | K36 | Channel - |
+| 37 | K37 | Channel + |
+| 38 | K38 | Media |
+| 39 | - | not populated |
+| 40 | K40 | Previous channel |
+| 41 | K41 | Glow |
+| 42 | - | not populated |
+| 43 | K43 | screen arrow right |
+| 44 | K44 | Custom 8, bottom right |
+| 45 | K45 | Custom 2, top right |
+| 46 | K46 | Custom 4, second right |
+| 47 | - | not populated |
+| 48 | K48 | Custom 6, third right |
+| 49 | - | not populated |
+| 50 | K50 | Guide |
+| 51 | K55 | Info |
+| 52 | K56 | screen arrow up, Blue on the 885 |
+| 53 | K51 | Skip |
+| 54 | K52 | Forward |
+| 55 | K53 | Pause |
+| 56 | K54 | Play |
+| 57 | K57 | 2 |
+| 58 | K58 | 3 |
+| 59 | K59 &dagger; | 6 |
+| 60 | K60 &dagger; | Yellow, 885 only |
+| 61 | K61 | 5 |
+| 62 | K62 | 9 |
+| 63 | K63 | Enter |
 
 ## 6. Prior art
 

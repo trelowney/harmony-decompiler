@@ -81,6 +81,7 @@ of the same length, do not have that problem.
 | `hexdump.py` | hexdump of a region |
 | `diff_samples.py` | diff configs against each other |
 | `repair_890_dump.py` | undo the duplicated 54-byte blocks a Harmony 890 read leaves behind |
+| `verify_arch8_key_matrix.py` | join the measured 880/885 keypad matrix to the scan codes in the configs |
 | `manual_layout.py` | pull button labels with coordinates out of a manual PDF |
 
 `_paths.py` is a shared helper, not a script.
