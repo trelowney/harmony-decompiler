@@ -160,20 +160,25 @@ def matrix_position(code: int) -> str:
 # ---------------------------------------------------------------- matching
 
 def distance(capture: list[int], stored: list[int]) -> float:
-    """Mean relative error across the whole capture, lower is better.
+    """Mean relative error across both complete sequences, lower is better.
 
-    Scored over the capture rather than the overlap on purpose. A record that
-    runs out early cannot explain the rest of what was heard, so those positions
-    count as a full mismatch; without that, short records win everything.
+    Scored over the longer sequence rather than the overlap on purpose. A
+    record that runs out early cannot explain the rest of what was heard, and a
+    capture that runs out early has not established the rest of the record.
+    Missing positions in either direction therefore count as full mismatches;
+    without the first rule short records win everything, and without the second
+    a truncated prefix can look like a perfect capture.
     """
+    capture = prepare(capture)
     stored = prepare(stored)
     if not capture or not stored:
         return 9.9
     errors = []
-    for index, heard in enumerate(capture):
-        if index >= len(stored):
+    for index in range(max(len(capture), len(stored))):
+        if index >= len(capture) or index >= len(stored):
             errors.append(1.0)
             continue
+        heard = capture[index]
         want = stored[index]
         if (heard < 0) != (want < 0):
             errors.append(1.0)

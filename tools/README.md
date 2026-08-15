@@ -137,6 +137,7 @@ round trip unchanged while making a button perform the wrong action.
 | `check_525_mode_pages.py` | group modes by physical-list shape, and refuse a page count the file has no precedent for |
 | `count_devices.py` | how many devices a config has, two independent ways, on any architecture |
 | `harmony-ir-learner/` | capture infrared through a Harmony over USB, no LearnIR and no account (PowerShell) |
+| `verify_ir_keymap_oracle_robustness.py` | offline parser, truncation and multi-seed replay checks for the IR key matcher |
 | `manual_layout.py` | pull button labels with coordinates out of a manual PDF |
 
 `_paths.py` is a shared helper, not a script.
