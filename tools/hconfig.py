@@ -1399,9 +1399,19 @@ def decompile(raw: bytes, filename=None) -> dict:
         raise ConfigError(
             f"unrecognised magic {magic!r}; known: "
             + ", ".join(m.decode() for m in ARCHITECTURES))
-    if blob[-4:] != arch["end"]:
+    # The end marker is not always the last thing in the file. A Harmony 890
+    # read leaves zero padding after it and how much is not stable: 702, 648
+    # and 0 bytes have all been seen for one protocol, so the length of the
+    # file says nothing about where the config ends. Strip that padding to
+    # find the marker instead of assuming it sits flush at the end.
+    body_end = len(blob)
+    while body_end > 4 and blob[body_end - 1] == 0:
+        body_end -= 1
+    if blob[body_end - 4:body_end] != arch["end"]:
         raise ConfigError(f"expected {arch['end'].decode()} at the end, "
-                          f"found {blob[-4:]!r}")
+                          f"found {blob[body_end - 4:body_end]!r}")
+    end_off = body_end - 4
+    trailer_padding = len(blob) - body_end
 
     marker = blob.find(arch["marker"])
     if marker == -1:
@@ -1410,6 +1420,17 @@ def decompile(raw: bytes, filename=None) -> dict:
 
     end_address = _u32(blob, 4)
     unknown_08 = _u32(blob, 8)
+
+    # `config_base` is stated nowhere in the file and it is not one constant:
+    # protocols 8 and 9 sit at 0x20000, protocols 10 and 14 at 0x30000
+    # (FORMAT.md 5j). It does not need a protocol table, because the file
+    # describes it. The u32 at offset 4 is the *address* of the end marker, so
+    # subtracting where the marker actually sits recovers the base. Getting
+    # this wrong does not fail loudly - every pointer is simply read from the
+    # wrong place, which is why protocol 10 decoded almost nothing and its
+    # round trip differed.
+    global CONFIG_BASE
+    CONFIG_BASE = end_address - end_off
 
     # Read the whole pointer table, then drop the zeros that pad it out to the
     # marker. Zeros *inside* the table are not padding: they mean the subsystem
@@ -1425,7 +1446,6 @@ def decompile(raw: bytes, filename=None) -> dict:
     padding = blob[PTR_TABLE_OFF + 4 * len(ptrs):marker]
 
     # the addresses tile the region from the first pointer to the end marker
-    end_off = len(blob) - 4
     present = [(i, p - CONFIG_BASE) for i, p in enumerate(ptrs) if p is not None]
     for n, (i, o) in enumerate(present):
         if not (0 <= o < len(blob)):
@@ -1447,6 +1467,9 @@ def decompile(raw: bytes, filename=None) -> dict:
         "padding": padding.hex(),
         "marker": arch["marker"].decode(),
         "end_marker": arch["end"].decode(),
+        # both recovered from the file, not assumed - see the note above
+        "config_base": f"0x{CONFIG_BASE:X}",
+        "trailer_padding": trailer_padding,
     }]
 
     first_section = present[0][1]
@@ -1760,6 +1783,13 @@ def compile_blob(doc: dict) -> bytes:
     if header is None or footer is None:
         raise ConfigError("regions must include a blob_header and a blob_footer")
 
+    # Rebuild against the base the source file was read with. Without this a
+    # protocol 10 config decompiled correctly would still recompile every
+    # pointer against 0x20000.
+    global CONFIG_BASE
+    if header.get("config_base"):
+        CONFIG_BASE = int(header["config_base"], 16)
+
     # work out where every region lands before emitting any of them, so
     # symbolic pointers can be resolved against the new layout
     resolve, _ = _resolver(regions)
@@ -1817,6 +1847,9 @@ def compile_blob(doc: dict) -> bytes:
     # EZHex XML checksum was refreshed.
     checksum_at = len(out) - TRAILER_CHECKSUM_OFFSET
     out[checksum_at:checksum_at + 2] = trailer_checksum(out).to_bytes(2, "little")
+    # Restore the zero padding that followed the end marker, after the
+    # checksum, which is computed over the config and not over the padding.
+    out += b"\x00" * header.get("trailer_padding", 0)
     return bytes(out)
 
 
