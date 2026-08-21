@@ -83,6 +83,7 @@ of the same length, do not have that problem.
 | `repair_890_dump.py` | undo the duplicated 54-byte blocks a Harmony 890 read leaves behind |
 | `verify_arch8_key_matrix.py` | join the measured 880/885 keypad matrix to the scan codes in the configs |
 | `ir_keymap_oracle.py` | name a key from what it transmits: catalogue, measurement plan, matcher |
+| `check_525_mode_pages.py` | group modes by physical-list shape, and refuse a page count the file has no precedent for |
 | `manual_layout.py` | pull button labels with coordinates out of a manual PDF |
 
 `_paths.py` is a shared helper, not a script.

@@ -68,12 +68,26 @@ not match refuses the transfer with *"This configuration file is not compatible
 with your Harmony Remote."* On a matching 525 it would replace whatever
 configuration is currently on the device with one set up for someone else's TV.
 
-Restoring a dumped config needs `--force`, because concordance marks its own dumps
-as such:
+Restoring a dumped config is:
 
 ```sh
-concordance --write-config config.EZHex --force
+concordance --no-web --write-config config.EZHex
 ```
 
-This has not been tested by the person who dumped it - testing it means writing to
-the only 525 involved.
+**This used to say `--force` was required. That was wrong** and it is corrected
+here rather than quietly deleted. `--force` only overrides a disagreement
+between the mode you asked for and the type concordance detects in the file. A
+dumped config carries `BINARYDATASIZE`, no `GETZAPSONLY` key, no firmware tag
+and no `CHECKKEYS`, so `read_and_parse_file` classifies it as
+`LC_FILE_TYPE_CONFIGURATION`, which is the same mode `--write-config` selects.
+There is nothing for `--force` to override, and it adds no capability if you
+pass it.
+
+`--no-web` is the flag that does matter. Without it, `upload_config` brackets
+the USB work with calls to endpoints that were retired with the MyHarmony
+service, so a restore can fail before it starts or report failure after it
+succeeded.
+
+This restore has now been run: see `docs/FORMAT.md` section 5o. A config was
+written to the 525 this sample came from and the original was put back, and a
+dump taken afterwards is byte-identical to the file in this directory.
