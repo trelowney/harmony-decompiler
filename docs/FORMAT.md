@@ -2248,7 +2248,7 @@ sits in a region this decompiler still passes through as opaque. So the seconds
 and minutes are stored twice, in two different shapes, and only one of the two
 is understood.
 
-## 5m. The 525 can learn infrared, and the firmware says how - NOT TESTED
+## 5m. The 525 can learn infrared, and it has now done it - CONFIRMED
 
 This one starts with a correction of the obvious kind: **the protocol is not new
 and it is not ours.** libconcord has had it since 2007.
@@ -2299,6 +2299,42 @@ expanded class-5 records, and the command index names the key.
 > tools refuse writes on purpose. `tools/hid_query.py`'s allowlist does not
 > contain them, and this section is not a reason to add them. It is a map of
 > what is possible, not an instruction.
+
+### It has since been run, and the loop closes
+
+`0x70` was sent to a 525 on 2026-08-21, outside this repository's tools and
+their allowlist, which is unchanged. A Panasonic remote was pointed at the 525
+and its `1` key pressed. The remote returned **600 durations at 36,802 Hz,
+decoding to six identical 48-bit Kaseikyo frames**, wire bytes
+
+```text
+40 04 01 00 08 09
+```
+
+The half of that this repository can check without any hardware is the other
+end, and it matches. Expanding the owner's own config:
+
+- group 1 commands **61 and 64** both carry that signal, stored at 36,401 Hz;
+- mode 78, the TV Panasonic device, binds event `0xAB`, scan 43, to a `0x7D`
+  send of group 1 command 61;
+- scan 43 is the printed `1`.
+
+So the remote heard a signal, and the signal it heard is the one its own config
+already stores for the key that sends it, reached through a binding nobody
+consulted while capturing. Capture, decode, and the stored map close on each
+other.
+
+Two details are worth keeping rather than smoothing over. The captured carrier
+is 36,802 Hz and the stored one is 36,401 Hz, about 1.1% apart, so a matcher has
+to treat carrier as approximate. And the six frames arrived as complete repeats,
+not as a short repeat burst, which is the same thing the Samsung handset in 5o
+turned out to do.
+
+**What this means practically: naming the keys of an unknown remote does not
+need a LearnIR, an account, or any write to flash.** It needs two remotes, since
+a Harmony cannot hear its own transmission. `tools/ir_keymap_oracle.py` already
+plans and matches against the stored records; this is the input side it was
+written for.
 
 ## 5n. The arch 8 keypad is 4 by 16, and 4 keys are named outright - MEASURED
 
