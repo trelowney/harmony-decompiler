@@ -2334,7 +2334,27 @@ turned out to do.
 need a LearnIR, an account, or any write to flash.** It needs two remotes, since
 a Harmony cannot hear its own transmission. `tools/ir_keymap_oracle.py` already
 plans and matches against the stored records; this is the input side it was
-written for.
+written for, and `tools/harmony-ir-learner/` is the capture side.
+
+### How good a receiver is it, next to a real one
+
+Good enough. The same Samsung key was captured twice, once with a LearnIR V2 and
+once through a 525, and both compared against the record a generated config
+holds for it:
+
+| | LearnIR V2 | via the 525 | stored |
+|---|---:|---:|---:|
+| carrier | 38,000 Hz | 38,237 Hz | 38,001 Hz |
+| header mark / space | 4474 / 4474 | 4472 / 4478 | 4474 / 4474 |
+| frame plus gap | 108,508 us | 108,494 us | 108,504 us |
+
+Both decode to `07 07 02 FD`. Across the frame's 64 bit cells the largest
+disagreement between the 525 and the LearnIR is **21 us**, on cells nominally
+560 us long, which is under 4%. The stored record and the LearnIR agree exactly.
+
+The one thing the 525 is not good at is carrier. It reads 0.6% high here and
+1.1% high on the Panasonic above, both times in the same direction. Match on
+timings and treat carrier as a hint.
 
 ## 5n. The arch 8 keypad is 4 by 16, and 4 keys are named outright - MEASURED
 

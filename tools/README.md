@@ -84,6 +84,7 @@ of the same length, do not have that problem.
 | `verify_arch8_key_matrix.py` | join the measured 880/885 keypad matrix to the scan codes in the configs |
 | `ir_keymap_oracle.py` | name a key from what it transmits: catalogue, measurement plan, matcher |
 | `check_525_mode_pages.py` | group modes by physical-list shape, and refuse a page count the file has no precedent for |
+| `harmony-ir-learner/` | capture infrared through a Harmony over USB, no LearnIR and no account (PowerShell) |
 | `manual_layout.py` | pull button labels with coordinates out of a manual PDF |
 
 `_paths.py` is a shared helper, not a script.
@@ -95,6 +96,11 @@ the input being interesting.
 `compare_keytables.py` and `diff_samples.py` need the arch 8 samples
 (720/785/88x). Those are in `samples/arch8/` now, mirrored from what their owners
 uploaded to this repository's issues and to the concordance thread.
+
+`harmony-ir-learner/` is the one thing here that is not Python: it is PowerShell,
+because it calls the 32-bit `libconcord-6.dll` from a Concordance install and
+that is the shortest path to doing so on Windows without a compiler. It captures
+and never writes. See its own README.
 
 `manual_layout.py` needs `pypdf` and a manual PDF, also not redistributed.
 Logitech's documentation server is still up:
