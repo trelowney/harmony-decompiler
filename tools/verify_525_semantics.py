@@ -184,7 +184,7 @@ def verify_action_closures(blob: bytes, sections: list[int | None]) -> dict:
 
 
 def verify_device_page_groups(blob: bytes, sections: list[int | None]) -> dict:
-    """Tie each four-device menu to one base-slot-5 infrared group.
+    """Tie each known device mode to one base-slot-5 infrared group.
 
     The human-readable names are established by rendering these modes; this
     check pins the independent binary half of that result. Every page binding
@@ -203,7 +203,10 @@ def verify_device_page_groups(blob: bytes, sections: list[int | None]) -> dict:
     for address in group_addresses:
         assert blob[address] == 0
         group_sizes.append(u16(blob, address + 1))
-    assert group_sizes == [8, 67, 61, 64]
+    # The public sample has these four groups. Offline authoring experiments
+    # may append groups, but must never alter or reorder the original four.
+    assert group_sizes[:4] == [8, 67, 61, 64]
+    assert len(group_sizes) >= 4
 
     action_count = u16(blob, action)
     action_addresses = [u24(blob, action + 2 + 3 * k) - CONFIG_BASE
@@ -231,31 +234,59 @@ def verify_device_page_groups(blob: bytes, sections: list[int | None]) -> dict:
         "XBOX 360": (113, 2),
         "X96 Box": (111, 3),
     }
-    result = {}
-    for name, (mode_index, expected_group) in device_modes.items():
+    def inspect_mode(mode_index: int, expected_group: int,
+                     require_every_entry: bool = True,
+                     include_physical: bool = False) -> dict | None:
         entry = u24(blob, mode + 3 + 3 * mode_index) - CONFIG_BASE
         page_count = u16(blob, entry + 4)
         sends = []
-        bindings = 0
+        tagged_entries = 0
+        lists = []
+        if include_physical:
+            lists.append(u24(blob, entry + 1) - CONFIG_BASE)
         for page_index in range(page_count):
             page = u24(blob, entry + 6 + 3 * page_index) - CONFIG_BASE
-            page_list = u24(blob, page) - CONFIG_BASE
-            for _tag, opcode, operand in tagged_instructions(blob, page_list):
-                bindings += 1
+            lists.append(u24(blob, page) - CONFIG_BASE)
+        for tagged_list in lists:
+            for _tag, opcode, operand in tagged_instructions(blob, tagged_list):
+                tagged_entries += 1
                 reachable = closure(operand) if opcode == 0x7F else [(opcode, operand)]
                 sends.extend(value for operation, value in reachable if operation == 0x7D)
-        assert sends and len(sends) == bindings
-        assert {value >> 8 for value in sends} == {expected_group}
+        if not sends or (require_every_entry and len(sends) != tagged_entries):
+            return None
+        if {value >> 8 for value in sends} != {expected_group}:
+            return None
         commands = sorted({value & 0xFF for value in sends})
         assert all(command < group_sizes[expected_group] for command in commands)
-        result[name] = {
+        return {
             "mode": mode_index,
             "pages": page_count,
-            "bindings": bindings,
+            "bindings": len(sends),
             "ir_group": expected_group,
             "group_records": group_sizes[expected_group],
             "commands_used": len(commands),
         }
+
+    result = {}
+    for name, (mode_index, expected_group) in device_modes.items():
+        details = inspect_mode(mode_index, expected_group)
+        assert details is not None
+        result[name] = details
+
+    # For appended groups, discover the mode that reaches every command in the
+    # group. This makes the verifier useful for fifth-device candidates without
+    # weakening the pinned checks for the original public sample.
+    mode_count = u24(blob, mode)
+    for expected_group in range(4, group_count):
+        candidates = []
+        for mode_index in range(mode_count):
+            details = inspect_mode(
+                mode_index, expected_group, require_every_entry=False,
+                include_physical=True)
+            if details and details["commands_used"] == group_sizes[expected_group]:
+                candidates.append(details)
+        assert len(candidates) == 1, (expected_group, candidates)
+        result[f"Additional group {expected_group}"] = candidates[0]
     return result
 
 
