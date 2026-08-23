@@ -1492,6 +1492,175 @@ What this does not answer is what `0x72` is *for*. It resolves a key to a record
 and the records point somewhere; naming that is still open. Section 5o has a
 concrete reason to care.
 
+## 4p. An action is three bytes, and section 9 is the key binding chain - SOLVED
+
+Everything a config does to a key press goes through one three-byte instruction.
+Until now this file described the opcode half of it (4i, 4j) and treated the
+operand as an index into something. On a whole family of opcodes the operand
+*is* the instruction, and that is what this section is.
+
+Read out of a 525 firmware image. Addresses are into the image as
+`tools/pic18dis.py` disassembles it; no firmware is redistributed here, and
+anyone with a remote can dump their own.
+
+### The instruction
+
+`0x01AF2` reads three bytes into `0x72A..0x72C`, and the interpreter runs them
+out of `0x3D7`, `0x3D8`, `0x3D9`:
+
+```
+action:  u8 operand_lo   u8 operand_hi   u8 opcode
+```
+
+In a tagged list the same three bytes are preceded by the key tag, which is
+where the `<tag> <u16 operand> <opcode>` shape already used throughout this file
+comes from. It is not a separate encoding; a binding is a key plus an action.
+
+The first split is on the opcode alone:
+
+| opcode | dispatches on | at |
+|---|---|---|
+| below `0x0F` | - | `0x02346` |
+| `0x0F` to `0x1E` | `operand_lo` | `0x02246` |
+| `0x1F` to `0x3E` | `operand_hi` | `0x02048` |
+| `0x3F` and up | `operand_hi` | `0x01F78` |
+
+For opcodes `0x1F` to `0x3E` the high byte of the operand selects the action and
+the low byte is its argument:
+
+| `operand_hi` | what it does | at |
+|---|---|---|
+| `0xFF` | set variable `0x3D0`, later copied into `0x340` | `0x02054` |
+| `0xFE` | **push `operand_lo` onto the key context stack** | `0x02062`, `0x0186A` |
+| `0xFD` | **remove `operand_lo` from the key context stack** | `0x02072`, `0x01880` |
+| `0xFB` | set variable `0x332` | `0x0208C` |
+| `0xE8` | set variable `0x341` | `0x02228` |
+
+One more is handled before the dispatcher gets a look at it. When a program
+stream produces opcode exactly `0x1F` with `operand_hi` equal to `0xFC`, the
+reader at `0x01BB4` treats `operand_lo` as a **key code to resolve through the
+chain** rather than as an action, and jumps into the lookup below.
+
+### The key context stack
+
+RAM `0x0337` holds a depth and `0x0338` upwards holds that many bytes. The
+lookup at `0x01B10` walks it from the top down and takes the first match:
+
+| entry | means |
+|---|---|
+| `0xFC` | search the section 9 list named by variable `0x341` |
+| `0xFE` | search the section 9 list named by variable `0x340` |
+| `0xFD` | run an event instead of searching |
+| anything else | search **section 9 list number N**, N being the byte itself |
+
+Nothing is found once the stack is exhausted. Cleared at `0x0185A`, pushed at
+`0x0187C`, removed at `0x018A4`, and those are the only three sites.
+
+### Section 9 is the table of key binding lists
+
+Section 9 is a `u8` count followed by that many `u24` pointers, and the seek at
+`0x07A36` reaches element k at `1 + 3k`. In the public 525 sample the count is
+8. Each pointer is the head of an ordinary tagged list of bindings.
+
+So a key press resolves against a *stack of binding lists*, and the config
+decides what is on that stack. In the 525 sample one program does the whole
+setup, five pushes in a row at `0x02E737`:
+
+```
+01 fe 1f    push 1        section 9 list 1
+fe fe 1f    push 0xFE     variable 0x340
+fd fe 1f    push 0xFD     an event
+fc fe 1f    push 0xFC     variable 0x341
+02 fe 1f    push 2        section 9 list 2
+```
+
+pushed bottom to top, so searched in the reverse order, with list 1 as the last
+resort. That program is one entry of section 10. There is exactly one push of
+list 1 in the file, and exactly one removal of it, `01 fd 21` at `0x0222DD`.
+
+### Why this is the interesting section
+
+This is the mechanism behind every key on the remote, not a detail about menus.
+It is also the first thing here that says what a config *decides* rather than
+what it stores: the same key press means different things depending on a stack
+the config builds and unwinds as you move around. Anything that wants to add a
+button has to get onto that stack.
+
+## 4q. What turns a page, and why the fifth device page was never drawn - SOLVED
+
+Section 5o wrote a config with a second page on the `Devices` menu, the write
+verified byte for byte, and the page was never shown. This is why.
+
+### The firmware reads the page array exactly as this file describes it
+
+- section 6, `u24` count then element k at `3 + 3k`, seeked at `0x05BBE`, gives
+  the mode entry pointer;
+- page k of that mode is read at mode entry `+ 6 + 3k`, at `0x05BF2`, with the
+  page number held in `0x3DD:0x3DE`;
+- the page count is the `u16` at mode entry `+ 4`, read by the routine at
+  `0x05C22`.
+
+None of that looks at what kind of mode it is. A second page is drawable.
+
+### The page count is used in only two places
+
+`0x05C88` turns a page: it increments or decrements `0x3DD:0x3DE`, compares
+against the count, and wraps. And the screen-program value provider at `0x01C1A`
+hands the count out as value 2, which is what a program prints as `1 OF n`. A
+mode whose program never asks for value 2 shows no page footer, whatever its
+page count says.
+
+### Turning a page is an action, and it has to be bound to a key
+
+There is no hardwired page key. The dispatcher at `0x022CC` turns a page when it
+sees an action with an opcode in `0x0F` to `0x1E` and `operand_lo` in the range
+`0xA0` to `0xAF`; low nibble zero goes back, anything else goes forward.
+
+**In the whole public 525 sample that action exists exactly twice:**
+
+```
+0x021BAB   tag 0x96   operand 0xFFA1   opcode 0x0F    forward
+0x021BB3   tag 0x97   operand 0xFFA0   opcode 0x0F    back
+```
+
+Both are inside section 9 **list 1**, the seven-entry list running `0x021B9A` to
+`0x021BB7`. Tags `0x96` and `0x97` are the two page keys. Nowhere else in the
+file can a page be turned.
+
+That list is the bottom of the stack, so it only answers a key that nothing
+above it claimed. The modes that do page leave `0x96` and `0x97` out of their
+own binding lists entirely; several single-page menus (42, 88, 103, 109) bind
+them to opcode `0x00`, which is how a key is switched off.
+
+### What this means for a fifth device
+
+`Devices` is mode 45: a one-entry physical list, tag `0xAF`, opcode `0x72`,
+operand `0x050D`, and one page whose binding list at `0x031CE6` holds four
+entries with opcode `0x7F` and consecutive operands `0x01D5` to `0x01D8`, tagged
+with the four soft keys `0x9E`, `0x9F`, `0xA7`, `0xA6`. That binding list is the
+device list; four keys, four devices.
+
+So a fifth device on arch 9 is not "add a page". At minimum the page keys have
+to be reachable while that mode is up, the second page needs its own binding
+list carrying the fifth device, and the menu screen program has to ask for value
+2 if the footer is wanted. What is *not* established is which of those the
+compiler actually does, because no five-device arch 9 config exists in this
+repository to look at. That is what
+[discussion #33](https://github.com/trelowney/harmony-decompiler/discussions/33)
+asks for, and it remains the cheap way to settle this.
+
+**Do not write a guess at it to a remote.** The last one was internally perfect
+and wrong, which is the whole point of 5o.
+
+### One thing found on the way
+
+The firmware looks for a config in two places. `0x0668A` builds the base from
+bit 4 of `0x109`: set means `0x020000`, clear means `0x018000`. `0x04DF0`
+validates `AHCM` and `CMAH` at whichever is selected and sets bit 1 or bit 2 for
+the two of them; `0x04C68` falls back to the first if the second does not
+validate. The config a remote runs is the one at `0x020000`. What is meant to
+live in the 32 KiB at `0x018000` is not known here.
+
 ## 5. Samples from issue #66 - different architecture, SAME container
 
 Downloaded from `github.com/user-attachments/files/22412763/EZHex.Samples.zip`.
@@ -2621,15 +2790,22 @@ anywhere:
   a mode Logitech's own compiler produced.
 
 None of that could have caught it, because **the renderer and the semantic
-verifier both read the page array, and the page array was correct.** The
-firmware does not read the page array for this kind of mode. It is the same
-shape of mistake as the class-5 pointers in 4n and the trailer checksum in 4m,
-and it was found the same way both of those were: by an oracle that was not one
-of ours. This time the oracle was the remote.
+verifier both read the page array, and the page array was correct.** It is the
+same shape of mistake as the class-5 pointers in 4n and the trailer checksum in
+4m, and it was found the same way both of those were: by an oracle that was not
+one of ours. This time the oracle was the remote.
+
+> **Corrected.** This paragraph first went on to say that the firmware does not
+> read the page array for this kind of mode. It does, and 4q reads the routine
+> that does it. What was missing is the key that asks for the next page, which
+> lives somewhere else entirely. The page array here was right and unreachable,
+> which is worse than wrong.
 
 The check that would have caught it is small and is now the standing question
 for any new mode: *does any mode in this file with the same handler shape have
-more than one page?* Here the answer was no, twenty times over.
+more than one page?* Here the answer was no, twenty times over. That question is
+still worth asking, but 4q is what the answer meant, and 5p shows that other
+architectures do page a menu of this shape.
 
 ### Recovery, as executed rather than as argued
 
@@ -2653,6 +2829,93 @@ Two things about it are worth knowing before anyone needs it:
   legitimate state after a firmware update. The gate that does hold is the
   readback: on a mismatch the run stops *before* the reset, leaving the old
   config running. Judge acceptance on the remote's screen.
+
+## 5p. Counting the devices in any config, and what arch 14 does that arch 9 does not
+
+Section 5o ends on one question: how does a config say there are five devices
+rather than four. Nobody here has a five-device arch 9 config, but there are
+five-device configs on other architectures already sitting in this project's
+issues, and they turn out to answer part of it.
+
+### Two ways to count devices, and both work across architectures
+
+**Section 5.** Its first byte is the device count, followed by one `u24` per
+device. Checked against ground truth on the 525 sample (4) and on arch 14: a
+650 and a Harmony 600 at 4, and the eight Harmony 700 configs uploaded to
+[issue #9](https://github.com/trelowney/harmony-decompiler/issues/9), which are
+one account's own history and run **4, then 5, then 6**. Arch 8 configs answer
+too, but nothing here has checked those numbers against a known setup.
+
+**The state tree.** The `0xFEED ... 0xBEEF` tree of section 5c has the same node
+layout everywhere: tag `0xA7`, a `u16` length, a `u16` parent id, a `u16` own id,
+then the name. One reader gets a 525, a 650, a 700, a 600 and a Harmony One with
+no change. On arch 12 and arch 14 the tree carries four variables per device
+whose names end in that device id (`PowerOnDelay_7270811_65278` and friends), so
+the distinct ids are the devices, and the tree also names their types (`TV`,
+`Bluray`, `Receiver`). Arch 8 and arch 9 configs do not carry those variables at
+all; there the tree is silent, which is a difference between architectures
+rather than a failure.
+
+`tools/count_devices.py` does both and says when they disagree.
+
+A third base fell out of this: the protocol 12 Harmony One puts its blob at
+**`0x40000`**, where arch 8 and arch 9 use `0x20000` and arch 14 uses `0x30000`.
+Section 5j lists the first two; this is the third. The recovery rule in 5j still
+gives it without being told, because the header states the address of its own
+end.
+
+### Arch 14 keeps an explicit ring of devices, and arch 9 does not
+
+In every arch 14 config here, section 14 holds two records with a flag byte of 1
+whose item count is exactly the number of devices:
+
+| config | devices | the two flagged records |
+|---|---|---|
+| 700, issue #9 history, earliest | 4 | 4 and 4 |
+| 700, next two revisions | 5 | 5 and 5 |
+| 700, remaining five revisions | 6 | 6 and 6 |
+| 650 | 4 | 4 and 4 |
+| 600 | 4 | 4 and 4 |
+
+Each item is a five-byte entry `11 <u16> 7F 00`, the operands run consecutively,
+and the last item points back at the first, so it is a ring. The whole of
+section 14 also grows by exactly four records per device on those three models:
+29 records at four devices, 33 at five, 37 at six.
+
+**Arch 9 has no such ring.** In the entire 525 sample there is exactly one entry
+of that shape. What it has instead is described in 4q: the `Devices` menu page
+carries a binding list of four `0x7F` entries with consecutive operands, tagged
+with the four soft keys. Four keys on the screen, four devices. The arch 14
+recipe does not transplant.
+
+### A paged `0x72` menu is a thing the real compiler builds
+
+This matters because 5o built one and it did not work. Grouping every mode by
+the shape of its physical list, the way `tools/check_525_mode_pages.py` does:
+
+| config | one-entry `0x72` menus | pages they have |
+|---|---|---|
+| 525 (arch 9) | 14 | all 1 |
+| 700, 4 devices | 2 | 1 and 2 |
+| 700, 5 devices | 2 | 1 and 3 |
+| 650 | 2 | 1 and 2 |
+| 600 | 2 | 1 and 2 |
+
+So the shape is legal and Logitech ships it. The 525 sample simply never uses
+it, which is exactly why the oracle in `check_525_mode_pages.py` refused it and
+why that refusal was the right call on the evidence available: one config is not
+a survey. It says the file has no precedent, not that the firmware cannot.
+
+The reason the 525 write failed is in 4q, and it is not the page array.
+
+### What would still settle it
+
+An arch 9 config with five or more devices, from a 525, 520, 510 or the Xbox 360
+remote, which is what
+[discussion #33](https://github.com/trelowney/harmony-decompiler/discussions/33)
+asks for. Failing that, a before-and-after pair from any remote whose official
+software still runs, dumped once, one device added, dumped again. The 700
+history is nearly that already, but its revisions differ by more than one edit.
 
 ## 6. Prior art
 

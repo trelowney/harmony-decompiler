@@ -21,7 +21,9 @@ If the answer is no and you have just given mode N a second page, you have
 invented something the firmware has never been asked to do. That may still be
 right. It is not something to find out on hardware.
 
-See docs/FORMAT.md sections 4o and 5o.
+See docs/FORMAT.md sections 4o and 5o for the write this came out of,
+4q for what the firmware actually does with a page count, and 5p for the
+other architectures, where a menu of this shape does page.
 
 Usage:
     python tools/check_525_mode_pages.py [config.bin|config.EZHex]

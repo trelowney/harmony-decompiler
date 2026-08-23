@@ -84,6 +84,7 @@ of the same length, do not have that problem.
 | `verify_arch8_key_matrix.py` | join the measured 880/885 keypad matrix to the scan codes in the configs |
 | `ir_keymap_oracle.py` | name a key from what it transmits: catalogue, measurement plan, matcher |
 | `check_525_mode_pages.py` | group modes by physical-list shape, and refuse a page count the file has no precedent for |
+| `count_devices.py` | how many devices a config has, two independent ways, on any architecture |
 | `harmony-ir-learner/` | capture infrared through a Harmony over USB, no LearnIR and no account (PowerShell) |
 | `manual_layout.py` | pull button labels with coordinates out of a manual PDF |
 
