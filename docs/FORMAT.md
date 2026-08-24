@@ -1492,6 +1492,14 @@ What this does not answer is what `0x72` is *for*. It resolves a key to a record
 and the records point somewhere; naming that is still open. Section 5o has a
 concrete reason to care.
 
+> **Answered 2026-08-24, in 5p.** They point at render streams. Each item in a
+> section 14 record is a `u16` key and a `u24` pointer, and every one of those
+> pointers is a member of section 11's own list of render streams: 22 of 22 on
+> this sample, and not one miss in twelve configs across arch 9 and arch 14. So
+> `0x72` takes a key, finds the record, and gets back a screen to draw. The
+> reading of the record above is one byte out of phase; 5p has the corrected
+> layout, and it is @glenharris's, from PR #30.
+
 ## 4p. An action is three bytes, and section 9 is the key binding chain - SOLVED
 
 Everything a config does to a key press goes through one three-byte instruction.
@@ -2864,29 +2872,105 @@ Section 5j lists the first two; this is the third. The recovery rule in 5j still
 gives it without being told, because the header states the address of its own
 end.
 
-### Arch 14 keeps an explicit ring of devices, and arch 9 does not
+### Section 14 is a table of render stream alternatives - CORRECTED
 
-In every arch 14 config here, section 14 holds two records with a flag byte of 1
-whose item count is exactly the number of devices:
+> **Corrected 2026-08-24.** What stood here described two records with a flag
+> byte of 1 forming a ring of devices, each item `11 <u16> 7F 00` with the last
+> pointing back at the first. That was read one byte out of phase, and the
+> phase error made a ring out of something that is not one. The structure below
+> comes from @glenharris's [PR #30](https://github.com/trelowney/harmony-decompiler/pull/30),
+> and unlike the old reading it makes a claim that can fail: it says the last
+> three bytes of every item are a pointer into section 11's own list of render
+> streams. It does not fail once in twelve configs.
 
-| config | devices | the two flagged records |
-|---|---|---|
-| 700, issue #9 history, earliest | 4 | 4 and 4 |
-| 700, next two revisions | 5 | 5 and 5 |
-| 700, remaining five revisions | 6 | 6 and 6 |
-| 650 | 4 | 4 and 4 |
-| 600 | 4 | 4 and 4 |
+A section 14 record is:
 
-Each item is a five-byte entry `11 <u16> 7F 00`, the operands run consecutively,
-and the last item points back at the first, so it is a ring. The whole of
-section 14 also grows by exactly four records per device on those three models:
-29 records at four devices, 33 at five, 37 at six.
+```
+u8  flag          2 in every record of every config here
+??  count         u8 on arch 9, u16 on arch 14
+    item[count]   u16 key, then a u24 pointer to a render stream
+u8  trailing      0 in every record of every config here
+```
 
-**Arch 9 has no such ring.** In the entire 525 sample there is exactly one entry
-of that shape. What it has instead is described in 4q: the `Devices` menu page
-carries a binding list of four `0x7F` entries with consecutive operands, tagged
-with the four soft keys. Four keys on the screen, four devices. The arch 14
-recipe does not transplant.
+The old size formulas, `3 + 5 * count` on arch 9 and `4 + 5 * count` on arch 14,
+give the same totals and are not wrong about length. They were wrong about where
+the items begin, which is the part that decides what the bytes mean.
+
+The check that settles it: take section 11, which is a `u16` count followed by
+that many `u24` pointers, and treat it as the set of legal render streams. Then
+ask how many section 14 items point at a member of that set.
+
+| config | devices | s14 records | items | items landing on a listed render stream |
+|---|---|---|---|---|
+| 525, arch 9 | 4 | 11 | 22 | **22** |
+| 600, arch 14 | 4 | 29 | 3,806 | **3,806** |
+| 650, arch 14 | 4 | 29 | 3,810 | **3,810** |
+| 700 r2670 | 4 | 29 | 3,806 | **3,806** |
+| 700 r2672, r2673 | 5 | 33 | 4,760 | **4,760** |
+| 700 r2865 and five later | 6 | 37 | 5,706 | **5,706** |
+
+Read one byte later, the way this file had it, the count is right but the
+pointers are nonsense: 0 of 22 on the 525, 0 of 1,762 on the 650. There is no
+middle ground, which is what a phase error looks like.
+
+So section 14 answers "given this key, which render stream do I draw", and
+section 4o's `0x72`, which searches section 14 for a whole 16-bit operand,
+is searching these keys, and the record it lands on hands back a screen to
+draw.
+
+### What arch 14 has per device, and arch 9 does not
+
+The per-device structure survives the correction, but it is not a ring and it is
+not the records the old text pointed at. On arch 14, section 14 carries **two
+records of 21 items and two records of 451 items for every device**, and nothing
+else in it scales:
+
+| config | devices | records of 21 | records of 451 | total records |
+|---|---|---|---|---|
+| 600 | 4 | 8 | 8 | 29 |
+| 650 | 4 | 8 | 8 | 29 |
+| 700 r2670 | 4 | 8 | 8 | 29 |
+| 700 r2672, r2673 | 5 | 10 | 10 | 33 |
+| 700 r2865 and later | 6 | 12 | 12 | 37 |
+
+Which is where `4 * devices + 13` comes from, and now with the four named: two
+21-item records and two 451-item records each.
+
+**Arch 9 has neither.** The 525's eleven records are seven of one item, one of
+three and three of four, with no 21 and no 451 anywhere. What it has instead is
+in 4q: the `Devices` menu page carries a binding list of four `0x7F` entries with
+consecutive operands, tagged with the four soft keys. Four keys on the screen,
+four devices. The arch 14 recipe does not transplant.
+
+### The page and item counts have been checked against a human - CONFIRMED
+
+Everything above and in 4q reads page counts out of a file. On 2026-08-24
+@psolyca, whose 650 is the sample used here, wrote down what the remote itself
+shows: for each device and activity, how many pages it has and how many commands
+are on them. Nobody had read that off the bytes, which makes it the first
+outside check this file has had on the page reader.
+
+| what the owner counted | pages | commands | mode in the file |
+|---|---|---|---|
+| TV Samsung | 6 | 21 | 83 |
+| Recepteur AV Sony | 5 | 19 | 114 |
+| Xbox 360 | 5 | 18 | 63 |
+| Enregistreur numerique | 2 | 7 | 205 |
+| activity "Console" | 4 | 13 | 104 |
+| activity "Regarder la TNT" | 2 | 5 | 71 |
+| activity "TV par internet" | 2 | 8 | 105, 106 or 193 |
+
+The 650 has nine modes with more than one page. Six of the owner's seven
+page/command pairs pick exactly one of them, with no mode used twice; only the
+2-and-8 pair has more than one candidate. The state tree names the same four
+devices he does, as `TV_Samsung_Power_2`, `Recepteur_AV_Sony_Power_2`,
+`Xbox_360_Power_2` and `Enregistreur_numerique_Bouygues_Telecom_Power_2`.
+
+One thing worth having from it: mode 193 is a **one-entry `0x72` menu with two
+pages of four items each, each page with its own binding list and its own screen
+program**. That is the shape 5o built for a fifth device and could not get the
+remote to draw. Logitech's compiler ships it on a working remote, and it gives
+every page a screen program of its own rather than sharing one.
 
 ### A paged `0x72` menu is a thing the real compiler builds
 
