@@ -3453,6 +3453,8 @@ See [`tools/`](../tools/). All are plain `python <script>.py`.
 | `repair_890_dump.py` | remove the duplicated 54-byte blocks a Harmony 890 read leaves behind; refuses unless the result reproduces the stated end address and the stored checksum |
 | `verify_525_semantics.py` | re-assert every claim in 4k and 4l against the sample; `--firmware` pins the handlers too |
 | `verify_small_sections.py` | re-assert 4r against every public sample; `--negative` breaks each checked field and demands a failure |
+| `arch8_ir_duration_reader.py` | walk arch 8 infrared by stated addresses only, and prove the walk on carrier frequency and protocol headers |
+| `verify_ir_spelling.py` | recompute both 5q tables and require every long run to fit one of three spellings; `--negative` pins the rule and demands refusals |
 | `render_525_screens.py` | draw all 135 menu pages and the five font sheets as BMPs |
 | `analyze_525_ir.py` | expand the class 5 IR dictionaries, decode NEC, correlate with mode bindings |
 | `class5_ir_encoder.py` | build and decode a relocatable arch-9 literal class-5 record |
@@ -3506,40 +3508,54 @@ His rule spells a duration too long for one word as maximal words with the
 remainder balanced across the final two, smaller half first, so no word falls
 below half the maximum. Taken literally it does not describe these files:
 
-| | multi-word runs | literal match | different |
-|---|---:|---:|---:|
-| arch 9, the 525 | 909 | 495 | 414 |
-| arch 8, H880 and H885 | 2,179 | 1,202 | 977 |
+Every **long run** - one whose duration exceeds what a single word can hold -
+turns out to be one of three spellings, and the argument is not that each is
+common but that **nothing falls outside them**:
 
-Every one of the arch 8 differences decomposes the same way, and the count that
-matters is that nothing decomposes any other way:
-
-| | count |
-|---|---:|
-| the rule applied to `total - 1`, followed by a separate word `1` | 977 |
-| ends in `1` but the rest still differs | 0 |
-| differs some other way | 0 |
+| | long runs | the rule literally | + a trailing `1` | + a leading word | left over |
+|---|---:|---:|---:|---:|---:|
+| arch 9, the 525 | 909 | 495 | 314 | 100 | **0** |
+| arch 8, 13 samples | 14,666 | 8,023 | 6,423 | 220 | **0** |
 
 ```
-35,101   stored  17550, 17550, 1          the rule  17550, 17551
-96,078   stored  32767, 32767, 30543, 1   the rule  32767, 32767, 30544
+35,101   stored  17550, 17550, 1               the rule  17550, 17551
+96,078   stored  32767, 32767, 30543, 1        the rule  32767, 32767, 30544
+69,090   stored  446, 32767, 17938, 17938, 1   the rule  32767, 18161, 18162
 ```
 
 So the rule holds on both architectures **once the trailing `1` is treated as a
 sentinel rather than as a duration**. A one microsecond pulse is not something an
-infrared emitter produces, which agrees, but the argument here is the count:
-977 of 977 on arch 8 with no exception, and the same shape on all 414 arch 9
-differences.
+infrared emitter produces, which agrees, but the argument is the count.
 
-The architectures are not equally tidy about it. On arch 8 the sentinel explains
-everything. On arch 9 it explains 314 of 414, and the remaining 100 need a
-leading 446 us word set aside as well. That residue is unexplained.
+### The leading word is not arch 9's either, and the residue is closed
+
+An earlier version of this subsection ended by saying arch 8's sentinel explained
+everything while arch 9 left 100 runs needing a leading 446 us word set aside,
+and called that residue unexplained. Both halves were wrong.
+
+The leading word is on **arch 8 as well** - 220 runs across the four `Update`
+samples, 216 of them 446 us and the other four 310 us - and it takes exactly the
+same shape there: a lead set aside, then the rule on what is left less one, then
+the sentinel. So it is a third spelling the generator uses, not an architecture's
+quirk, which is the same conclusion rule 1 reached. With it, **nothing is left
+over on either architecture**: 909 of 909 and 14,666 of 14,666.
+
+A fourth class was tried and rejected - a leading word with no sentinel. It never
+fired on either architecture, and leaving it in would have accepted almost any
+two-word run. A class that explains everything explains nothing.
+
+**The arch 8 counts in the earlier version could not be reproduced.** They read
+`2,179 / 1,202 / 977` over "H880 and H885"; no counting unit tried here produces
+them, and the measurement tool that was used at the time does not either. The
+numbers above come from `tools/verify_ir_spelling.py`, which anyone can run.
 
 ### How this was measured
 
 The arch 9 side uses this repository's own class 5 readers. The arch 8 side
-needed a duration reader that did not exist, so one was written outside this
-repository and proved before use rather than after: the carrier frequencies it
+needed a duration reader that did not exist, so one was written and proved
+before use rather than after. **It is in the repository now**, as
+`tools/arch8_ir_duration_reader.py`, and `tools/verify_ir_spelling.py`
+recomputes both tables above from it. The proof it carries: the carrier frequencies it
 derives have a median of 38,001 Hz on both samples, and the leading pairs it
 produces match real protocol headers, Kaseikyo at 3,500/1,700 us and NEC at
 9,000/4,500. A reader returning plausible numbers proves nothing; one that lands
