@@ -3280,6 +3280,72 @@ asks for. Failing that, a before-and-after pair from any remote whose official
 software still runs, dumped once, one device added, dumped again. The 700
 history is nearly that already, but its revisions differ by more than one edit.
 
+## 5r. The 525 can rewrite its own firmware, and its configuration bits - MEASURED
+
+`tools/hid_query.py` refuses `0x30 WRITE_FLASH`, `0x40 WRITE_FLASH_DATA`,
+`0xA0 WRITE_MISC` and `0xD0 ERASE_FLASH`, and has since the first read. That was
+written as caution. It is not caution.
+
+[@dannybloe](https://github.com/dannybloe) read the write path out of the arch 12
+and arch 14 firmware and found that one command serves two destinations, chosen
+by a selector the address validator sets: external storage or **internal program
+flash**, the part's own self programming sequence. Arch 9 was outside his scope,
+and the 525's image is the only arch-9 one anyone has.
+
+It has the same capability, and one more. Searching the 32 KiB image for the
+PIC18 unlock - `0x55` and `0xAA` into `EECON2`, then `WR` - finds three call
+sites of one shared five-instruction routine at `0x00056`, `0x00AC4` and
+`0x07D5C`. What matters is which `EECON1` is standing when it is called:
+
+| set at | `EECON1` | bits | what commits |
+|---|---|---|---|
+| `0x000C2` | `0x84` | EEPGD, WREN | **program flash write** |
+| `0x000F4` | `0x94` | EEPGD, FREE, WREN | **program flash erase** |
+| `0x00172` | `0xC4` | EEPGD, CFGS, WREN | **configuration bits** |
+| `0x00160` | `0x04` | WREN | on-chip data EEPROM |
+| `0x00126` | cleared | - | data EEPROM read |
+
+`TBLWT*` appears three times, at `0x002C2`, `0x00B14` and `0x07DAE`, which is the
+only way to load program flash holding registers. The `0x84` path masks an
+address with `0xF0` before arming, and each path polls `EECON1` bit 1 for
+completion. They are reached from one dispatch chain of consecutive `RCALL`s at
+`0x0020C`, `0x00216`, `0x00220` and `0x0022A`, each returning a length in `0x8E`
+to a shared exit - the shape of a command table, not of scattered helpers.
+
+**The configuration-bit path is the one worth naming separately.** Program flash
+can be rewritten; configuration bits decide whether the part can be programmed at
+all. A remote that loses its firmware is a recovery problem. A remote whose
+configuration word is wrong can be neither read nor reprogrammed by anything this
+project can build.
+
+### What this does not establish
+
+Whether the dispatch chain is reachable over USB during normal operation, or only
+from a bootloader entered some other way, is **not established here**. The
+capability is in the image; the route to it is not traced. That does not soften
+the conclusion, because the commands are refused either way, and the cost of
+being wrong is asymmetric: the whitelist costs nothing, and a wrong write is not
+undoable.
+
+So the rule stands as written, and now it has a reason rather than an instinct:
+
+> `hid_query.py`'s whitelist is `0x10`, `0x55`, `0xB2`, `0xB3` and nothing else.
+> Do not widen it as a side effect of another change.
+
+Two further notes, since this is where a reader will look for them:
+
+- **The 64-byte hazard does not apply to a config write.** Danny's "a transfer
+  that ends mid block leaves its tail unprogrammed, with no error" is about the
+  *internal* arm - the part self programming. A config goes to external storage,
+  a different arm of the same command. The write this project performed on
+  2026-08-22 (5o) was never exposed to it.
+- That write was done by **concordance**, not by anything here, and concordance
+  erases first and verifies after. Its transcript shows two erase steps at
+  `0x820000` and `0x830000`, 64 KiB apart, then 92 KiB written and 92 KiB
+  verified. A relocated config is longer, and the margin before a third erase
+  block is needed is about 36 KiB - but the failure mode is loud rather than
+  silent, because the verify pass reads back what was programmed.
+
 ## 6. Prior art
 
 The key thread is

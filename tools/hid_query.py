@@ -10,6 +10,13 @@ Please do not remove or widen that whitelist as a side effect of another change.
 Writing to a remote is worth working on, but as a deliberate, separate piece of
 work - see CONTRIBUTING.md.
 
+That refusal was written as caution and has since been measured, FORMAT.md 5r.
+The 525's firmware image carries a full self programming path: program flash
+write (EECON1 0x84), program flash erase (0x94) and **a configuration bit write
+(0xC4)**, all committing through one PIC18 unlock routine. A remote that loses
+its firmware is a recovery problem; a remote whose configuration word is wrong
+can be neither read nor reprogrammed by anything this project can build.
+
 Framing per libconcord/libhidapi.cpp and libconcord/remote.cpp:
     write : 65 B = [0x00 report id][64 B payload]
     read  : 65 B = [0x00 report id][64 B payload]   -> payload starts at index 1
