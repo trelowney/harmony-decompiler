@@ -11,11 +11,17 @@ Writing to a remote is worth working on, but as a deliberate, separate piece of
 work - see CONTRIBUTING.md.
 
 That refusal was written as caution and has since been measured, FORMAT.md 5r.
-The 525's firmware image carries a full self programming path: program flash
-write (EECON1 0x84), program flash erase (0x94) and **a configuration bit write
-(0xC4)**, all committing through one PIC18 unlock routine. A remote that loses
-its firmware is a recovery problem; a remote whose configuration word is wrong
-can be neither read nor reprogrammed by anything this project can build.
+The 525's firmware image carries a self programming path, and the route to it is
+traced: a command table dispatching on the first byte of the USB endpoint buffer
+reaches a program flash write on 0x02 and a **program flash erase** on 0x03. The
+path from the wire is unbroken - it is not a bootloader behind a physical gate.
+
+A configuration bit write (EECON1 0xC4) is compiled in as well, and nothing in
+the image references it. That one is a capability, not a behaviour.
+
+This is why the whitelist is positive rather than a list of refusals: 0x02 and
+0x03 are not the vendor commands anyone documented, and a blacklist would not
+have named them.
 
 Framing per libconcord/libhidapi.cpp and libconcord/remote.cpp:
     write : 65 B = [0x00 report id][64 B payload]

@@ -3301,16 +3301,39 @@ sites of one shared five-instruction routine at `0x00056`, `0x00AC4` and
 |---|---|---|---|
 | `0x000C2` | `0x84` | EEPGD, WREN | **program flash write** |
 | `0x000F4` | `0x94` | EEPGD, FREE, WREN | **program flash erase** |
-| `0x00172` | `0xC4` | EEPGD, CFGS, WREN | **configuration bits** |
+| `0x00172` | `0xC4` | EEPGD, CFGS, WREN | **configuration bits** - see below |
 | `0x00160` | `0x04` | WREN | on-chip data EEPROM |
 | `0x00126` | cleared | - | data EEPROM read |
 
 `TBLWT*` appears three times, at `0x002C2`, `0x00B14` and `0x07DAE`, which is the
 only way to load program flash holding registers. The `0x84` path masks an
 address with `0xF0` before arming, and each path polls `EECON1` bit 1 for
-completion. They are reached from one dispatch chain of consecutive `RCALL`s at
-`0x0020C`, `0x00216`, `0x00220` and `0x0022A`, each returning a length in `0x8E`
-to a shared exit - the shape of a command table, not of scattered helpers.
+completion.
+
+### The route to them, traced
+
+They are not scattered helpers. A nine-entry XOR chain at `0x001D0` dispatches on
+the **first byte of the USB endpoint buffer** at bank 4 `0x420`:
+
+| command byte | routine | `EECON1` | what it does |
+|---:|---|---|---|
+| `0x02` | `0x000BC` | `0x84` | **program flash write** |
+| `0x03` | `0x000E4` | `0x94` | **program flash erase** |
+| `0x04` | `0x00126` | cleared | data EEPROM read |
+| `0x05` | `0x00148` | `0x04` | data EEPROM write |
+| `0x00`, `0x01`, `0x06` | `0x00062`, `0x0006C` | none | no flash access |
+| `0x07`, `0xFF` | - | none | no call |
+
+That block is surrounded by USB buffer descriptor handling - bank 4, the `UOWN`
+and `DTS` bits, a 64-byte count - and it is entered from the main firmware by a
+`GOTO` at `0x00C60`, one way, never returning. What decides that jump is a byte
+of the USB endpoint buffer at `0x412`: non-zero sets the state variable `0x93` to
+6 and jumps; zero sets it to 5 and returns.
+
+**So the path from the wire to a program flash erase is unbroken.** It is not a
+bootloader behind a physical gate. What is not traced is what the outer protocol
+requires to reach `0x00C42` in the first place, and what value that byte must
+hold - so the conclusion is that the route exists, not that it is easy.
 
 **The configuration-bit path is the one worth naming separately.** Program flash
 can be rewritten; configuration bits decide whether the part can be programmed at
@@ -3318,14 +3341,18 @@ all. A remote that loses its firmware is a recovery problem. A remote whose
 configuration word is wrong can be neither read nor reprogrammed by anything this
 project can build.
 
-### What this does not establish
+### The configuration-bit routine has no caller
 
-Whether the dispatch chain is reachable over USB during normal operation, or only
-from a bootloader entered some other way, is **not established here**. The
-capability is in the image; the route to it is not traced. That does not soften
-the conclusion, because the commands are refused either way, and the cost of
-being wrong is asymmetric: the whitelist costs nothing, and a wrong write is not
-undoable.
+This corrects the first version of this subsection, which listed the `0xC4`
+routine among the ones the command table reaches. It is not among them. **No
+instruction anywhere in the 32 KiB image references `0x00172`** - not a call, not
+a jump, not a branch. The routine before it ends in a `RETURN` at `0x00170`, so
+it is not reached by falling through either.
+
+The capability is compiled in and, as this image stands, nothing invokes it. That
+is worth stating precisely rather than dropping, because "the part can do it" and
+"the firmware does it" are different claims and only the first is true here. A
+computed jump could still reach it and a literal scan would not see one.
 
 So the rule stands as written, and now it has a reason rather than an instinct:
 
