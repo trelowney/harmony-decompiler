@@ -789,8 +789,14 @@ def arch9_screen_text_regions(blob: bytes, section_pointers) -> list[dict]:
     # that region plus a delta, which is what the generic pointer representation
     # is for. The alternative is two overlapping writable regions, which is a
     # contradiction the compiler cannot resolve.
+    # Only opcode 4 names text. Opcode 3 names a picture, and reading a
+    # bitmap's `02 <u16 width> <u16 height>` header as glyphs gave four
+    # three-byte "strings" of codes [2, 96] and left section 17's screens
+    # opaque behind them.
     candidates = {}
     for reference in references.values():
+        if reference["kind"] != "screen_reference":
+            continue
         start = reference["targets"][0]
         end = start
         while end < len(blob) and blob[end] != 0:
@@ -1492,9 +1498,18 @@ def decompile(raw: bytes, filename=None) -> dict:
     # samples that nothing in the file refers to, and an action list is a count
     # byte followed by three-byte instructions, which almost any run of bytes
     # can be read as.
+    # What refers to a bitmap used to be the block_header recogniser, which was
+    # withdrawn when the rooted screen walk superseded it (FORMAT 4f). Nothing
+    # replaced it, so the gate has been closed on an empty set ever since and
+    # section 17's four screens came out opaque. The rooted walk knows the same
+    # addresses and knows them better: opcode 3 carries the picture it draws.
+    arch9_screens = (arch9_screen_text_regions(blob, ptrs)
+                     if magic == b"AHCM" and ptrs else [])
     first = _refine(blob, regions, records, bitmaps=frozenset())
     targets = frozenset(x for r in first if r["kind"] == "block_header"
                         for x in r["targets"])
+    targets |= frozenset(x for r in arch9_screens
+                         if r["kind"] == "screen_picture" for x in r["targets"])
     actions = find_action_lists(blob, first)
     regions = (_refine(blob, regions, records, bitmaps=targets, actions=actions)
                if targets or actions else first)
@@ -1507,7 +1522,7 @@ def decompile(raw: bytes, filename=None) -> dict:
                  *arch9_font_regions(blob, ptrs),
                  *arch9_mode_page_regions(blob, ptrs),
                  *arch9_value_map_references(blob, ptrs),
-                 *arch9_screen_text_regions(blob, ptrs)]
+                 *arch9_screens]
         regions = _overlay_known_regions(
             blob, regions, sorted(known, key=lambda region: region["offset"]))
 
