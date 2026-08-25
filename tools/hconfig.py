@@ -871,6 +871,97 @@ def arch9_font_regions(blob: bytes, section_pointers) -> list[dict]:
     return result
 
 
+def parse_arch9_font_glyph(blob: bytes, start: int, height: int, limit: int):
+    """One glyph reached through a font-set slot, with strictly framed rows.
+
+    ``height`` comes from the referring font set.  A row leader's low nibble
+    bounds its command bytes; each command must also account for exactly the
+    glyph width in pixels.  Keeping literal 2-bpp payloads verbatim preserves
+    padding bits while exposing the operation kind and pixel count.
+    """
+    if not (0 <= start < limit <= len(blob)) or not 1 <= height <= 64:
+        return None
+    width = blob[start]
+    if width == 0:
+        return None
+
+    rows = []
+    offset = start + 1
+    for _row_index in range(height):
+        if offset >= limit:
+            return None
+        leader = blob[offset]
+        if leader & 0xF0 != 0x20:
+            return None
+        offset += 1
+        row_end = offset + (leader & 0x0F)
+        if row_end > limit:
+            return None
+
+        operations = []
+        pixels = 0
+        while offset < row_end:
+            operation = blob[offset]
+            offset += 1
+            kind = operation >> 4
+            count = (operation & 0x0F) + 1
+            item = {"kind": kind, "count": count}
+            if kind == 5:
+                payload_length = (2 * count + 7) // 8
+                if offset + payload_length > row_end:
+                    return None
+                item["packed_pixels"] = blob[offset:offset + payload_length].hex()
+                offset += payload_length
+            elif kind not in (6, 10):
+                return None
+            pixels += count
+            operations.append(item)
+        if offset != row_end or pixels != width:
+            return None
+        rows.append(operations)
+
+    if offset >= limit or blob[offset] != 0:
+        return None
+    offset += 1
+    return {
+        "kind": "font_glyph",
+        "offset": start,
+        "length": offset - start,
+        "width": width,
+        "height": height,
+        "rows": rows,
+    }
+
+
+def arch9_font_glyph_regions(blob: bytes, section_pointers) -> list[dict]:
+    """Glyph objects named by non-NULL pointers in arch-9 font sets.
+
+    No candidate search is involved: the font table names each set, each set
+    names its glyphs, and its height supplies the glyph parser's row count.
+    """
+    glyphs = {}
+    for font in arch9_font_regions(blob, section_pointers):
+        for target in font["targets"]:
+            if target is None:
+                continue
+            # In arch 9 the glyph bodies precede their referring font set.  A
+            # holder is therefore also a hard upper bound, not a guessed end.
+            glyph = parse_arch9_font_glyph(
+                blob, target, font["height"], font["offset"])
+            if glyph is None:
+                return []
+            previous = glyphs.get(target)
+            if previous is not None and previous != glyph:
+                return []
+            glyphs[target] = glyph
+
+    known = sorted(glyphs.values(), key=lambda region: region["offset"])
+    for left, right in zip(known, known[1:]):
+        if left["offset"] + left["length"] > right["offset"]:
+            return []
+    return known
+
+
 def arch9_mode_page_regions(blob: bytes, section_pointers) -> list[dict]:
     """Every arch-9 mode page's binding-list and screen-program pointers."""
     if len(section_pointers) <= 6 or not section_pointers[6]:
@@ -910,6 +1001,84 @@ def arch9_mode_page_regions(blob: bytes, section_pointers) -> list[dict]:
                 "targets": targets,
             }
     return list(pages.values())
+
+
+def parse_arch9_tagged_list(blob: bytes, start: int, limit: int):
+    """One narrow or wide tagged list reached through a mode-page pointer."""
+    if not 0 <= start < limit <= len(blob):
+        return None
+    first = blob[start]
+    wide = first == 0
+    if wide:
+        if start + 2 > limit:
+            return None
+        count, header, stride = blob[start + 1], 2, 5
+    else:
+        count, header, stride = first, 1, 4
+    length = header + stride * count
+    if start + length > limit:
+        return None
+
+    entries = []
+    for index in range(count):
+        entry = start + header + stride * index
+        item = {}
+        if wide:
+            item["flags"] = blob[entry]
+            entry += 1
+        item.update({
+            "tag": blob[entry],
+            "operand": int.from_bytes(blob[entry + 1:entry + 3], "little"),
+            "opcode": blob[entry + 3],
+        })
+        entries.append(item)
+    return {
+        "kind": "tagged_list",
+        "offset": start,
+        "length": length,
+        "wide": wide,
+        "entries": entries,
+    }
+
+
+def arch9_section8_regions(blob: bytes, section_pointers) -> list[dict]:
+    """The slot-8 action list and every mode-page binding list it precedes.
+
+    Slot 8 supplies the action-list root and mode-page records supply all list
+    roots.  The independently sized objects must tile the section exactly, so
+    a plausible but incorrectly framed list cannot silently leave a gap.
+    """
+    if len(section_pointers) <= 8 or not section_pointers[8]:
+        return []
+    start = section_pointers[8] - CONFIG_BASE
+    following = [address - CONFIG_BASE for address in section_pointers[9:]
+                 if address is not None]
+    end = following[0] if following else len(blob) - 4
+    if not 0 <= start < end <= len(blob):
+        return []
+
+    leading = parse_action_list(blob, start, end)
+    if leading is None:
+        return []
+    cursor = start + leading["length"]
+
+    pages = arch9_mode_page_regions(blob, section_pointers)
+    roots = sorted({page["targets"][0] for page in pages})
+    if not roots or roots[0] != cursor:
+        return []
+
+    lists = []
+    for root in roots:
+        if root != cursor:
+            return []
+        tagged = parse_arch9_tagged_list(blob, root, end)
+        if tagged is None:
+            return []
+        lists.append(tagged)
+        cursor += tagged["length"]
+    if cursor != end:
+        return []
+    return [leading, *lists]
 
 
 def arch9_class5_ir_regions(blob: bytes, section_pointers) -> list[dict]:
@@ -1520,7 +1689,9 @@ def decompile(raw: bytes, filename=None) -> dict:
     if magic == b"AHCM":
         known = [*arch9_class5_ir_regions(blob, ptrs),
                  *arch9_font_regions(blob, ptrs),
+                 *arch9_font_glyph_regions(blob, ptrs),
                  *arch9_mode_page_regions(blob, ptrs),
+                 *arch9_section8_regions(blob, ptrs),
                  *arch9_value_map_references(blob, ptrs),
                  *arch9_screens]
         regions = _overlay_known_regions(
@@ -1689,9 +1860,11 @@ def emit_region(r: dict, resolve=None) -> bytes:
 
     if kind == "tagged_list":
         entries = r["entries"]
-        if not entries or len(entries) > 0xFF:
-            raise ConfigError("tagged list must contain 1..255 entries")
+        if len(entries) > 0xFF:
+            raise ConfigError("tagged list must contain at most 255 entries")
         wide = r.get("wide", any("flags" in entry for entry in entries))
+        if not entries and not wide:
+            raise ConfigError("an empty tagged list needs the wide header")
         out = bytearray((0, len(entries))) if wide else bytearray((len(entries),))
         for entry in entries:
             tag, operand = entry["tag"], entry["operand"]
@@ -1731,6 +1904,35 @@ def emit_region(r: dict, resolve=None) -> bytes:
         for target in targets:
             address = 0 if target is None else resolve(target) + CONFIG_BASE
             out += address.to_bytes(3, "little")
+        return bytes(out)
+
+    if kind == "font_glyph":
+        width, height, rows = r["width"], r["height"], r["rows"]
+        if not 1 <= width <= 0xFF or height != len(rows):
+            raise ConfigError("font glyph dimensions do not match its rows")
+        out = bytearray((width,))
+        for row in rows:
+            encoded = bytearray()
+            pixels = 0
+            for operation in row:
+                operation_kind = operation["kind"]
+                count = operation["count"]
+                if operation_kind not in (5, 6, 10) or not 1 <= count <= 16:
+                    raise ConfigError("invalid font-glyph row operation")
+                encoded.append((operation_kind << 4) | (count - 1))
+                if operation_kind == 5:
+                    payload = bytes.fromhex(operation.get("packed_pixels", ""))
+                    if len(payload) != (2 * count + 7) // 8:
+                        raise ConfigError("font-glyph literal payload has the wrong size")
+                    encoded += payload
+                elif "packed_pixels" in operation:
+                    raise ConfigError("font-glyph run unexpectedly has a literal payload")
+                pixels += count
+            if len(encoded) > 0x0F or pixels != width:
+                raise ConfigError("font-glyph row does not match its width")
+            out.append(0x20 | len(encoded))
+            out += encoded
+        out.append(0)
         return bytes(out)
 
     if kind == "raw_pointer":
@@ -1953,6 +2155,8 @@ def region_length(r: dict) -> int:
         return 10
     if kind == "font_set":
         return 3 + 3 * len(r["targets"])
+    if kind == "font_glyph":
+        return len(emit_region(r))
     if kind == "raw_pointer":
         return 3
     if kind == "reference":
