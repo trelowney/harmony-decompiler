@@ -451,6 +451,124 @@ def verify_screen_programs(blob: bytes, sections: list[int | None]) -> dict:
     }
 
 
+def verify_record_array_coverage(blob: bytes,
+                                 sections: list[int | None]) -> dict:
+    """Pin the rooted record-list overlays and complete screen instructions."""
+    regions = hconfig.decompile(blob)["blob"]["regions"]
+    role_counts = collections.Counter(
+        region.get("role") for region in regions if region.get("role"))
+    role_bytes = collections.Counter()
+    for region in regions:
+        role = region.get("role")
+        if role:
+            role_bytes[role] += hconfig.region_length(region)
+    expected_counts = {
+        "mode_binding": 114,
+        "page_binding_copy": 135,
+        "section_9_binding": 8,
+    }
+    expected_bytes = {
+        "mode_binding": 2413,
+        "page_binding_copy": 1052,
+        "section_9_binding": 745,
+    }
+    assert dict(role_counts) == expected_counts, role_counts
+    assert dict(role_bytes) == expected_bytes, role_bytes
+
+    instructions = [region for region in regions
+                    if region["kind"] == "screen_instruction"]
+    opcodes = collections.Counter(int(region["opcode"], 16)
+                                  for region in instructions)
+    assert opcodes == {0: 157, 5: 179, 16: 244, 17: 22, 22: 1080, 23: 1080}
+    instruction_bytes = sum(hconfig.region_length(region)
+                            for region in instructions)
+    assert instruction_bytes == 4510
+
+    opaque = [region for region in regions if region["kind"] == "opaque"]
+    opaque_bytes = sum(hconfig.region_length(region) for region in opaque)
+    assert (len(opaque), opaque_bytes) == (25, 512)
+
+    # The positive counts are not enough: make each independent constraint
+    # disagree once and require the complete overlay to fail closed.
+    pointers = [None if offset is None else offset + CONFIG_BASE
+                for offset in sections]
+
+    def rejected(at: int, width: int = 1) -> bool:
+        changed = bytearray(blob)
+        value = int.from_bytes(changed[at:at + width], "little")
+        changed[at:at + width] = (value + 1).to_bytes(width, "little")
+        return not hconfig.arch9_record_body_regions(bytes(changed), pointers)
+
+    mode_list = next(region for region in regions
+                     if region.get("role") == "mode_binding")
+    mode_header = next(region for region in regions
+                       if region["kind"] == "record_header"
+                       and region["back_reference"] == mode_list["offset"])
+    pool_copy = next(region for region in regions
+                     if region.get("role") == "page_binding_copy")
+
+    pairing_copy = next(region for region in regions
+                        if region.get("role") == "page_binding_copy"
+                        and any(entry["opcode"] != 0x7F
+                                for entry in region["entries"]))
+    pairing_index = next(index for index, entry
+                         in enumerate(pairing_copy["entries"])
+                         if entry["opcode"] != 0x7F)
+    pairing_stride = 5 if pairing_copy["wide"] else 4
+    pairing_operand = (pairing_copy["offset"]
+                       + (2 if pairing_copy["wide"] else 1)
+                       + pairing_stride * pairing_index
+                       + (2 if pairing_copy["wide"] else 1))
+
+    pages = hconfig.arch9_mode_page_regions(blob, pointers)
+    slot8 = hconfig.arch9_section8_regions(blob, pointers)
+    page_by_start = {region["offset"]: region for region in slot8
+                     if region["kind"] == "tagged_list"}
+    page_lists = [page_by_start[page["targets"][0]] for page in pages]
+    copies = [region for region in regions
+              if region.get("role") == "page_binding_copy"]
+    signature_pair = next(
+        (expected, actual)
+        for page_list, copy in zip(page_lists, copies)
+        for expected, actual in zip(page_list["entries"], copy["entries"])
+        if (expected["opcode"] == 0x7F
+            and expected["operand"] != actual["operand"]))
+    action_table = sections[ACTION_SLOT]
+    assert action_table is not None
+    action_count = u16(blob, action_table)
+    action_roots = [u24(blob, action_table + 2 + 3 * index) - CONFIG_BASE
+                    for index in range(action_count)]
+    action_body = action_roots[signature_pair[1]["operand"]] + 1
+
+    assert sections[9] is not None and sections[ACTION_SLOT] is not None
+    negative_cases = {
+        "mode_back_reference": rejected(mode_header["offset"] + 1, 3),
+        "mode_list_count": rejected(
+            mode_list["offset"] + (1 if mode_list["wide"] else 0)),
+        "pool_list_count": rejected(
+            pool_copy["offset"] + (1 if pool_copy["wide"] else 0)),
+        "section9_root": rejected(sections[9] + 1, 3),
+        "page_copy_pairing": rejected(pairing_operand, 2),
+        "action_signature": rejected(action_body),
+        "independent_pool_end": rejected(sections[ACTION_SLOT] + 2, 3),
+    }
+    assert all(negative_cases.values()), negative_cases
+    return {
+        "mode_lists": role_counts["mode_binding"],
+        "mode_list_bytes": role_bytes["mode_binding"],
+        "pool_page_copies": role_counts["page_binding_copy"],
+        "pool_section9_lists": role_counts["section_9_binding"],
+        "pool_bytes": (role_bytes["page_binding_copy"]
+                       + role_bytes["section_9_binding"]),
+        "screen_instructions": len(instructions),
+        "screen_instruction_bytes": instruction_bytes,
+        "opaque_regions": len(opaque),
+        "opaque_bytes": opaque_bytes,
+        "bytes_moved_from_opaque": 8513 - opaque_bytes,
+        "negative_mutations_refused": len(negative_cases),
+    }
+
+
 def verify_tone_firmware(path: Path) -> dict:
     """Pin the 525 0x75 handler and GPIO toggle without redistributing firmware."""
     import pic18dis
@@ -514,6 +632,7 @@ def main() -> int:
     action = verify_action_closures(blob, sections)
     devices = verify_device_page_groups(blob, sections)
     screen = verify_screen_programs(blob, sections)
+    record_array = verify_record_array_coverage(blob, sections)
 
     print("PASS slot 8 closes exactly")
     print("  " + ", ".join(f"{k}={v}" for k, v in slot8.items()))
@@ -524,6 +643,8 @@ def main() -> int:
         print(f"  {name}: " + ", ".join(f"{k}={v}" for k, v in details.items()))
     print("PASS all slot-11 and mode-page screen programs decode")
     print("  " + ", ".join(f"{k}={v}" for k, v in screen.items()))
+    print("PASS rooted record lists and complete screen instructions close")
+    print("  " + ", ".join(f"{k}={v}" for k, v in record_array.items()))
     if args.firmware:
         firmware = verify_tone_firmware(args.firmware)
         print("PASS opcode 0x75 reaches a counted LATA.2 toggle loop")

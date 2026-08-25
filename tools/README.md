@@ -60,12 +60,12 @@ everything was fine when it was not:
 
 **The caveat that matters.** All of that covers only the pointers this code can
 see, and twice now the ones it could not see were the ones that mattered. On
-arch 9 sections 1, 2, 3, 4 and 16 are still opaque, along with most of what sits
-inside the 114 record bodies; on arch 8 almost everything is. Anything
-pointer-shaped in there is hex being copied. A length-changing edit will leave
-such a pointer aimed at whatever moved into its place, and nothing here will
-notice. Length-neutral edits, retargeting a key or renaming something to a name
-of the same length, do not have that problem.
+the public arch-9 sample, 512 bytes in the 114-record array remain opaque; on
+arch 8 almost everything is. Anything pointer-shaped in there is hex being
+copied. A length-changing edit will leave such a pointer aimed at whatever
+moved into its place, and nothing here will notice. Length-neutral edits,
+retargeting a key or renaming something to a name of the same length, do not
+have that problem.
 
 ### The reader-backed relocation check
 
@@ -83,9 +83,10 @@ still points where it did - and a gap in the wrong place breaks no pointer. So
 `relocate` asks a second reader instead: it decompiles the result, and refuses
 if any structure the decompiler recognised before has stopped being recognised.
 Inserting zero bytes adds no structure, so growth is expected and loss is a bug.
-That guard reaches exactly as far as the decompiler reads and no further -
-8,513 bytes of the public 525 are still opaque, and a gap inside those is
-invisible to it. See FORMAT.md 4s.
+That guard reaches exactly as far as the decompiler reads and no further. Rooted
+record lists and screen instructions reduced the public 525's opaque remainder
+from 8,513 to 512 bytes; a gap inside those 512 can still be invisible to it.
+See FORMAT.md 4s.
 
 The arch-9 insertion floor is **`0x5F` in the public 525 sample**, the first byte
 after `CMAH`. It was derived here rather than copied from Danny's Harmony One

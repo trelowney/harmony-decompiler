@@ -64,8 +64,8 @@ human-readable record.
 
 The region `0x0000-0xF35B` (~61 KiB, 78% of the blob) is **not** covered by the
 section table. It is not unstructured, though - it is an array of 114 records
-indexed by section 6, see §4b and §4d. The first of those records contains the
-key table (§4e).
+indexed by section 6, see §4b and §4d. The first of those records starts with a
+rooted tagged binding list (§4e).
 
 ### A span is where a subsystem's table lives, not a fence around its data
 
@@ -221,8 +221,9 @@ Running the decompiler over the 525 config answers it.
 | 14 | 11 | u8 | no - 34 B of 55 |
 | 15 | 5 | u8 | yes |
 
-Sections **1, 2, 3, 4, 8, 16 and 17** contain no recognisable pointer table and
-remain entirely opaque.
+Sections **1, 2, 3, 4, 8, 16 and 17** contain no recognisable pointer table of
+their own. Later semantic readers account for their public-525 contents; the
+remaining opaque bytes are all below the section table in the record array.
 
 Section 10 was previously listed as unknown; it is a pointer array and nothing
 else. Together these hold 685 addresses, and with the record headers and the
@@ -333,6 +334,30 @@ There are 114 modes and 135 page records. The material between a mode's tagged
 list and entry is primarily its page screen programs and page records, not an
 unknown keyboard-matrix payload.
 
+The back pointer also supplies an exact root for the physical binding list at
+the start of every mode. Each narrow or wide list closes from its own count; its
+end is independently one of the screen-program roots named by a page record or
+section 11. All **114 lists close**, occupying **2,413 bytes**. Changing a back
+pointer, a count, or the following program root makes the reader reject the
+whole interpretation.
+
+Two mode entries are followed by packed runs of the same counted lists:
+`0x001B3C-0x001CBF` (45 lists, 387 bytes) and
+`0x00E10D-0x00E68F` (98 lists, 1,410 bytes). Their objects close individually;
+the runs also land exactly on roots supplied by other readers. The 143 objects
+are one copy for each of the 135 pages plus all eight section-9 lists. Every
+copy agrees structurally with its page list. The only permitted operand change,
+opcode `0x7F`, must select an action list with an identical instruction
+signature. A changed count, section-9 root, page pairing, action-list meaning or
+independent upper root makes the complete pool reading fail closed.
+
+The physical-list relation is not arch-9-only evidence. Danny Bloemendaal's
+reader applied to the local arch-8 `Update.EZHex` and arch-14
+`Harmony_650.EZHex` samples finds respectively 103/103 and 265/265 physical
+lists ending at rooted screen programs; their section-9 analogues also close
+(9/9 and 10/10). The byte layouts differ, so this is an outside witness for the
+root relation rather than a grammar copied from the 525.
+
 ### Two more byte-pattern readings withdrawn
 
 The previous release of this decompiler emitted 1,072 regions of kind
@@ -356,18 +381,20 @@ difference, because the shape is all it has.
 > separates a real structure from a coincidence here is not a better pattern but
 > a **root**: something the firmware is known to start reading from.
 
-## 4e. KEY TABLE - SOLVED
+## 4e. ROOTED TAGGED BINDING LISTS - SOLVED
 
-Inside record #0, starting at offset `0x0000FB`:
+The first mode entry points back to a narrow tagged list starting at `0x0000FA`.
+After its one-byte count, entries start at `0x0000FB`:
 
 ```
 <u8 key code> <u16 target> <0x7F>
 ```
 
-**51 entries**, and the count is explicitly declared by byte `0x33` = 51 at offset
-`REC0+9`. The table ends exactly at `0x0001C7`, where the next structure begins.
-No key code repeats. This is not a guess - the declared count, the terminators and
-the boundaries all agree.
+**51 entries**, and the count is explicitly declared by byte `0x33` = 51 at the
+list root. The list ends exactly at `0x0001C7`, the rooted screen program named
+by the mode's page. No key code repeats. This is not a shape scan: the mode entry
+names the start, the count closes the object, and a separate reader names its
+successor.
 
 Key codes fall in the range `0x81-0xB9` (plus one exception, `0x06`) and form
 obvious groups: `0x81-0x8F`, `0x91-0x9F`, `0xA1-0xAF`, `0xB1-0xB9`.
@@ -377,10 +404,10 @@ Targets are mostly a contiguous run 0-46, with the exceptions 95, 155, 179, 311.
 see §5g). What each code physically *means* is **still unknown** - sniffing it
 over USB was tried and does not work (§5d).
 
-### A fifth key table, in a wider shape
+### The same binding tags in the wide shape
 
-Inside the largest record body (29,841 B at `0x01B3C`) sits another key table,
-with a five-byte entry:
+One list in the first packed pool starts at `0x001BB7` in the wide form, with a
+five-byte entry starting at `0x001BB9`:
 
 ```
 <u8 flag> <u8 code> <u16 target> <0x7F>
@@ -396,7 +423,7 @@ Every target reads 79.
 
 | | main table | this one |
 |---|---|---|
-| offset | `0x0000FB` | `0x001BB9` |
+| entry offset | `0x0000FB` | `0x001BB9` |
 | entries | 51 | 51 |
 | entry width | 4 B | 5 B |
 | physical codes | 50, identical set and order | 50, identical set and order |
@@ -407,8 +434,9 @@ A table with every key pointing at one target looks like a default or a catch-al
 rather than a working mapping. Whether the flag byte is what distinguishes the two
 shapes, or whether the wider form means something else entirely, is unknown.
 
-It went unnoticed until now because the detector strode four bytes at a time, and
-a five-byte table read that way dissolves into noise.
+It went unnoticed because the detector strode four bytes at a time, and a
+five-byte table read that way dissolves into noise. The current reader does not
+detect either by stride: it reaches them through mode, page and section-9 roots.
 
 ## 4f. The alleged block header is screen opcodes 22 + 3 - CORRECTED
 
@@ -430,6 +458,12 @@ because it looked inside record bodies and eight of them lie outside.
 
 So the keyboard-matrix reading is gone. Both domains number things 0 to 7 and
 both multiply by eight, which felt like corroboration and was coincidence.
+
+Rooted traversal now emits every pointer-free instruction, not only the opcode-3
+and opcode-4 references. The public 525 has **2,762** such instructions spanning
+**4,510 formerly opaque bytes**: opcodes 0, 5, 16, 17, 22 and 23. Opcode 5 keeps
+its terminated glyph run as a separate writable region. Pointer-bearing control
+opcodes 18, 19 and 20 remain raw until their embedded targets have a writer.
 
 ### What the nine operands are, and which way round
 
@@ -1932,17 +1966,29 @@ insertion at 69632 costs the decompiler structure it read before:
 font_glyph 160 -> 0; 69632 is inside the font_glyph at 69626
 ```
 
-Both cases the verifier checks are found in the file rather than written down as
-numbers: one byte into the first glyph above the floor, and the start of the
-section following the one that holds the tagged lists.
+All cases the verifier checks are found in the file rather than written down as
+numbers: one byte into the first glyph above the floor; the start of the section
+following the one that holds the tagged lists; and insertions inside a rooted
+mode binding, a packed page-list copy and a rooted screen instruction.
 
 ### What the guard cannot see
 
-Its reach is exactly the decompiler's coverage, and no further. **8,513 bytes of
-the public 525 are still emitted opaque, 10.8% of the file**, and a gap opened
-inside any of them costs no recognised structure and will be allowed. So the
-guard is a floor on correctness that rises as coverage rises, not a proof that
-an insertion point is safe.
+Its reach is exactly the decompiler's coverage, and no further. Rooted record
+lists and complete pointer-free screen instructions move **8,001 bytes** out of
+opaque. **512 bytes of the public 525 remain opaque, 0.65% of the file**, and a
+gap opened inside any of them can still cost no recognised structure. They are:
+
+- 130 bytes at `0x001EB9`, between an action list and a class-5 body;
+- 286 bytes at `0x00EFDA`, mixed action-like data before the raw-pointer run;
+- 73 bytes in 22 one-, two- and five-byte scalar runs between raw pointers at
+  `0x00F0FB-0x00F183`; and
+- 23 bytes at `0x00F33A`, between a terminal screen instruction and an action
+  list.
+
+None has both an exact reader-supplied root and a self-closing grammar, so naming
+them would lower the evidence standard. The guard remains a floor on
+correctness that rises as coverage rises, not proof that an allowed insertion
+point is safe.
 
 The census check carries its own blind spot, already stated by the verifier:
 changing a key-table `u16` to another valid action-list index passes every part
@@ -2043,10 +2089,10 @@ headers.
 > as well; see 4d, 4f and 4g. Nothing that was shared has stopped being shared,
 > but two of the things listed as shared were never structures on either side.
 
-About 4% of an arch 8 config decodes, against 76% for the 525. Part of that is
-that the files are six times larger, and part of it is that everything learned
-since has been learned from one arch 9 config. The gap is a statement about
-where the effort went, not about the architectures.
+About 4% of an arch 8 config decodes, against more than 99% emitted non-opaque
+for the 525. Part of that is that the files are six times larger, and part of it
+is that most detailed work has used one arch 9 config. The gap is a statement
+about where the effort went, not about the architectures.
 
 ### Negative result: diffing samples does not work
 

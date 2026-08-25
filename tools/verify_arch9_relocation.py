@@ -179,10 +179,13 @@ def verify_case(
     try:
         doc = hconfig.decompile(relocated)
         kinds = Counter(region["kind"] for region in doc["blob"]["regions"])
-        inventory_ok = kinds == baseline.kinds
+        # Mirror survives_relocation: zero-byte insertion may add raw chunks,
+        # but no kind recognised before may have a smaller count afterward.
+        missing = baseline.kinds - kinds
+        inventory_ok = not missing
         if not inventory_ok:
-            details.append(f"region-kind inventory changed: {kinds - baseline.kinds}; "
-                           f"missing {baseline.kinds - kinds}")
+            details.append(f"region-kind inventory lost {missing}; "
+                           f"added {kinds - baseline.kinds}")
         device_count = count_devices.devices_from_section_5(relocated)
         devices_ok = device_count == baseline.devices
         if not devices_ok:
@@ -236,8 +239,9 @@ def structure_refusals(blob: bytes) -> list[str]:
 
     The census is what relocation rewrites, so it cannot answer whether the gap
     landed somewhere a config can hold one - a gap in the wrong place leaves
-    every stated address correct. Both cases below are found in the file rather
-    than written down as numbers, and both were allowed before the guard.
+    every stated address correct. The cases below are found in the file rather
+    than written down as numbers; the original two were allowed before the
+    guard, and the record-array cases pin its newly raised reach.
     """
     floor = relocation_floor(blob)
     regions = hconfig.decompile(blob)["blob"]["regions"]
@@ -253,6 +257,34 @@ def structure_refusals(blob: bytes) -> list[str]:
     if glyph is not None:
         _expect_refusal(blob, glyph["offset"] + 1, 1, reason)
         found.append(f"one byte into the font_glyph at {glyph['offset']}")
+
+    # The record entry names the physical list's start and a page independently
+    # names the program immediately after it. A gap inside the counted list
+    # makes those two derivations disagree.
+    mode_list = next((region for region in regions
+                      if region.get("role") == "mode_binding"
+                      and hconfig.region_length(region) > 5), None)
+    if mode_list is not None:
+        _expect_refusal(blob, mode_list["offset"] + 2, 3, reason)
+        found.append(f"inside the mode binding list at {mode_list['offset']}")
+
+    # Pool lists close from their own counts, land on an independent root, and
+    # pair with page lists. An insertion must cost that whole cross-check rather
+    # than being absorbed as one more count-shaped run.
+    pool_list = next((region for region in regions
+                      if region.get("role") == "page_binding_copy"
+                      and hconfig.region_length(region) > 5), None)
+    if pool_list is not None:
+        _expect_refusal(blob, pool_list["offset"] + 2, 3, reason)
+        found.append(f"inside the page-list copy at {pool_list['offset']}")
+
+    instruction = next((region for region in regions
+                        if region.get("kind") == "screen_instruction"
+                        and hconfig.region_length(region) > 1), None)
+    if instruction is not None:
+        _expect_refusal(blob, instruction["offset"] + 1, 3, reason)
+        found.append(f"inside the rooted screen instruction at "
+                     f"{instruction['offset']}")
 
     # The start of the section after the one holding the tagged lists. Section
     # 8's last list ends exactly on that boundary (FORMAT.md 4k), so a gap there

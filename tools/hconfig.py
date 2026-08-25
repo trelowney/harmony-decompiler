@@ -738,16 +738,22 @@ def arch9_screen_roots(blob: bytes, section_pointers) -> list[int]:
 
 
 def arch9_screen_text_regions(blob: bytes, section_pointers) -> list[dict]:
-    """Every opcode-3/4 pointer and the terminated glyph strings opcode 4 names.
+    """Every rooted screen instruction and the glyph strings opcode 4 names.
 
     These locations are derived from stated screen roots and control-flow
-    successors.  That makes an opcode-4 pointer stronger evidence than scanning
-    arbitrary bytes for ``04`` and is also what lets it supersede the older
-    generic ``16 <u24>`` recogniser when a y-coordinate happens to be 0x16.
+    successors.  That makes an instruction stronger evidence than scanning
+    arbitrary bytes for an opcode and is also what lets opcode 4 supersede the
+    older generic ``16 <u24>`` recogniser when a y-coordinate happens to be
+    0x16.  Opcodes 3 and 4 keep their pointer-aware region types; every other
+    pointer-free instruction is emitted as ``screen_instruction``.  The parser
+    also knows pointer-bearing control opcodes 18, 19 and 20, but they stay raw
+    until their embedded pointers have a writer rather than being copied under
+    a semantic name.
     """
     pending = arch9_screen_roots(blob, section_pointers)
     seen = set(pending)
     references = {}
+    inline_strings = {}
     while pending:
         root = pending.pop()
         program = parse_arch9_screen_program(blob, root)
@@ -778,6 +784,31 @@ def arch9_screen_text_regions(blob: bytes, section_pointers) -> list[dict]:
                         "y": operands[1],
                         "targets": [target],
                     }
+            if instruction["opcode"] == 5:
+                operands = instruction["operands"]
+                references[instruction["offset"]] = {
+                    "kind": "screen_instruction",
+                    "offset": instruction["offset"],
+                    "length": 3,
+                    "opcode": "0x05",
+                    "operands": operands[:2].hex(),
+                }
+                inline_strings[instruction["offset"] + 3] = {
+                    "kind": "glyph_string",
+                    "offset": instruction["offset"] + 3,
+                    "length": len(operands) - 2,
+                    "codes": list(operands[2:-1]),
+                    "terminator": "0x00",
+                }
+            if (instruction["opcode"] not in (3, 4, 5, 18, 19, 20)
+                    and not instruction["targets"]):
+                references[instruction["offset"]] = {
+                    "kind": "screen_instruction",
+                    "offset": instruction["offset"],
+                    "length": instruction["length"],
+                    "opcode": f"0x{instruction['opcode']:02X}",
+                    "operands": instruction["operands"].hex(),
+                }
             for target in instruction["targets"]:
                 if target not in seen:
                     seen.add(target)
@@ -789,11 +820,12 @@ def arch9_screen_text_regions(blob: bytes, section_pointers) -> list[dict]:
     # that region plus a delta, which is what the generic pointer representation
     # is for. The alternative is two overlapping writable regions, which is a
     # contradiction the compiler cannot resolve.
-    # Only opcode 4 names text. Opcode 3 names a picture, and reading a
-    # bitmap's `02 <u16 width> <u16 height>` header as glyphs gave four
-    # three-byte "strings" of codes [2, 96] and left section 17's screens
-    # opaque behind them.
-    candidates = {}
+    # Only opcode 4 names external text; opcode 5's inline strings were added
+    # above. Opcode 3 names a picture, and reading a bitmap's
+    # `02 <u16 width> <u16 height>` header as glyphs gave four three-byte
+    # "strings" of codes [2, 96] and left section 17's screens opaque behind
+    # them.
+    candidates = dict(inline_strings)
     for reference in references.values():
         if reference["kind"] != "screen_reference":
             continue
@@ -1079,6 +1111,178 @@ def arch9_section8_regions(blob: bytes, section_pointers) -> list[dict]:
     if cursor != end:
         return []
     return [leading, *lists]
+
+
+def _arch9_array_targets(blob: bytes, section_pointers, slot: int,
+                         count_width: int) -> list[int] | None:
+    """Targets of one rooted arch-9 counted pointer array, or ``None``."""
+    if len(section_pointers) <= slot or not section_pointers[slot]:
+        return None
+    start = section_pointers[slot] - CONFIG_BASE
+    following = [address - CONFIG_BASE for address in section_pointers[slot + 1:]
+                 if address is not None]
+    end = following[0] if following else len(blob) - 4
+    if not 0 <= start <= end - count_width <= len(blob):
+        return None
+    count = int.from_bytes(blob[start:start + count_width], "little")
+    head = start + count_width
+    if head + 3 * count > end:
+        return None
+    targets = []
+    for index in range(count):
+        address = int.from_bytes(blob[head + 3 * index:head + 3 * index + 3],
+                                 "little")
+        target = address - CONFIG_BASE
+        if not 0 <= target < len(blob):
+            return None
+        targets.append(target)
+    return targets
+
+
+def arch9_record_body_regions(blob: bytes, section_pointers) -> list[dict]:
+    """The rooted tagged lists in and alongside the arch-9 mode records.
+
+    A mode entry's back-reference names its physical-key list.  The list closes
+    from its own count, and its end must independently be one of the screen
+    program roots stated by a page record or slot 11.  This is the relation the
+    firmware consumes; accepting the count alone would merely fit noise.
+
+    Two other runs begin exactly after a mode entry's counted page array.  They
+    are pools of tagged lists, each list again closed by its own count.  A pool
+    is accepted only when it lands exactly on the next root another reader
+    names, contains a slot-9 target on a list boundary, accounts for every
+    slot-9 target and one copy per mode page, and each copy agrees with the page
+    list in table order.  Opcode 0x7F is the one permitted operand difference:
+    both indices must name action lists with identical instructions.
+
+    These are falsifiable constraints, not a scan.  A different back-reference,
+    list count, page count, slot-9 target, action-list meaning, or independently
+    rooted upper boundary makes the whole reading fail closed.
+    """
+    if len(section_pointers) <= 11 or not section_pointers[6]:
+        return []
+    record_starts = find_record_starts(
+        blob, section_pointers[6] - CONFIG_BASE)
+    if not record_starts:
+        return []
+
+    first_section = min(address - CONFIG_BASE for address in section_pointers
+                        if address is not None)
+    headers = []
+    for index, start in enumerate(record_starts):
+        limit = (record_starts[index + 1]
+                 if index + 1 < len(record_starts) else first_section)
+        header = parse_record_header(blob, start, limit)
+        if header is None:
+            return []
+        headers.append(header)
+
+    screen_roots = set(arch9_screen_roots(blob, section_pointers))
+    mode_lists = []
+    for header in headers:
+        region = parse_arch9_tagged_list(
+            blob, header["back_reference"], header["offset"])
+        if (region is None
+                or region["offset"] + region["length"] not in screen_roots):
+            return []
+        region["role"] = "mode_binding"
+        mode_lists.append(region)
+
+    pages = arch9_mode_page_regions(blob, section_pointers)
+    slot8 = arch9_section8_regions(blob, section_pointers)
+    page_lists_by_start = {
+        region["offset"]: region for region in slot8
+        if region["kind"] == "tagged_list"
+    }
+    page_list_roots = [page["targets"][0] for page in pages]
+    if (len(page_list_roots) != len(set(page_list_roots))
+            or set(page_list_roots) != set(page_lists_by_start)):
+        return []
+    page_lists = [page_lists_by_start[root] for root in page_list_roots]
+
+    handler_roots = _arch9_array_targets(blob, section_pointers, 9, 1)
+    action_roots = _arch9_array_targets(blob, section_pointers, 10, 2)
+    screen_table_roots = _arch9_array_targets(blob, section_pointers, 11, 2)
+    if handler_roots is None or action_roots is None or screen_table_roots is None:
+        return []
+    handler_starts = set(handler_roots)
+
+    # Every pool end is a root from an independent reader.  The boundary is a
+    # check: each object inside still supplies its own counted extent.
+    bounds = set(action_roots) | set(screen_table_roots)
+    for header in headers:
+        bounds.update((header["offset"], header["back_reference"]))
+    for page in pages:
+        bounds.add(page["offset"])
+        bounds.update(page["targets"])
+    ordered_bounds = sorted(bound for bound in bounds
+                            if 0 <= bound < len(blob))
+
+    pools = []
+    for header in headers:
+        start = header["offset"] + header["length"]
+        end = next((bound for bound in ordered_bounds if bound > start), None)
+        if end is None:
+            continue
+        lists, list_starts, cursor = [], set(), start
+        while cursor < end:
+            region = parse_arch9_tagged_list(blob, cursor, end)
+            if region is None or region["length"] <= 0:
+                break
+            lists.append(region)
+            list_starts.add(cursor)
+            cursor += region["length"]
+        held = [root for root in handler_roots if start <= root < end]
+        if (cursor == end and held
+                and all(root in list_starts for root in held)):
+            pools.append((start, end, lists))
+
+    pools.sort(key=lambda pool: pool[0])
+    for left, right in zip(pools, pools[1:]):
+        if left[1] > right[0]:
+            return []
+    pool_lists = [region for _start, _end, lists in pools for region in lists]
+    pool_starts = {region["offset"] for region in pool_lists}
+    if not handler_starts or not handler_starts <= pool_starts:
+        return []
+    copies = [region for region in pool_lists
+              if region["offset"] not in handler_starts]
+    if len(pool_lists) != len(pages) + len(handler_roots) or len(copies) != len(pages):
+        return []
+
+    action_cache = {}
+
+    def action_signature(index):
+        if not 0 <= index < len(action_roots):
+            return None
+        if index not in action_cache:
+            action = parse_action_list(blob, action_roots[index], len(blob))
+            action_cache[index] = (None if action is None else tuple(
+                (item["operand"], int(item["opcode"], 16))
+                for item in action["instructions"]))
+        return action_cache[index]
+
+    for page_list, copy in zip(page_lists, copies):
+        if (page_list["wide"] != copy["wide"]
+                or len(page_list["entries"]) != len(copy["entries"])):
+            return []
+        for expected, actual in zip(page_list["entries"], copy["entries"]):
+            if (expected.get("flags") != actual.get("flags")
+                    or expected["tag"] != actual["tag"]
+                    or expected["opcode"] != actual["opcode"]):
+                return []
+            if expected["opcode"] == 0x7F:
+                left = action_signature(expected["operand"])
+                right = action_signature(actual["operand"])
+                if left is None or left != right:
+                    return []
+            elif expected["operand"] != actual["operand"]:
+                return []
+
+    for region in pool_lists:
+        region["role"] = ("section_9_binding" if region["offset"] in handler_starts
+                          else "page_binding_copy")
+    return [*mode_lists, *pool_lists]
 
 
 def arch9_class5_ir_regions(blob: bytes, section_pointers) -> list[dict]:
@@ -1683,14 +1887,16 @@ def decompile(raw: bytes, filename=None) -> dict:
     regions = (_refine(blob, regions, records, bitmaps=targets, actions=actions)
                if targets or actions else first)
 
-    # The arch-9 screen parser is rooted in slot 11 and the slot-6 mode pages,
-    # not in byte-pattern guesses. Pull opcode-4 references and their strings
-    # out last so they take precedence over weaker recognisers they may cross.
+    # The arch-9 semantic readers are rooted in the section tables, mode entries
+    # and page records, not in byte-pattern guesses. Pull the record lists and
+    # complete screen instructions out last so they take precedence over weaker
+    # recognisers they may cross.
     if magic == b"AHCM":
         known = [*arch9_class5_ir_regions(blob, ptrs),
                  *arch9_font_regions(blob, ptrs),
                  *arch9_font_glyph_regions(blob, ptrs),
                  *arch9_mode_page_regions(blob, ptrs),
+                 *arch9_record_body_regions(blob, ptrs),
                  *arch9_section8_regions(blob, ptrs),
                  *arch9_value_map_references(blob, ptrs),
                  *arch9_screens]
@@ -1774,6 +1980,25 @@ def emit_region(r: dict, resolve=None) -> bytes:
 
     if kind == "glyph_string":
         return bytes(r["codes"]) + bytes([int(r["terminator"], 16)])
+
+    if kind == "screen_instruction":
+        opcode = (int(r["opcode"], 16) if isinstance(r["opcode"], str)
+                  else int(r["opcode"]))
+        operands = bytes.fromhex(r["operands"])
+        if opcode == 0:
+            valid = not operands
+        elif opcode in ARCH9_SCREEN_FIXED and opcode not in (3, 4):
+            valid = len(operands) == ARCH9_SCREEN_FIXED[opcode]
+        elif opcode == 5:
+            # The terminated glyph run is the following glyph_string region;
+            # keeping it separate preserves opcode-4 suffix pointers without
+            # overlapping two writable regions.
+            valid = len(operands) == 2
+        else:
+            valid = False
+        if not 0 <= opcode <= 0xFF or not valid:
+            raise ConfigError("invalid pointer-free arch-9 screen instruction")
+        return bytes((opcode,)) + operands
 
     if kind == "bitmap":
         return (bytes([int(r["format"], 16)])
@@ -2151,6 +2376,8 @@ def region_length(r: dict) -> int:
         return (2 if wide else 1) + (5 if wide else 4) * len(r["entries"])
     if kind == "mode_page":
         return 6
+    if kind == "screen_instruction":
+        return 1 + len(bytes.fromhex(r["operands"]))
     if kind == "screen_picture":
         return 10
     if kind == "font_set":

@@ -17,10 +17,9 @@ for the remotes it serves. It does not serve these.
 
 > **Status: the round trip works.** A 525 config decompiles to JSON and compiles
 > back byte-identical, and a button can be remapped through it - changing exactly
-> one byte of the blob, with both of the file's checksums recomputed. About 76% of
-> the file is decoded so far and the rest passes through as opaque blobs, but that
-> part includes **5,015 pointers**, which the compiler recomputes rather than
-> copies.
+> one byte of the blob, with both of the file's checksums recomputed. More than
+> 99% of the public 525 blob is emitted non-opaque; the decoded part includes
+> **5,015 pointers**, which the compiler recomputes rather than copies.
 >
 > **The menus render.** All 135 screens of the 525 sample draw as bitmaps offline,
 > and a device label on them can be edited and checked without going near a
@@ -161,9 +160,9 @@ A pointer hidden inside a region that is still opaque is invisible to this code
 and would be silently left behind by exactly the kind of edit above. That is not
 hypothetical: it has now happened twice, with the trailer checksum and with the
 infrared records, and both times an outside reader found it rather than any test
-here. Sections 1, 2, 3, 4 and 16 and most of the 114 record bodies are still
-opaque, so treat length-changing edits as an experiment rather than a feature,
-and read the safety note below before going anywhere near hardware.
+here. The public 525 now has 512 opaque bytes, all in the 114-record array, so
+treat length-changing edits as an experiment rather than a feature, and read the
+safety note below before going anywhere near hardware.
 
 ## The main thing standing in the way
 
