@@ -1732,6 +1732,150 @@ the two of them; `0x04C68` falls back to the first if the second does not
 validate. The config a remote runs is the one at `0x020000`. What is meant to
 live in the 32 KiB at `0x018000` is not known here.
 
+## 4r. The 180 bytes no reader claimed, named - MEASURED
+
+Rooted coverage of the public 525 leaves **180 bytes in seven runs** that no
+reader claimed. They are not one problem. Three of the seven were already
+described in this document and simply had no reader written, which is the same
+shape of gap section 8 turned out to be; the other four had no description at
+all.
+
+Calling them unreached would be the same error again. Five of the seven runs are
+named directly by the section table, and the sixth is pointed at by section 15.
+Nothing was hiding: the bytes were addressed all along and no code read them,
+which is a different fault from a structure being unknown and needs saying
+differently.
+
+```
+sec  offset            bytes  what it is
+ 1   0x00F48E              7  protocol and skin
+ 2   0x00F495              8  the remote's own writeable flash
+ 3   0x00F49D             14  the build time
+ 4   0x00F4AB            125  section 4's own numbered table
+14   0x012654             21  five value lists, section 15 points at them
+16   0x012679              1  an empty pointer table
+17   0x01267A + 0x013290   4  two leading zeros, and the trailer checksum
+```
+
+`tools/verify_small_sections.py` checks all of it against every public sample,
+and `--negative` breaks each field in turn and demands the check notice. All 15
+containers pass; all 14 mutations are caught. The two 890 containers are
+skipped by name, because their base is not a whole number of pages and their
+sections are not laid out this way (5j).
+
+### Section 1 states the protocol and the skin
+
+```
+<u8 protocol> <u8 protocol> <u8 skin> <u8 0x0D> <u24 0>
+```
+
+The protocol byte is stored twice. The oracle is outside the blob: the `.EZHex`
+XML states `PROTOCOL` and `SKIN` in text, and section 1 has to agree with both.
+It does on **15 of 15** containers across three protocols - `08 08 0f` against
+PROTOCOL 8 / SKIN 15, `09 09 16` against 9 / 22, `0e 0e 48` against 14 / 72.
+`0x0D` and the three zero bytes are the same in every sample and are not
+explained.
+
+### Section 2 states the remote's own writeable flash
+
+```
+<u16 record count> <u24 first address> <u24 past-the-end address>
+```
+
+[@glenharris](https://github.com/glenharris) read this one on the 525 in PR #30:
+8,192 records at `0x070000` to `0x080000`. It generalises, and it carries its
+own check - **the span the two addresses bound is the record count times eight,
+on 15 of 15 containers**, with no stored record size anywhere for that to be
+read back from:
+
+| protocol | records | flash | bytes each |
+|---|---:|---|---:|
+| 8 | 15,360 | `0x1E0000..0x1FE000` | 8 |
+| 9 | 8,192 | `0x070000..0x080000` | 8 |
+| 14 | 16,384 | `0x1E0000..0x200000` | 8 |
+
+### Section 3 is the build time, and the weekday is what makes it checkable
+
+Section 3 holds the eleven-byte framed record
+[@dannybloe](https://github.com/dannybloe) published, and 5l already read it -
+under the name **base slot 3**, without noticing that the slot is a section and
+that its span is the record plus three zero bytes.
+
+```
+<u16 0xADDF> <sec> <min> <hour> <day> <weekday> <month from 0> <year from 2000>
+<u16 0xEFBF> <u24 0>
+```
+
+The field order matters and is easy to get wrong, because a wrong one still
+decodes to a plausible date. Reading byte 6 as the month and byte 7 as an
+unknown gives valid calendar values on all 15 samples and is still wrong. What
+catches it is the weekday: it is a separate field, and it has to be the weekday
+the rest of the record falls on. **15 of 15**, from 2018 to 2025.
+
+```
+df ad 2c 14 14 15 01 00 18 bf ef    2024-01-21 20:20:44, a Sunday
+```
+
+Four of @kkong42's arch 8 configs decode to 2025-05-14 between 21:25 and 21:46,
+which is what a set of spares saved in one sitting looks like, and `Update-1`,
+`-2` and `-3` are 17:43, 18:16 and 18:41 on one evening in the order their names
+give.
+
+### Section 4's own table carries two numbers in 125 bytes
+
+```
+<u8 first> <u16 0> <u16 count>
+then count x  <u8 index> <u8 first + index> <u16 0>
+```
+
+Thirty records on every container, four bytes each, ending exactly 125 bytes
+into the span - the rest of which belongs to section 5's infrared subsystem
+(3). The second column is always the first value plus the index, so the table
+states nothing the header does not: the whole 125 bytes carry `first` and `30`.
+`first` is 4 on protocol 8, 11 on protocol 9 and 14 on protocol 14.
+
+**What the numbering counts is not known.** The obvious reading - that these are
+the config's live state variable addresses (5c) - is measurable and false: the
+name table uses indices outside `first..first+29` on 13 of 15 containers, up to
+72 on the 650 against a range that ends at 43. This check is marked DESCRIBES
+rather than PASS in the tool, because it reads back its own declared count and
+so cannot fail the way the others can.
+
+### Section 15 points into section 14, and its targets tile
+
+Section 15 is a pointer table whose targets are inside **section 14's** span,
+which is the plainest case in the file of a span that is not a fence (3). Each
+target reads as
+
+```
+<u8 count> <u16 value>[count]
+```
+
+and the check is that consecutive targets abut with no gap and no overlap and
+the last one ends exactly where section 15 itself begins. The lengths come from
+the data and the boundaries come from the section table, so the two can
+disagree. They do not: **5 lists and 8 values on the 525, 9 lists and 47 values
+on the 650**, both tiling to the byte. On arch 8 section 15 is a different
+shape and the tool reports N/A rather than forcing it.
+
+The 525's five lists are `[60]`, `[80]`, `[600, 602, 766, 769]`, `[1800]` and
+`[0]`. What the values select is not known.
+
+### Section 16 is a pointer table that arch 9 and arch 14 leave empty
+
+`<u8 count> <u24 address>[count]`, filling the span exactly. Arch 8 holds nine
+addresses in 28 bytes; the 525 and the 650 hold a single `00`. A one-byte
+section is an empty table, not a stray byte.
+
+### Section 17's two leading zeros, and the two at the end
+
+The last two bytes of section 17's span are the checksum the remote itself
+checks (4m), which is understood and recomputed on compile but still emitted
+raw. The two at the start of the span, before the first bitmap, are `00 00` on
+15 of 15 containers. They read as an empty count under either width, but no
+sample has a non-zero one, so neither the width nor the meaning is established.
+This is marked DESCRIBES.
+
 ## 5. Samples from issue #66 - different architecture, SAME container
 
 Downloaded from `github.com/user-attachments/files/22412763/EZHex.Samples.zip`.
@@ -3143,6 +3287,7 @@ See [`tools/`](../tools/). All are plain `python <script>.py`.
 | `diff_samples.py` | diff sample configs against each other |
 | `repair_890_dump.py` | remove the duplicated 54-byte blocks a Harmony 890 read leaves behind; refuses unless the result reproduces the stated end address and the stored checksum |
 | `verify_525_semantics.py` | re-assert every claim in 4k and 4l against the sample; `--firmware` pins the handlers too |
+| `verify_small_sections.py` | re-assert 4r against every public sample; `--negative` breaks each checked field and demands a failure |
 | `render_525_screens.py` | draw all 135 menu pages and the five font sheets as BMPs |
 | `analyze_525_ir.py` | expand the class 5 IR dictionaries, decode NEC, correlate with mode bindings |
 | `class5_ir_encoder.py` | build and decode a relocatable arch-9 literal class-5 record |
