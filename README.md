@@ -44,6 +44,7 @@ python decompile.py --summary             # what is decoded and what is not
 python decompile.py config.EZHex out.json
 python compile.py out.json new.EZHex --against config.EZHex
 python verify_525_semantics.py                # re-check the 525 evidence
+python verify_arch9_relocation.py             # census, relocation and negative check
 python render_525_screens.py --out rendered   # draw all 135 menus as BMPs
 ```
 

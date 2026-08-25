@@ -20,6 +20,9 @@ python sections.py ../my-remote.EZHex  # your own dump, .EZHex or already split
 | `decompile.py` | config -> JSON, and a summary of what is decoded |
 | `compile.py` | JSON -> config, recomputing pointers and checksums |
 | `roundtrip.py` | **the correctness test** - decompile, recompile, compare bytes |
+| `pointer_census.py` | reader-backed inventory of every address field the arch-9 tools can name |
+| `relocate_arch9.py` | in-memory arch-9 insertion, driven only by the pointer census |
+| `verify_arch9_relocation.py` | positive, refusal and one-omitted-holder-at-a-time relocation check |
 | `show_bitmaps.py` | draw the LCD bitmaps as text, to check them by eye |
 
 ```sh
@@ -63,6 +66,51 @@ pointer-shaped in there is hex being copied. A length-changing edit will leave
 such a pointer aimed at whatever moved into its place, and nothing here will
 notice. Length-neutral edits, retargeting a key or renaming something to a name
 of the same length, do not have that problem.
+
+### The reader-backed relocation check
+
+`pointer_census.py` turns every address field exposed by an existing arch-9
+reader into one consumable list. `relocate_arch9.py` inserts bytes in memory,
+rewrites only that list, restamps `end_addr`, and computes the trailer checksum
+last. Both refuse arch 8 / protocol 8, protocol 10 and protocol 14 by name.
+
+The design is Danny Bloemendaal's, from `harmony-explorations` commit
+`edb1349e669316320341e769c0434bb92c05571a`. The Python census and its mapping to
+this repository's readers are local to this project.
+
+The census cannot say **where** the gap went, only that every stated address
+still points where it did - and a gap in the wrong place breaks no pointer. So
+`relocate` asks a second reader instead: it decompiles the result, and refuses
+if any structure the decompiler recognised before has stopped being recognised.
+Inserting zero bytes adds no structure, so growth is expected and loss is a bug.
+That guard reaches exactly as far as the decompiler reads and no further -
+8,513 bytes of the public 525 are still opaque, and a gap inside those is
+invisible to it. See FORMAT.md 4s.
+
+The arch-9 insertion floor is **`0x5F` in the public 525 sample**, the first byte
+after `CMAH`. It was derived here rather than copied from Danny's Harmony One
+implementation. The 525 firmware loads section 6, indexes
+`operand * 3 + 3`, and follows that entry's u24; the `<u16 count><00>` header in
+the file supplies the `+3`. Record placement is therefore stated through
+section 6 and is not fixed immediately after the marker. What does force the
+floor is the file's fixed header below it: magic, `end_addr`, 18 section slots,
+their trailing null/padding and `CMAH` must retain their layout.
+
+Run the complete check with:
+
+```sh
+python tools/verify_arch9_relocation.py
+```
+
+It checks the mechanical byte diff and the parsed meaning together, constructs
+a second explicitly derived input, exercises four insertion cases, asserts that
+every holder class has at least one pointer above a tested offset, and then
+omits each holder class in turn and demands failure.
+
+It does **not** prove that semantics outside the pointer graph are right. For
+example, changing a key-table u16 to a different valid action-list index and
+restamping the checksums can keep every pointer, region count, device count and
+round trip unchanged while making a button perform the wrong action.
 
 ## Offline analysis
 

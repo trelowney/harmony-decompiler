@@ -1876,6 +1876,78 @@ raw. The two at the start of the span, before the first bitmap, are `00 00` on
 sample has a non-zero one, so neither the width nor the meaning is established.
 This is marked DESCRIBES.
 
+## 4s. Relocation, and the guard a census cannot be - SOLVED, with a stated reach
+
+A config can change length now, in this repository, on arch 9. The design is
+[@dannybloe](https://github.com/dannybloe)'s `relocate.ts` from
+`harmony-explorations` at `edb1349e`: shift the bytes, rewrite every stated
+address off a pointer census, restamp `end_addr` first and the trailer checksum
+last. `tools/pointer_census.py`, `tools/relocate_arch9.py` and
+`tools/verify_arch9_relocation.py`.
+
+### The floor is derived here, not inherited
+
+Danny's Harmony One floor sits past a key table, because that firmware reads the
+table at a fixed distance after the marker. **Arch 9 does not work that way.**
+The 525 loads section 6, indexes `operand * 3 + 3` and follows the u24 it finds,
+so a record's address is stated by the file (4b, 4d). What forces the arch-9
+floor is only the fixed container head: the magic, `end_addr`, the 18 stated
+section addresses and the `CMAH` marker. The floor is the first byte after that
+marker, `0x5F` in the public 525, and `0x5E` is refused.
+
+### The census check, and where it stops
+
+The census is a closed inventory of the reader-backed address fields - 12 holder
+classes on the 525 - and the verifier omits each class in turn and requires the
+check to fail. All 12 are caught. It also prints, per class, how many of the
+tested insertion offsets actually have pointers of that class above them, so a
+class that is silently no longer exercised shows up as a number rather than as
+a pass.
+
+**But a census cannot say where the gap went.** A gap in the wrong place leaves
+every stated address correct, so every part of that check still passes:
+
+```
+insert 32 bytes at the start of section 9
+  census: every address rewritten, trailer recomputed, end_addr bumped
+  reality: section 8's last list ends exactly on that boundary (4k), so the
+           32 zero bytes land inside section 8's span and its walker stops on
+           them - 135 tagged lists gone, nothing to point at them wrong
+```
+
+This is the fault this document has recorded four times under different names,
+arriving a fifth: **an oracle that reads the same field as the thing it checks
+is not an oracle.** The census is what relocation rewrites.
+
+### The guard is the decompiler, because it is a second reader
+
+Relocation inserts zero bytes. It adds no structure. So nothing the decompiler
+recognised before a relocation may stop being recognised after it, and that
+holds no matter which grammar recognised it. Growth is expected and allowed - a
+gap is more opaque bytes, and one more section-level chunk when it lands on a
+boundary. Loss is refused, and named:
+
+```
+insertion at 69632 costs the decompiler structure it read before:
+font_glyph 160 -> 0; 69632 is inside the font_glyph at 69626
+```
+
+Both cases the verifier checks are found in the file rather than written down as
+numbers: one byte into the first glyph above the floor, and the start of the
+section following the one that holds the tagged lists.
+
+### What the guard cannot see
+
+Its reach is exactly the decompiler's coverage, and no further. **8,513 bytes of
+the public 525 are still emitted opaque, 10.8% of the file**, and a gap opened
+inside any of them costs no recognised structure and will be allowed. So the
+guard is a floor on correctness that rises as coverage rises, not a proof that
+an insertion point is safe.
+
+The census check carries its own blind spot, already stated by the verifier:
+changing a key-table `u16` to another valid action-list index passes every part
+of this and makes a button do the wrong thing.
+
 ## 5. Samples from issue #66 - different architecture, SAME container
 
 Downloaded from `github.com/user-attachments/files/22412763/EZHex.Samples.zip`.
@@ -3294,6 +3366,9 @@ See [`tools/`](../tools/). All are plain `python <script>.py`.
 | `verify_525_class5_encoder.py` | repack the six learned X96 signals and require an exact decode; `--bundle` writes golden vectors |
 | `clone_525_device.py` | offline fifth-device proof, optionally placing one new IR record; never hardware-safe |
 | `roundtrip.py --resize` | relocate a config and require the symbolic shape, all 135 screens and all 200 expanded IR records to come back exact |
+| `pointer_census.py` | expose the reader-backed arch-9 address fields as one closed inventory |
+| `relocate_arch9.py` | insert bytes in memory and rewrite only the complete pointer census; unsupported families are refused by name |
+| `verify_arch9_relocation.py` | check exact relocation diffs and meaning, omit every holder class in turn and require failure, and refuse two insertion points that break no pointer and still cost structure |
 | `edit_525_label.py` | bounded proof: change one same-length screen label and check nothing else moved |
 | `relocate_525_label.py` | bounded proof: append a *longer* label and retarget every user of the old one. Superseded, see below |
 | `relocate_525_label_in_place.py` | the same longer label without appending: the file keeps its length and its picture bank |
