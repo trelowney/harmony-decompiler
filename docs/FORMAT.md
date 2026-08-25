@@ -93,18 +93,36 @@ and a span can contain bytes that belong to something else. The spans line up
 with the subsystems because the subsystems ran in order, which is a different
 statement from the spans being boundaries.
 
-One thing already in this file fits the description: section 4's records, read
-as four-byte entries, give a count of 30 and stop 125 bytes into a span of
-2,551, so 2,426 bytes of that span are something else.
+### What the 525 measures, and section 4's spare bytes named
 
-The sharing half was looked for and is not visible where it would be easiest to
-see. If already-binarized children are pointed at rather than rewritten, some
-render stream should be reachable twice. Counting every section 14 item on two
-architectures, no target is reached more than once: 22 items and 22 distinct
-targets on the 525, 3,810 items and 3,810 distinct targets on the 650. That
-does not contradict the account, since section 14 is one route to a stream and
-menus and pages are others, but it does mean this file has no measured case of
-a shared structure yet. Anyone who finds one has an example worth writing down.
+Section 4's own records, read as four-byte entries, give a count of 30 and stop
+125 bytes into a span of 2,551. What the other 2,426 bytes are is now settled,
+and they are not unknown: this decompiler has been reading them all along, as
+43 infrared symbol blocks, 5 symbol tables and 4 groups. That is 1,680 plus 134
+plus 612 bytes, which is 2,426 exactly, with nothing left over. Infrared data
+belongs to section 5's subsystem, and it is sitting in section 4's span.
+
+Sharing is real, and common. Taking every reference this decompiler resolves on
+the 525, 6,544 regions and 4,476 edges reaching 1,716 distinct targets, **156
+targets are reached more than once**, and 16 of those are reached from a span
+other than their own. The three most referenced live in section 17's span and
+are reached 472, 384 and 224 times from the record array below the section
+table. An infrared symbol table in section 4's span is reached 206 times from
+the same place.
+
+The firmware agrees, from the other side. It reaches a config through exactly 16
+`seek to section N` call sites, every one of them a literal, covering sections 2
+to 16 with 13 used twice, and no path writes that section number from a
+variable. **Sections 0, 1 and 17 are never sought at all.** Whatever lives in
+section 17 is therefore reached only by pointers from elsewhere, which is what
+the reference count above shows from the config side. A span whose table the
+firmware never consults is as clear a case as this format offers of a span that
+is not a boundary.
+
+> An earlier version of this subsection said no measured case of sharing existed.
+> That was written after looking only at section 14, where there genuinely is
+> none: 22 items and 22 distinct targets on the 525, 3,810 and 3,810 on the 650.
+> Absence along one route is not absence.
 
 What this does not affect: the round trip, which works on bytes and never asks
 which subsystem a byte belongs to. What it does affect is how a new structure
