@@ -3163,6 +3163,80 @@ See [`tools/`](../tools/). All are plain `python <script>.py`.
 | `capture_keys.py` | sample state during key presses, group by pause |
 | `probe_kinds.py` | try every address space (EEPROM/STATE/RAM/REGISTER) |
 
+## 5q. How a duration block is spelt, on two architectures - MEASURED
+
+Both rules below are [@dannybloe](https://github.com/dannybloe)'s, measured by
+him against configurations Logitech's own generator produced, in
+[harmony-explorations](https://github.com/dannybloe/harmony-explorations)
+commit `229b937`. What this section adds is the same two questions asked of the
+samples in this repository, on arch 8 and arch 9, to find out whether they
+belong to the generator or to one architecture.
+
+### Rule 1: a once block leads with silence, a held block never does
+
+| | once blocks | leading with silence | held blocks leading with silence |
+|---|---:|---:|---:|
+| arch 9, the 525 | 261 | 261 | 0 of 153 |
+| arch 8, H880 records with two or more blocks | 163 | 163 | 0 |
+
+On arch 8 every record carrying more than one block puts the silence in slot 0
+and in no later slot, 163 of 163. So the rule is the generator's rather than one
+architecture's.
+
+One difference does not carry across. Arch 9 leads with **two** values, 50,000 us
+in 153 blocks and 500,000 us in 108. Arch 8, in these samples, always leads with
+exactly 50,000. Why arch 9 has the second value is unknown.
+
+### Rule 2: it holds once a trailing `1` is read as a sentinel
+
+His rule spells a duration too long for one word as maximal words with the
+remainder balanced across the final two, smaller half first, so no word falls
+below half the maximum. Taken literally it does not describe these files:
+
+| | multi-word runs | literal match | different |
+|---|---:|---:|---:|
+| arch 9, the 525 | 909 | 495 | 414 |
+| arch 8, H880 and H885 | 2,179 | 1,202 | 977 |
+
+Every one of the arch 8 differences decomposes the same way, and the count that
+matters is that nothing decomposes any other way:
+
+| | count |
+|---|---:|
+| the rule applied to `total - 1`, followed by a separate word `1` | 977 |
+| ends in `1` but the rest still differs | 0 |
+| differs some other way | 0 |
+
+```
+35,101   stored  17550, 17550, 1          the rule  17550, 17551
+96,078   stored  32767, 32767, 30543, 1   the rule  32767, 32767, 30544
+```
+
+So the rule holds on both architectures **once the trailing `1` is treated as a
+sentinel rather than as a duration**. A one microsecond pulse is not something an
+infrared emitter produces, which agrees, but the argument here is the count:
+977 of 977 on arch 8 with no exception, and the same shape on all 414 arch 9
+differences.
+
+The architectures are not equally tidy about it. On arch 8 the sentinel explains
+everything. On arch 9 it explains 314 of 414, and the remaining 100 need a
+leading 446 us word set aside as well. That residue is unexplained.
+
+### How this was measured
+
+The arch 9 side uses this repository's own class 5 readers. The arch 8 side
+needed a duration reader that did not exist, so one was written outside this
+repository and proved before use rather than after: the carrier frequencies it
+derives have a median of 38,001 Hz on both samples, and the leading pairs it
+produces match real protocol headers, Kaseikyo at 3,500/1,700 us and NEC at
+9,000/4,500. A reader returning plausible numbers proves nothing; one that lands
+on 38 kHz and on two named protocols by two separate routes is worth measuring
+with.
+
+Protocols 10 and 14 are not covered. The 890 samples are a different container
+and the reader refuses them, which is why the table above names arch 8 and arch 9
+and claims nothing wider.
+
 **Safety:** `hid_query.py` carries a whitelist (`ALLOWED_FIRST_BYTE`) and hard
 refuses `0x30 WRITE_FLASH`, `0x40 WRITE_FLASH_DATA`, `0xA0 WRITE_MISC` and
 `0xD0 ERASE_FLASH`. Every other script goes through it. `hid_listen.py` opens the
