@@ -67,6 +67,51 @@ section table. It is not unstructured, though - it is an array of 114 records
 indexed by section 6, see §4b and §4d. The first of those records contains the
 key table (§4e).
 
+### A span is where a subsystem's table lives, not a fence around its data
+
+> **Qualified 2026-08-24**, by @glenharris in
+> [pull request #30](https://github.com/trelowney/harmony-decompiler/pull/30#issuecomment-5401221693),
+> describing how the compiler wrote these files.
+
+Reading each section table entry as a span, and taking everything inside that
+span to belong to that subsystem, is right most of the time and is how most of
+this document was written. It is a habit of the compiler, not a rule of the
+format. What the compiler actually did:
+
+- each subsystem was asked to binarize itself, in order, and it laid its
+  structures into whatever config space it could find;
+- a subsystem writes its own pointer table first, then binarizes its children.
+  A child that an earlier subsystem already wrote is not written again, it is
+  pointed at, so one structure can be reachable from two subsystems and belong
+  to neither span exclusively;
+- a child not yet written gets a three-byte forward reference, an unresolved
+  pointer, and goes on a pending list. Once that child is binarized and its
+  address is known, the compiler goes back and fills the reference in.
+
+So a subsystem can own data that sits below its own table as well as above it,
+and a span can contain bytes that belong to something else. The spans line up
+with the subsystems because the subsystems ran in order, which is a different
+statement from the spans being boundaries.
+
+One thing already in this file fits the description: section 4's records, read
+as four-byte entries, give a count of 30 and stop 125 bytes into a span of
+2,551, so 2,426 bytes of that span are something else.
+
+The sharing half was looked for and is not visible where it would be easiest to
+see. If already-binarized children are pointed at rather than rewritten, some
+render stream should be reachable twice. Counting every section 14 item on two
+architectures, no target is reached more than once: 22 items and 22 distinct
+targets on the 525, 3,810 items and 3,810 distinct targets on the 650. That
+does not contradict the account, since section 14 is one route to a stream and
+menus and pages are others, but it does mean this file has no measured case of
+a shared structure yet. Anyone who finds one has an example worth writing down.
+
+What this does not affect: the round trip, which works on bytes and never asks
+which subsystem a byte belongs to. What it does affect is how a new structure
+gets argued for. Lying inside span N is not evidence of belonging to subsystem
+N. The evidence is a pointer that reaches it, and which table that pointer came
+out of.
+
 ## 4. Name record - SOLVED
 
 Section 0 is a table of named symbols belonging to a rule engine called
