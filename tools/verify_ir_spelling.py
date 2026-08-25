@@ -8,9 +8,14 @@ is here now, and this joins it to the arch 9 side, which has always used
 Every long run - one whose duration exceeds what a single word can hold - is
 put in exactly one class, and the check is that **nothing is left over**:
 
-    literal          the rule as @dannybloe stated it
-    sentinel         the rule applied to total - 1, then a separate word 1
-    lead + sentinel  a leading word set aside, then the above on the rest
+    literal        the rule as @dannybloe stated it
+    sentinel       the rule applied to total - 1, then a separate word 1
+    merged space   not a spelling at all: an ordinary short duration that this
+                   reader glued to the gap after it, because both are silence
+                   and consecutive same-polarity words are how a long duration
+                   is spelt too. Proved rather than assumed - the value has to
+                   occur as a standalone duration of the same polarity in the
+                   same block, or the run is left over.
 
 Usage:
     python tools/verify_ir_spelling.py
@@ -74,7 +79,7 @@ def classify(stored: list[int]) -> tuple[str, int | None]:
     if stored[-1] == 1 and stored[:-1] == spell(total - 1):
         return "sentinel", None
     if len(stored) > 2 and stored[-1] == 1 and stored[1:-1] == spell(total - stored[0] - 1):
-        return "lead + sentinel", stored[0]
+        return "merged space", stored[0]
     return "unexplained", None
 
 
@@ -90,7 +95,7 @@ def arch9_runs():
                 blob, base_address=base, record_address=base + offset)
             for stream in record.pointer_streams:
                 if stream:
-                    yield from word_runs(stream)
+                    yield word_runs(stream)
 
 
 def arch8_runs():
@@ -101,22 +106,36 @@ def arch8_runs():
         for record in database.records:
             for block in record.blocks:
                 if block:
-                    yield from word_runs(block.words)
+                    yield word_runs(block.words)
 
 
-def tally(runs):
+def tally(blocks):
+    """Classify every long run, block by block, so a merge can be disproved.
+
+    The merged-space class is the only one that needs its block: the claim is
+    that the glued-on value is an ordinary duration, and the evidence is that
+    the same value stands alone, at the same polarity, somewhere in the same
+    block. A run that cannot show that is left over rather than excused.
+    """
     counts: collections.Counter[str] = collections.Counter()
     leads: collections.Counter[int] = collections.Counter()
     leftovers = []
-    for _mark, stored in runs:
-        kind, lead = classify(stored)
-        if kind == "short":
-            continue
-        counts[kind] += 1
-        if lead is not None:
-            leads[lead] += 1
-        if kind == "unexplained":
-            leftovers.append(stored)
+    for runs in blocks:
+        standalone: dict[bool, collections.Counter[int]] = {}
+        for mark, stored in runs:
+            if len(stored) == 1:
+                standalone.setdefault(mark, collections.Counter())[stored[0]] += 1
+        for mark, stored in runs:
+            kind, lead = classify(stored)
+            if kind == "short":
+                continue
+            if kind == "merged space" and not standalone.get(mark, {}).get(lead):
+                kind = "unexplained"
+            counts[kind] += 1
+            if kind == "merged space":
+                leads[lead] += 1
+            if kind == "unexplained":
+                leftovers.append(stored)
     return counts, leads, leftovers
 
 
@@ -124,18 +143,18 @@ def tally(runs):
 # fired on either architecture, so it is not offered. Leaving it in would have
 # accepted any two-word run whose second word fits one word, which is most of
 # them - a class that explains everything explains nothing.
-ORDER = ("literal", "sentinel", "lead + sentinel", "unexplained")
+ORDER = ("literal", "sentinel", "merged space", "unexplained")
 
 
-def report(name: str, runs) -> int:
-    counts, leads, leftovers = tally(runs)
+def report(name: str, blocks) -> int:
+    counts, leads, leftovers = tally(blocks)
     total = sum(counts.values())
     print(f"{name}: {total} long runs")
     for kind in ORDER:
         if counts[kind]:
             print(f"  {counts[kind]:6}  {kind}")
     if leads:
-        print("  leading words set aside: " +
+        print("  merged-in durations, each standing alone elsewhere in its block: " +
               ", ".join(f"{value} us x{n}" for value, n in sorted(leads.items())))
     if leftovers:
         print(f"  FAIL {len(leftovers)} runs fit no spelling, first: {leftovers[0]}")
@@ -164,7 +183,7 @@ def negative() -> int:
         ("the same words in a different order", [32767, 30544, 32767]),
         ("a sentinel run with the sentinel changed", [17550, 17550, 2]),
         ("the sentinel moved to the front", [1, 17550, 17550]),
-        ("a lead run with the lead moved to the end", [32767, 17938, 17938, 1, 446]),
+        ("a merged space moved to the end", [32767, 17938, 17938, 1, 446]),
     ]
     for label, stored in cases:
         kind, _lead = classify(stored)

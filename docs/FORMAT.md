@@ -3512,10 +3512,12 @@ Every **long run** - one whose duration exceeds what a single word can hold -
 turns out to be one of three spellings, and the argument is not that each is
 common but that **nothing falls outside them**:
 
-| | long runs | the rule literally | + a trailing `1` | + a leading word | left over |
+| | long runs | the rule literally | + a trailing `1` | a merged space | left over |
 |---|---:|---:|---:|---:|---:|
 | arch 9, the 525 | 909 | 495 | 314 | 100 | **0** |
 | arch 8, 13 samples | 14,666 | 8,023 | 6,423 | 220 | **0** |
+
+The third column is not a third spelling. See below.
 
 ```
 35,101   stored  17550, 17550, 1               the rule  17550, 17551
@@ -3527,18 +3529,45 @@ So the rule holds on both architectures **once the trailing `1` is treated as a
 sentinel rather than as a duration**. A one microsecond pulse is not something an
 infrared emitter produces, which agrees, but the argument is the count.
 
-### The leading word is not arch 9's either, and the residue is closed
+### The leading word is not a spelling. It is this reader gluing two durations together
 
-An earlier version of this subsection ended by saying arch 8's sentinel explained
-everything while arch 9 left 100 runs needing a leading 446 us word set aside,
-and called that residue unexplained. Both halves were wrong.
+This subsection has been wrong twice about the same 100 runs, and the second
+error is the more instructive one.
 
-The leading word is on **arch 8 as well** - 220 runs across the four `Update`
-samples, 216 of them 446 us and the other four 310 us - and it takes exactly the
-same shape there: a lead set aside, then the rule on what is left less one, then
-the sentinel. So it is a third spelling the generator uses, not an architecture's
-quirk, which is the same conclusion rule 1 reached. With it, **nothing is left
-over on either architecture**: 909 of 909 and 14,666 of 14,666.
+The first version called them an arch 9 residue and left them unexplained. The
+second found the same shape on **arch 8** - 220 runs across the four `Update`
+samples, 216 of them 446 us and four of them 310 us - and concluded that a
+leading word set aside was a third spelling the generator uses.
+
+It is not a spelling at all. A long duration is stored as consecutive words of
+one polarity, and so are two short durations that happen to be adjacent, and
+**nothing in the words distinguishes those two cases**. This reader coalesces
+same-polarity words, so where the generator wrote an ordinary bit space followed
+by the inter-frame gap, the reader saw one impossible run and a rule was invented
+to explain it.
+
+What settles it is that the glued-on value is an ordinary duration of that
+protocol, and says so in its own block:
+
+| | value | carrier | occurrences as a standalone duration |
+|---|---:|---:|---|
+| arch 9 and arch 8 | 446 us | 36,200 Hz | the commonest short space there is |
+| arch 8, four records | 310 us | 36,001 Hz | likewise |
+
+Every one of the 320 is a silence, never a mark; every one sits deep in its
+block, where a frame ends rather than where one begins; the value tracks the
+carrier frequency rather than the architecture; and **320 of 320 occur as a
+standalone duration of the same polarity in the same block.** The verifier makes
+that a condition rather than a remark: a merged space whose value does not stand
+alone somewhere in its own block is reported as left over.
+
+So rule 2 needs the sentinel and nothing else. With the sentinel, and without
+gluing across a duration boundary, it describes every long run on both
+architectures - 909 of 909 and 14,666 of 14,666.
+
+> The lesson is the project's usual one wearing a new coat. A reader that merges
+> two things the format keeps apart will make you invent a rule to explain the
+> merge, and the invented rule will fit, because it was fitted.
 
 A fourth class was tried and rejected - a leading word with no sentinel. It never
 fired on either architecture, and leaving it in would have accepted almost any
