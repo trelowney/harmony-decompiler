@@ -164,6 +164,45 @@ def scan_of(key: int, to_input: dict[str, int], net_to_line: dict[int, int]) -> 
     raise KeyError(key)
 
 
+def measured_keys(model: str = "885") -> set[int]:
+    """Every K number @kkong42 found populated, by model."""
+    keys = {key for cells in MATRIX.values() for key in cells.values()}
+    return keys if model == "885" else keys - H885_ONLY
+
+
+def canonical_codes(path: Path, offset: int, count: int) -> list[int]:
+    """`table_codes` with the expected record count checked rather than trusted.
+
+    Kept for the human-oracle checks next door, which pass a count. Checking it
+    is strictly better than taking it: the table's length is stated by its own
+    terminator, so a table that is not the length the caller believed is an
+    error worth raising rather than a slice worth taking.
+    """
+    codes = table_codes(path, offset)
+    if len(codes) != count:
+        raise AssertionError(
+            f"{path.name} key table at 0x{offset:06X} holds {len(codes)} "
+            f"records, not the {count} expected")
+    return codes
+
+
+def enumerate_solutions(present880: set[int], present885: set[int]):
+    """`surviving_relabellings`, scored and expanded for the oracle checks.
+
+    Returns `(designator agreement, letter -> input, net -> line, K -> scan)`
+    per surviving relabelling, which is what
+    `verify_arch8_standard_bindings.py` filters with @kkong42's inventories.
+    The enumeration itself is unchanged; this only adds the projection.
+    """
+    keys = measured_keys("885")
+    out = []
+    for to_input, net_to_line in surviving_relabellings(present880, present885):
+        mapping = {key: scan_of(key, to_input, net_to_line) for key in keys}
+        score = sum(scan == key for key, scan in mapping.items())
+        out.append((score, to_input, net_to_line, mapping))
+    return out
+
+
 def firmware_check(directory: Path) -> list[str]:
     """Find the selector and the combiner without assuming where the vars live.
 

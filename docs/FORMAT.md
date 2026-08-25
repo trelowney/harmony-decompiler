@@ -2858,7 +2858,7 @@ The one thing the 525 is not good at is carrier. It reads 0.6% high here and
 1.1% high on the Panasonic above, both times in the same direction. Match on
 timings and treat carrier as a hint.
 
-## 5n. The arch 8 keypad is 4 by 16, and 4 keys are named outright - MEASURED
+## 5n. The arch 8 keypad is 4 by 16, and all 55 keys are fixed - MEASURED
 
 The 880 and the 885 do not use the 525's matrix shape. Their keypad is
 **4 inputs by 16 lines**, and the scan code is
@@ -2921,12 +2921,66 @@ The two colour keys were **predicted before the board was measured**, on the
 grounds that the 885 binds two codes the 880 does not and has two keys the 880
 does not. That prediction is now a consequence rather than a coincidence.
 
-The rest of the table is one relabelling out of 11,520, chosen because it agrees
-with Logitech's own K numbering on 49 of the 55 populated positions. That is a
-design argument and not a traced wire. Its six disagreements are exactly the
-non-sequential net 13/14 routing @kkong42 flagged himself: `K51`-`K54` land on
-53-56 and `K55`, `K56` on 51, 52. One operationally named key on any of the five
-ambiguous lines would settle it, or a trace from a line to the latch output.
+`tools/verify_arch8_key_matrix.py` gets no further than that on its own. It
+picks one relabelling out of 11,520 because it agrees with Logitech's K
+numbering on 49 of 55 positions, which is a design argument and not a traced
+wire. Its six disagreements are exactly the non-sequential net 13/14 routing
+@kkong42 flagged himself: `K51`-`K54` land on 53-56 and `K55`, `K56` on 51, 52.
+
+### What closes the other 51, and what it leans on
+
+@kkong42 then measured the operational half. He read three devices off two real
+remotes and wrote down, per device, which buttons were bound and which were
+blank. Issues #18 and #20, and discussion 6. A config binds scan codes to
+functions, so a button he names on a remote pins the scan code that sends it,
+and a button he reports blank pins one that is not bound. That is a join, not an
+inference from numbering, and it eliminates the way occupancy cannot:
+
+```
+python tools/verify_arch8_standard_bindings.py --explorations DIR --manual PDF
+
+  11520 occupancy-compatible PCB relabellings -> 4     his three device inventories
+  4 -> 2                                               DVL-909 custom position 8, K44
+  2 -> 1; all 55/55 physical keys fixed                the manual's global roles
+```
+
+**Three qualifications belong with that, not buried under it.** Each constraint
+was removed in turn and the check re-run, because a check earns belief by being
+able to fail.
+
+- **Two of the five constraints are load bearing and three are redundant.** K44
+  from the DVL-909 LCD positions and the HR-S6855 blank pattern each break it.
+  Removing Help from the manual's global roles, or one of the three numeric
+  keys, or one key from the DVL-909 blank list, does not. Over-constraining a
+  search does not make its answer wrong, but the narrative in which Logitech's
+  three documented roles eliminate the last candidate is stronger than the code
+  supports: Activities and OFF do it alone.
+- **One transcription slip would pass silently.** Three of his values were
+  altered to a plausible neighbour: reading DVL-909 blank key 20 as 21 fails the
+  check, putting LCD position 8 on K43 rather than K44 fails it, and reading
+  **DVL-909 bound key 17 as 16 is accepted with nothing said.** The map is not
+  defended at that point.
+- **The final assertion pins six answers directly**, `{51: 53, 52: 54, 53: 55,
+  54: 56, 55: 51, 56: 52}`, which makes that script partly a regression test on
+  a result rather than purely a derivation of it. The intermediate counts,
+  11,520 to 4 to 2 to 1, are the part that carries weight, because none of them
+  names an answer.
+
+All three were told to @kkong42 rather than kept here,
+`discussions/6#discussioncomment-18154128`.
+
+### What runs on a bare clone, and what cannot
+
+| script | needs | what it settles |
+|---|---|---|
+| `verify_arch8_key_matrix.py` | nothing | 11,520 relabellings, the four proved keys, one picked by designator agreement |
+| `verify_arch8_human_oracles.py` | a `dannybloe/harmony-explorations` checkout | the screen inventories behind the join |
+| `verify_arch8_standard_bindings.py` | that checkout **and** Logitech's H880 user guide PDF | the join that fixes all 55 |
+
+Both refuse by name when a path is missing rather than failing obscurely. The
+manual is not redistributed here, for the reason `BUTTON-LAYOUT.md` gives about
+the 525 one, so **the check that closes all 55 keys cannot run on a bare clone**
+and no merge can change that. It runs for anyone who fetches the manual.
 
 ### The same scheme on arch 14, from the other side
 
@@ -3499,6 +3553,8 @@ See [`tools/`](../tools/). All are plain `python <script>.py`.
 | `repair_890_dump.py` | remove the duplicated 54-byte blocks a Harmony 890 read leaves behind; refuses unless the result reproduces the stated end address and the stored checksum |
 | `verify_525_semantics.py` | re-assert every claim in 4k and 4l against the sample; `--firmware` pins the handlers too |
 | `verify_small_sections.py` | re-assert 4r against every public sample; `--negative` breaks each checked field and demands a failure |
+| `verify_arch8_human_oracles.py` | check @kkong42's H880/H885 screen inventories against the public configs; needs `--explorations` |
+| `verify_arch8_standard_bindings.py` | the join that fixes all 55 arch 8 keys; needs `--explorations` and `--manual` |
 | `arch8_ir_duration_reader.py` | walk arch 8 infrared by stated addresses only, and prove the walk on carrier frequency and protocol headers |
 | `verify_ir_spelling.py` | recompute both 5q tables and require every long run to fit one of three spellings; `--negative` pins the rule and demands refusals |
 | `render_525_screens.py` | draw all 135 menu pages and the five font sheets as BMPs |

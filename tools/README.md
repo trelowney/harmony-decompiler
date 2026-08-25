@@ -131,6 +131,8 @@ round trip unchanged while making a button perform the wrong action.
 | `diff_samples.py` | diff configs against each other |
 | `repair_890_dump.py` | undo the duplicated 54-byte blocks a Harmony 890 read leaves behind |
 | `verify_arch8_key_matrix.py` | join the measured 880/885 keypad matrix to the scan codes in the configs |
+| `verify_arch8_human_oracles.py` | check @kkong42's H880/H885 screen inventories against the public configs. Needs `--explorations` at a `dannybloe/harmony-explorations` checkout |
+| `verify_arch8_standard_bindings.py` | the join that fixes all 55 arch 8 keys, 11,520 relabellings to one. Needs `--explorations` and `--manual` at Logitech's H880 user guide, which is not redistributed here |
 | `ir_keymap_oracle.py` | name a key from what it transmits: catalogue, measurement plan, matcher |
 | `check_525_mode_pages.py` | group modes by physical-list shape, and refuse a page count the file has no precedent for |
 | `count_devices.py` | how many devices a config has, two independent ways, on any architecture |
