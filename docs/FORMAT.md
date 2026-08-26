@@ -3428,6 +3428,11 @@ the damaged dump of 5k: its duplicated 54-byte blocks move the end marker, so th
 recovered base comes out `0x2FCA0` rather than `0x30000`. **The detection reports
 the damage instead of hiding it**, which is the right way round.
 
+@dannybloe reached the same recovery independently and then found its limit: his
+section 117 calls `end_addr - offset_of_end_marker` circular, because the file
+states both, and anchors the base on the clock record instead. That works on the
+damaged 890 as well, where this does not. Worth taking if arch 10 is picked up.
+
 ### The same bug in a second reader, and what it was telling us
 
 `count_devices.py` derived the base its own way, `u32(blob, 4) - (len(blob) - 4)`,
@@ -3622,6 +3627,18 @@ layout** and neither does the marker: the length has to be read.
 Counting the padding slot as an entry gives Glen's 20 for arch 8, which is the
 same measurement described the other way round.
 
+### Most of what follows about arch 10 is @dannybloe's, and was already published
+
+Written after the fact, which is the point. Everything in this subsection and the
+next was measured here on 26 August and only then checked against
+[dannybloe/harmony-explorations](https://github.com/dannybloe/harmony-explorations),
+where two of the three claims already sat, in `docs/config-format.md` and in his
+sections 115, 117 and 122. His versions are stronger than the ones re-derived
+here and are cited in place below. The rule about checking whose a finding is
+before claiming it is in this project's own notes; the rule was there and an
+index of his work was not. There is one now,
+`codex-work/tooling/index_danny.py`.
+
 ### The subsystems are not at the same indices on arch 10
 
 The record array index of 4b is a pointer table with a three-byte head, `u16`
@@ -3638,6 +3655,19 @@ of that shape reachable from the section table. That makes it a fingerprint:
 Three more entries and the fingerprint three places further along. So arch 10 is
 not arch 8 with extras bolted on the end; subsystems are inserted before index 6
 and everything above them shifts.
+
+**@dannybloe had this, and went further.** He counts 23 slots on arch 10 rather
+than 21 entries because he reads the table from `0x0B` as `{u8 spare; u24
+address}` rather than from `0x0C` as `u32`, which is the same bytes and the
+better reading, since it explains why the high byte is always zero. And he did
+not stop at "something shifted": he scored **all 1,330 ways of placing three
+insertions** by asking seventeen of his readers to parse the result. The best
+mapping reaches 34 of 47 with an eight-way tie, where arch 8, 9 and 14 each score
+47 uniquely, and five of his readers are satisfied by no mapping at all. So it is
+**not a relabelling**: the name tree, the log area, the mode records, the font
+sets and the value maps differ in form on arch 10, not merely in position. He
+gates every section reader off rather than guessing a mapping, and writes: a
+guessed mapping turns twenty refusals into twenty plausible wrong answers.
 
 ### Which does not find the device array, and that was the test
 
@@ -3659,6 +3689,10 @@ arch 10 files do not even agree with each other.
 **Where an arch 10 config states its device count is unknown**, and section
 pointer 5 is not it. `count_devices.py` refuses rather than guessing, per 5s.
 
+That it would not be found this way was predictable from his result above, and
+this search is a special case of the one he had already run. What it adds is a
+third arch 10 model and a stated device count to hit.
+
 ### Arch 10 embeds a zip, and the other three do not
 
 Searching the 895 for its device names by ASCII found none, and found this
@@ -3679,7 +3713,16 @@ Identical in the 890 and the 895, and it is the HarmonyAssistant schema:
 </Field></Record></Class></MetaData>
 ```
 
-No `PK` header exists anywhere in an arch 8, arch 9 or arch 14 config here.
+No `PK` header exists anywhere in an arch 8, arch 9 or arch 14 config here, and
+the 895 holds exactly one archive: one local header, one central directory entry,
+one end-of-central-directory record, and no other zlib-framed stream in the file.
+
+**This part is new**, and it answers a question @dannybloe wrote down as open. He
+records that no `0xFEED` frame validates anywhere in either of his 890 payloads,
+and concludes that an arch 10 config is not known to state the names of its
+devices and activities at all, where every other architecture does so in base
+slot 0. The frame does not validate because on arch 10 that subsystem is
+deflated.
 
 So arch 10 stores as a compressed archive what arch 9 stores as the plaintext
 name table in its section 0, wrapped in `0xFEED ... 0xBEEF` and described in 4. That is the same
