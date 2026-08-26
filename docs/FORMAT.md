@@ -3982,6 +3982,80 @@ layout** and neither does the marker: the length has to be read.
 Counting the padding slot as an entry gives Glen's 20 for arch 8, which is the
 same measurement described the other way round.
 
+**The four counts in that table are two short each, and the "padding" is not
+padding.** The correction is below and it is arithmetic: the table starts at
+`0x0B`, not `0x0C`. The addresses are unaffected. Read the counts as 20, 21,
+23 and 20.
+
+### Correction: the table starts at `0x0B`, not `0x0C`, and the counts above are two short - MEASURED
+
+The lengths in the table above are undercounts, and the argument that settles it
+is arithmetic anyone can repeat.
+
+[@dannybloe](https://github.com/dannybloe) reads the entries as
+`{u8 spare; u24 address}` starting at `0x0B`. This document reads them as `u32`
+starting at `0x0C`. **Both give byte-for-byte the same addresses**, because a
+`u32` whose top byte is zero and a `u24` are the same number, which is why
+nothing ever broke and why the disagreement went unnoticed.
+
+They do not give the same *count*, and only one of them tiles:
+
+| arch | marker at | from `0x0C` | from `0x0B` |
+|---:|---:|---|---|
+| 9 | `0x5B` | 79 bytes, **19.75 entries** | 80 bytes, **20** |
+| 8 | `0x5F` | 83 bytes, **20.75 entries** | 84 bytes, **21** |
+| 10 | `0x67` | 91 bytes, **22.75 entries** | 92 bytes, **23** |
+| 14 | `0x5B` | 79 bytes, **19.75 entries** | 80 bytes, **20** |
+
+Measured on every container in `samples/`: fifteen arch 8 and arch 10 files, the
+525 and the 650. **Four architectures, and reading from `0x0C` leaves three
+quarters of an entry on all four.** A table cannot end three bytes into its last
+slot, so the start is wrong by one byte, and reading from `0x0B` leaves nothing
+over anywhere.
+
+**And this project's own firmware reading says the same thing and has since it
+was written.** The seek routine `0x066A8` computes `4 * N + 11` before it seeks,
+recorded above in [all sixteen seek call sites](#all-sixteen-seek-call-sites-and-what-each-does-next---measured).
+Eleven is `0x0B`. Entry N begins at `0x0B + 4N`, which is Danny's framing
+exactly, so the 525's own firmware settles a disagreement about a file format
+that neither reading of the bytes could settle alone.
+
+What this changes:
+
+- **the entry counts are 20, 21, 23 and 20**, not 18, 19, 21 and 18. Arch 8 and
+  arch 10 still differ by two, as before, so the finding that the cookie does not
+  determine the layout is untouched;
+- **there is no padding between the table and the head marker.** The seven zero
+  bytes described above as padding on arch 10, and the equivalent run on the
+  other three, are the last two entries and they are NULL. Glen's rule applies to
+  them as it applies to the interior null on arch 8: a NULL is an absent
+  subsystem, not the end of the table;
+- `hconfig.py` is unaffected in what it resolves, because it takes the addresses
+  and the addresses are the same. It reports a short count.
+
+### The mapping was checked against our own copies, row by row - MEASURED
+
+@dannybloe determined arch 10's slot mapping on 2026-08-26, his findings 178 to
+183, and it is his. It was reproduced here on this project's copies of the two
+arch 10 remotes, using only what each row of his own table claims, with six
+values measured independently first as controls.
+
+**Eleven of his seventeen present rows confirm, four are not checkable, and two
+were contradicted by the reading corrected above.** The two are base slots 18 and
+19 at raw 21 and 22, which do not exist in a 21-entry table and do exist, NULL,
+in a 23-entry one. **The four not checkable are exactly the four he places by
+order between anchors rather than by their contents**, which is his own
+distinction holding up on a corpus he did not use.
+
+One row is worth naming because it is a count reached from both ends: raw slot 6
+on the 890 holds four infrared groups of 79, 83, 64 and 74 records. That is
+**300**, the number of records he locates by a different route entirely, each one
+stating its own address.
+
+`codex-work/tooling/verify_dannys_arch10_mapping.py` is the row-by-row verifier.
+It is not in this repository: it needs the arch 10 containers, and one of the two
+is not public.
+
 ### Most of what follows about arch 10 is @dannybloe's, and was already published
 
 Written after the fact, which is the point. Everything in this subsection and the
