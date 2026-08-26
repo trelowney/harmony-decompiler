@@ -3380,6 +3380,213 @@ asks for. Failing that, a before-and-after pair from any remote whose official
 software still runs, dumped once, one device added, dumped again. The 700
 history is nearly that already, but its revisions differ by more than one edit.
 
+> **The pair arrived, twice over.** @psolyca did precisely this on his 650 on 25
+> August: three dumps at 4, 5 and 6 devices, one addition apart, the first of them
+> byte identical to the sample already here. Measured in 5t. It is protocol 14, so
+> the arch 9 question above is still open and discussion #33 still stands.
+
+## 5s. The base is recovered from the file, and two readers were wrong because it was not - MEASURED
+
+5j worked out in August that `config_base` is `0x30000` on protocols 10 and 14
+and said how to recover it: the `u32` at offset 4 is the address of the end
+marker, so subtract where the marker sits. It then said "none of this is support
+for those protocols" and stopped. **The document knew and the code did not**,
+which is the same shape as section 8 being unread rather than unknown.
+
+[@Rtas-17](https://github.com/Rtas-17) closed that gap in
+[PR #31](https://github.com/trelowney/harmony-decompiler/pull/31) on 18 August
+and withdrew it himself six days later while his own work was moving. His
+diagnosis has since been checked against a file he never saw.
+
+### What the constant cost
+
+`CONFIG_BASE` was a module constant in `hconfig.py`, `0x20000`, read in about
+thirty pointer computations. A protocol 10 config was therefore parsed with every
+address `0x10000` too low. That does not fail loudly. It fails by recognising
+almost nothing and passing the rest through as raw bytes, so the file still
+rebuilds and the round trip differs in **one byte**: the end address the compiler
+restamps.
+
+Measured on [@kkong42](https://github.com/kkong42)'s Harmony 895, uploaded to
+issue #34 on 25 August, a week after the PR was withdrawn:
+
+| base | regions read | round trip |
+|---|---:|---|
+| `0x20000`, assumed | 36 | differs at the end address |
+| `0x30000`, recovered from the file | **1,412** | **identical** |
+
+The second reading of the two claims holds on that file as well: the end marker
+is not the last thing in the blob. Of his five reads, three are byte identical
+and carry no padding, one carries 54 zero bytes and one carries 216. So a file's
+length says nothing about where its config ends, and the amount of padding is not
+a property of the remote or the protocol.
+
+Across every sample this repository holds, the change takes the round trip from
+**14 of 14** to **19 of 20**. Nothing that already passed changed, in bytes or in
+coverage. The one that still fails is `H890-Bedroom-2`, and it fails because it is
+the damaged dump of 5k: its duplicated 54-byte blocks move the end marker, so the
+recovered base comes out `0x2FCA0` rather than `0x30000`. **The detection reports
+the damage instead of hiding it**, which is the right way round.
+
+### The same bug in a second reader, and what it was telling us
+
+`count_devices.py` derived the base its own way, `u32(blob, 4) - (len(blob) - 4)`,
+which is the file's length and not the marker's offset. So it called four reads
+damaged. Two of them were clean and had only picked up trailing zeros:
+`H890-Bedroom-1` and `H895-Read-3`. With the padding stripped first, the
+page-boundary complaint fires on exactly the two dumps that are independently
+known to be damaged, and `H895-Read-1` is one of them: `repair_890_dump.py`
+removes 7 duplicated blocks from it and the result is **byte identical to
+`H895-Read-2`**, a separate read of the same config. That tool was built on 890s
+and had never seen an 895.
+
+### Section 5 is a device array on three architectures and is not one on arch 10
+
+Fixing the base exposed the reader underneath it. `count_devices.py` printed
+"section 5 says 9" for the 895. kkong42 had written down what his remote holds,
+and it is **six** devices.
+
+He is right and the tool was wrong. Section pointer 5 does not reach a device
+array on arch 10 at all:
+
+| file | count byte | its u24s that land inside the file |
+|---|---:|---|
+| 525, arch 9 | 4 | 4 of 4 |
+| 880, arch 8 | 4 | 4 of 4 |
+| 885, arch 8 | 7 | 7 of 7 |
+| 650, arch 14 | 4 | 4 of 4 |
+| **890, arch 10** | 9 | **2 of 9** |
+| **895, arch 10** | 9 | **1 of 9** |
+
+And the thirty bytes at that address are **byte for byte the same in both arch 10
+files**, which are two different remotes of @kkong42's, his 890 of issue #27 and
+his 895 of issue #34, carrying two different configurations:
+
+```
+09 00 00 1e 00 00 09 00 00 01 0a 00 00 02 0b 00 00 03 0c 00 00 04 0d 00 00 05 0e 00
+```
+
+Read as four-byte records from offset 3 it is nine entries pairing 0 to 8 with 9
+to 17, which is a fixed mapping table and not a pointer array. What it maps is
+not known here and is not guessed at.
+
+So the reader now believes the count only when the array it heads reads as an
+array: every u24 has to be an address inside this file. Arch 8, 9 and 14 give N of
+N and are unaffected; arch 10 is refused by name. **The refusal is not a rule
+about arch 10.** It is the array failing to be one, and it would have caught this
+without kkong42 telling us the number. He is why anybody looked.
+
+> This is the fourth time an internally consistent reading of this format has been
+> wrong, after the trailer checksum in 4m, the class 5 pointers in 4n and the page
+> array in 5o. It is also the second time a human inventory caught something no
+> self-check would, after [@psolyca](https://github.com/psolyca)'s page counts in
+> 5p.
+
+### The section table never bounded the whole file, on any architecture
+
+Worth stating with a number, because a reader meeting the section table for the
+first time will assume its spans tile the config. They do not, and they never did:
+
+| file | blob | below the lowest section pointer |
+|---|---:|---:|
+| 525, arch 9 | 78,486 | 62,299 (79.4%) |
+| 880, arch 8 | 393,040 | 123,041 (31.3%) |
+| 885, arch 8 | 529,924 | 250,225 (47.2%) |
+| 890, arch 10 | 396,927 | 124,962 (31.5%) |
+| 895, arch 10 | 342,753 | 49,766 (14.5%) |
+| 650, arch 14 | 845,133 | 275,224 (32.6%) |
+
+On the 525 that low region is 79% of the file and the decompiler reads 99.12% of
+the whole thing, so it is neither unreachable nor unread: it is reached by
+pointers held *inside* sections rather than by the section table. This is 4's
+"a span is where a subsystem's table sits, not a fence around its data", measured
+on five architectures instead of argued on one.
+
+It matters for the next section, where a device's bytes turn out to land there.
+
+## 5t. What one added device costs, on three configs that differ by one - MEASURED
+
+5p ended by saying what would settle the device question: "a before-and-after
+pair from any remote whose official software still runs, dumped once, one device
+added, dumped again". [@psolyca](https://github.com/psolyca) did exactly that on
+his Harmony 650 and posted the three files to issue #8 on 25 August. He dumped
+the config, added `TV LG`, dumped, added
+`Enregistreur numérique Bouygues Telecom (2)`, dumped again.
+
+**The first of the three is byte for byte `samples/harmony650/Harmony_650.EZHex`**,
+the file 5p already read pages and modes out of and checked against his own hand
+written inventory. So this is not three strangers' files. It is a config this
+project understands, plus one device, plus one more.
+
+`count_devices.py` reads 4, 5 and 6, with section 5 and the state tree agreeing
+on every one, which is the count arriving from two structures rather than one.
+
+### It does not unblock the 525
+
+These are protocol 14. The open question in 5o is what an **arch 9** compiler does
+for a fifth device, and nothing here answers it. Discussion #33 stays open and
+nothing goes onto the remote.
+
+### What it costs, and where it goes
+
+| | dump 1 to dump 2 | dump 2 to dump 3 |
+|---|---:|---:|
+| whole blob grows by | 46,638 | 41,555 |
+| the section spans grow by | 9,700 | 11,114 |
+| the rest | **36,938** | **30,441** |
+
+The rest is not unaccounted. It is the low region of 5s, and the arithmetic is
+exact: in both steps the leftover equals, to the byte, how far the lowest section
+pointer moved forward. So **roughly four fifths of a device lands below the
+section table's reach**, and the fifth that does not is spread across the tables:
+
+| section | dump 1 | +1 device | +2 devices |
+|---:|---:|---:|---:|
+| 0 | 1,629 | +358 | +396 |
+| 4 | 845 | +219 | +129 |
+| 5 | 13 | +3 | +3 |
+| 6 | 100,685 | +1,914 | +3,736 |
+| 8 | 2,289 | +387 | +304 |
+| 9 | 1,935 | +288 | +288 |
+| 10 | 15,989 | +3,654 | +3,381 |
+| 11 | 11,447 | +2,838 | +2,838 |
+| 13 | 227 | +27 | +27 |
+| 14 | 191 | +12 | +12 |
+| 1, 2, 3, 7, 12, 15, 16, 17 | | +0 | +0 |
+
+Nothing shrinks. Eight sections do not move at all, and section 5 gains exactly
+three bytes per device, which is the one u24 its array of 5p gains. Sections 9,
+11, 13 and 14 gain the *same* number of bytes for both devices, so what they hold
+is per device and fixed size. Sections 0, 4, 6, 8 and 10 gain different amounts
+for the two, so what they hold depends on the device.
+
+All eighteen section pointers move in both steps, so none of them anchors
+anything: the file is rebuilt, not patched.
+
+### The name, and how it is spelt
+
+Neither device name appears in the file as typed. Both appear once, with spaces
+replaced by underscores, in **Latin-1** and not UTF-8: the `é` is a single `0xE9`.
+Both land inside **section 0**, whose span grows by 358 and then 396 bytes, and
+the same section holds both, which was the check: two devices added the same way
+by the same compiler have to put their names in the same place. The name is not
+where the bulk of the bytes went; those are in the low region.
+
+That is the grammar @dannybloe describes for the state tree, where a device node
+is `<label>_Power_2` and the underscore is the separator, which is why his
+composer refuses a label that contains one.
+
+### What this does not say
+
+The per-section growth is measured; what is *in* those bytes is not. In
+particular section 6 gains 1,914 and then 3,736 bytes and this does not claim to
+know what they are. `codex-work/tooling/measure_arch14_device_delta.py` produces
+the table and carries three negative controls: the same file against itself, the
+padding-only pair `H895-Read-2` against `H895-Read-3`, and an in-memory
+single-byte pointer mutation that has to make the arithmetic fail. It is not in
+this repository because it reads containers the decompiler refuses, and adding
+`GSPM` to `ARCHITECTURES` would claim support that does not exist.
+
 ## 5r. The 525 can rewrite its own firmware, and its configuration bits - MEASURED
 
 `tools/hid_query.py` refuses `0x30 WRITE_FLASH`, `0x40 WRITE_FLASH_DATA`,

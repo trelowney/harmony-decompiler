@@ -64,11 +64,19 @@ def base_address(blob: bytes) -> int:
     """Where the first byte of the blob lives, per section 5j.
 
     The header states the address of its own end, so the base is that minus the
-    length. Gives 0x20000 on arch 8/9/12 and 0x30000 on arch 14 without being
-    told which is which - and gives something else entirely on a damaged dump,
-    which is why the caller checks it.
+    offset the end marker actually sits at. Gives 0x20000 on arch 8/9/12 and
+    0x30000 on arch 14 without being told which is which - and gives something
+    else entirely on a damaged dump, which is why the caller checks it.
+
+    The marker is not always the last thing in the file: a protocol 10 read
+    leaves zero padding after it and the amount is not stable, 0, 216, 648 and
+    702 bytes all seen. Taking the file's length instead called four reads
+    damaged of which two were clean, so the padding is stripped first.
     """
-    return u32(blob, 4) - (len(blob) - 4)
+    body_end = len(blob)
+    while body_end > 4 and blob[body_end - 1] == 0:
+        body_end -= 1
+    return u32(blob, 4) - (body_end - 4)
 
 
 def state_tree_names(blob: bytes) -> list[str]:
@@ -105,11 +113,32 @@ def devices_from_tree(blob: bytes) -> tuple[set[str], list[str]]:
 
 
 def devices_from_section_5(blob: bytes) -> int | None:
-    """The count byte at the head of section 5, or None if it is unreachable."""
-    section = u32(blob, 12 + 5 * 4) - base_address(blob)
+    """The count byte at the head of section 5, or None if it is not that.
+
+    The count is only believed when the array it heads reads as an array: every
+    one of its u24s has to be an address inside this file. That is the check
+    this reader lacked, and @kkong42's Harmony 895 in issue #34 is what showed
+    it, because he wrote down the six devices his remote has and this said nine.
+
+    On arch 10 section pointer 5 does not reach a device array at all. Its
+    thirty bytes are byte for byte the same in his 895 and in the 890 of issue
+    #27, two unrelated configs from two remotes, and one of the nine u24s lands
+    inside the file. Arch 8, 9 and 14 all give N of N. So the refusal is not a
+    heuristic about arch 10: it is the array failing to be one.
+    """
+    base = base_address(blob)
+    section = u32(blob, 12 + 5 * 4) - base
     if not 0 <= section < len(blob):
         return None
-    return blob[section]
+    count = blob[section]
+    if count == 0 or section + 1 + 3 * count > len(blob):
+        return None
+    for i in range(count):
+        start = section + 1 + 3 * i
+        address = int.from_bytes(blob[start:start + 3], "little")
+        if not 0 <= address - base < len(blob):
+            return None
+    return count
 
 
 def report(path: Path) -> str:
@@ -129,7 +158,8 @@ def report(path: Path) -> str:
 
     section = devices_from_section_5(blob)
     tree = f"{len(ids)}" if ids else "no per-device variables"
-    print(f"    devices: section 5 says {'-' if section is None else section}"
+    print(f"    devices: section 5 says "
+          f"{'nothing that reads as a device array' if section is None else section}"
           f"; state tree says {tree}")
     if types:
         print(f"    types named in the state tree: {', '.join(types)}")
