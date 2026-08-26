@@ -872,6 +872,79 @@ fall back to compiled constants when it disagrees. **Arch 9 does not do that
 anywhere.** A config that states a wrong count is believed, so on this
 architecture the check has to be in the writer.
 
+#### Four of the eight unnamed readers are named by an opcode - MEASURED
+
+Six of the fifteen sections above came back with a name and nine with only a
+shape. Every one of the six was named the same way: the reader's index turned
+out to come from an opcode operand whose meaning was already known. So the
+question for the rest is not what the section looks like. It is **which
+instruction last writes the RAM location the reader indexes with**, and that has
+an answer in the image.
+
+Tracing all eight, section 2 having been named separately as the writeable
+flash, **four reach an opcode operand and four do not**:
+
+| section | where the index comes from | the instructions that say so |
+|---:|---|---|
+| 7 | action opcode `0x10`, exclusively | `0x06576` at `0x04482` reads the byte after the opcode, `MOVWF 0x700` at `0x04488`; dispatch test `0x0467C`, handler `0x046AC` |
+| 9 | main opcode `0x1F`, secondaries `0xFF` and `0xE8`, or an ordinary stream byte | `0x3D7` to `0x3D0` at `0x02054` to `0x340` at `0x01C04`, and `0x3D7` to `0x341` at `0x02228`; in the loop a marker `0xFE` selects `0x340` and `0xFC` selects `0x341`, otherwise `0x708`, loaded from `INDF0` at `0x01B42` |
+| 8 | main opcode `0x3F`, and also firmware literals | `MOVFF 0x3D7,0x3DB` at `0x02040`, then `MOVFF 0x3DB,0x3DA` at `0x0249E` or `0x024C8`; a separate path writes `0x04` or `0x01` at `0x04FB0` |
+| 16 | main opcode `0x1F`, secondaries `0xF3` and `0xF5` | `MOVFF 0x3D7,0x2CF` at `0x02148`, call at `0x0214C`, dispatch test `0x01F6A` |
+| 3 | its two callers, neither of which indexes | `0x03C74` advances by 10 and copies a `u24`; `0x04072` advances by 2 and computes from the next three bytes |
+| 4 | a firmware event key | `MOVFF 0x3EF,0x3F1` at `0x05E8E` and `MOVFF 0x3F0,0x3F2` at `0x05E92`; the producers write `0x0000`, `0x0019`, `0x001A` and `0x001B` |
+| 12 | its callers | the reader tail-returns the leading `u8`; `0x057FE` stores it at `0x704` and `0x0585E` at `0x702`, and neither reads it again |
+| 5 | not traceable | `0x712` has 13 direct writers and `0x713` has 8. The promising pair at `0x0438C` and `0x04390`, inside opcode `0x02`'s handler, saves `TBLPTR` **after** its operands are consumed: a return cursor, not an operand |
+
+Section 5 is recorded as untraced rather than assigned. This document has
+carried four readings that were internally perfect and wrong, and every one of
+them came from a shape that looked right.
+
+#### And a name read out of the firmware has to survive the file
+
+If section 7 is indexed by opcode `0x10`'s first operand byte, then every `0x10`
+operand in every config has to be a legal index into section 7's array. That is
+evidence of a different kind from the trace that produced the claim, which is
+the point of collecting it.
+
+The control comes first, because a harness that cannot reproduce a known answer
+says nothing about an unknown one. Opcode `0x7E` against section 6 gives
+operands 1 to 113 against 114 records, which is the number
+[opcode 0x7E](#opcode-0x7e-selects-a-record---confirmed-the-same-way) already established.
+
+| opcode | section | uses | index values | array | out of range |
+|---|---:|---:|---|---:|---:|
+| `0x7E`, control | 6 | 134 | `0x01` to `0x71` | 114 | **0** |
+| `0x10` | 7 | 244 | `0x00` to `0x04` | 5 | **0** |
+| `0x1F`, `0xFF` and `0xE8` | 9 | 11 | 0, 3, 4, 5, 6, 7 | 8 | **0** |
+| `0x3F`, `0xC0` to `0xCF` | 8 | 0 | none emitted | 11 | **0** |
+| `0x1F`, `0xF3` and `0xF5` | 16 | 0 | none emitted | 0 | **0** |
+
+**Zero out of range, and that is two confirmations rather than four.** Sections
+7 and 9 are exercised with indices that vary, which is working content rather
+than scaffolding. Sections 8 and 16 are never emitted at all: the firmware path
+is there and this compiler never took it, and section 16's own array is empty so
+no legal index could have been emitted. Those two rows are honest
+non-occurrence, and they are not evidence for the name.
+
+Section 9's eight entries with indices 0 and 3 to 7 are the binding list table
+of [4p](#4p-an-action-is-three-bytes-and-section-9-is-the-key-binding-chain---solved), reached
+from the other end. The reader was found from the seek site without knowing what
+it was; the opcodes that feed it were read out of the dispatcher; and the array
+they index is the one that section already describes.
+
+#### The arch 9 corpus is one file
+
+The tables above have one row because there is one row to have. Every arch 9
+container reachable here, the public sample, its `.bin` twin and the offline
+backup, is the same 78,486-byte blob, `sha256 bba8f7f0efd1...`. They are three
+representations of one observation.
+
+So **every claim in this document that holds "across arch 9 configs" holds
+across one config.** The two rows above that read zero out of range read zero
+out of one. That is not true of arch 8, where four containers exist and a count
+that is constant across them means something, and it is why a check spanning
+architectures is worth more here than one that does not.
+
 ### Opcode 0x7F runs another action list - CONFIRMED
 
 The handler calls `0x07EF4`, which is one flash bracket end to end:
@@ -900,7 +973,7 @@ arithmetic and the file's layout are the same expression.
 
 So `0x7F` is *run action list [operand]*, and it is confirmed by arithmetic
 rather than inferred from behaviour. It also explains the two populations in
-[§4i](#4i-section-10-indexes-action-lists--solved): 109 lists a key binding
+[§4i](#4i-section-10-indexes-action-lists---solved): 109 lists a key binding
 enters, 76 that only a `0x7F` reaches.
 
 ### Opcode 0x7E selects a record - CONFIRMED the same way
@@ -1995,6 +2068,27 @@ slot 4 there.
 
 **What the thirty events are is still not established**, by him or here.
 
+**The 525's firmware reads it exactly this way, and corrects two words of the
+above.** The reader at `0x05DA0` takes a `u24` into `0x731`, then a `u16` record
+count into `0x734`; each iteration reads a `u8` key into `0x73A` and a `u24`
+value into `0x737`, compares the key against the firmware event key at `0x3F1`,
+and on a match hands the value to `0x05B6C`, which seeks section 6 and indexes
+it. A miss decrements the count and continues. So the structure, the key, the
+value and the destination are all confirmed from the instruction side.
+
+Two things in that are corrections rather than confirmation:
+
+- **the firmware holds no constant thirty.** It loops on the `u16` count read out
+  of the file. Thirty is a fact about every container measured, not a number this
+  image would enforce, so a config declaring some other count is believed, the
+  same as everywhere else on this architecture;
+- **only two of the value's three bytes are used.** `0x05E06` and `0x05E0A` pass
+  `0x737` and `0x738` into the index operand; `0x739` is not read on this path.
+  An event therefore selects a record by a 16-bit index, and the third byte does
+  something else or nothing. Every value measured fits in two bytes, so no
+  container here can tell those apart.
+
+
 ### Section 15 points into section 14, and its targets tile
 
 Section 15 is a pointer table whose targets are inside **section 14's** span,
@@ -2563,7 +2657,7 @@ That reframes these tables. A key table is a **menu's binding table**, and the
 `u16` is not a plain ordinal.
 
 **It is an index into the array of action lists in section 10** - see
-[§4i](#4i-section-10-indexes-action-lists--solved), which is where the evidence
+[§4i](#4i-section-10-indexes-action-lists---solved), which is where the evidence
 for that sits. A key binding runs a list of instructions, so the question that
 remains is what the instructions do, not what the number means.
 
