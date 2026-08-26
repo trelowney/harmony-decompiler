@@ -3734,6 +3734,69 @@ It does not follow that the device names are in the archive. They are not; those
 213 bytes are the schema and nothing else. Where an arch 10 config keeps the
 names is open, along with where it keeps the count.
 
+### One arch 10 slot is identified, by a person rather than by a search
+
+@dannybloe keeps every arch 10 reader gated off and is right to, for the reason
+above. This is not that gate opening. It is one slot, picked by the head-3
+fingerprint rather than by search, checked against something his two 890s do not
+have: @kkong42 wrote down what is on every screen of his 895.
+
+`tools/verify_525_semantics.py` reads modes from slot 6 as a `u24` count then
+`u24` entry addresses, each entry carrying its page count at `+4` and its page
+addresses at `+6`, and each page's list giving an item count. Pointed at slot 9
+instead, with nothing else changed, that reading is put to his inventory the way
+5p put the page reader to @psolyca's.
+
+**The controls first**, because without them "it reads" means nothing:
+
+| file | slot | result |
+|---|---:|---|
+| 525, arch 9 | 6 | reads, 114 modes, which is what `verify_525_semantics` already prints |
+| 525, arch 9 | 9 | refuses: a count of 1,805,832 |
+| 895, arch 10 | 6 | refuses: a count of 0 |
+| 895, arch 10 | 9 | reads, 169 modes |
+| 890, arch 10 | 9 | reads, 137 modes |
+
+The wrong slot fails on both files and the right one works on both, so a clean
+read is worth something here. 169 and 137 are also exactly the entry counts the
+head-3 fingerprint gave for those two files, independently.
+
+**Then the check.** Of his eleven screens, taken as a (pages, total items) pair,
+four pick exactly one mode and **no mode is claimed by two screens**:
+
+| screen | pages, items | modes matching |
+|---|---|---:|
+| Activity 1, Watch a DVD | 1, 5 | 1, at `0x033C02` |
+| Activity 5, Listen to Radio | 1, 8 | 1, at `0x032DFA` |
+| Device 1, AV Receiver | 1, 7 | 1, at `0x0331FA` |
+| **Device 4, Freesat** | **3, 20** | **1, at `0x0353EC`** |
+| the other seven | 1, 1 / 1, 3 / 1, 4 | 2 to 6 each |
+
+The seven that do not resolve are screens carrying one, three or four buttons,
+and this config has several modes of each of those shapes. That is the reading
+being unable to tell two identical things apart, not the reading being wrong.
+
+**The Freesat is the one that carries the weight, and it carries more than the
+table shows.** Only two modes in the file have three pages at all. His device 4
+has twenty buttons over three pages, and he wrote out which are on which:
+
+```
+page 1   PgUp PgDown List Audio Bookmark BookmarkList Media Opt+       8
+page 2   PwrToggle Return Schedule Sleep Slow Source Subtitle Teletext 8
+page 3   TvPortal TvRadio VFormat Wide, then four blanks               4
+```
+
+Mode `0x0353EC` reads **8, 8, 4**. Not the total, the distribution. The other
+three-page mode reads 8, 8, 8.
+
+So slot 9 of an arch 10 section table is the mode array, and `0x0353EC` is
+@kkong42's Freesat device screen. **That is one slot known, not a mapping**, and
+his warning about guessed mappings is unaffected: nothing else here is ungated,
+and the seven ambiguous rows are reported as ambiguous rather than assigned.
+
+`codex-work/tooling/arch10_modes_vs_inventory.py`. It is not in this repository
+because it reads a container the decompiler refuses.
+
 ### The nine pairs at section 5, still unread
 
 The thirty bytes of 5s that are identical in both arch 10 files read as nine
