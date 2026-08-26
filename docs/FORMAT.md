@@ -1927,7 +1927,66 @@ on the 650**, both tiling to the byte. On arch 8 section 15 is a different
 shape and the tool reports N/A rather than forcing it.
 
 The 525's five lists are `[60]`, `[80]`, `[600, 602, 766, 769]`, `[1800]` and
-`[0]`. What the values select is not known.
+`[0]`.
+
+#### Two of the five are named, from the 525's own firmware - MEASURED
+
+@dannybloe calls this slot the **parameter block** and read it from the Harmony
+One and Harmony 600/700 images, twelve containers. His stated limit is that no
+arch 8 or arch 9 firmware exists on his bench, so those are outside his claim.
+This is that gap, filled from the 525 image, and it is the one contribution to
+his account of this format available here that is not a re-measurement of his.
+
+**One call site.** `0x053E0` loads the literal `0x0F` and `0x053E4` calls the
+seek routine `0x066A8`, and it is the only one of the image's sixteen literal
+seek calls that passes 15. The loader is `0x053DE`.
+
+**Two of the five groups are reached**, by offsets 6 and 9 into the pointer
+array, which at three bytes an entry are groups 2 and 3. Groups 0, 1 and 4 have
+no caller anywhere in the image.
+
+| group | values | what the firmware does with them |
+|---:|---|---|
+| 0 | `[60]` | not reached from section 15 |
+| 1 | `[80]` | not reached from section 15 |
+| 2 | `[600, 602, 766, 769]` | two hysteresis pairs turning an ADC reading into a three-band value |
+| 3 | `[1800]` | reload for the countdown that gates the next ADC scan |
+| 4 | `[0]` | not reached from section 15 |
+
+Group 2's chain: `0x05406` clears `ADCON0` and sets `ADON`, which selects
+channel 0; `0x05418` sets `GO/DONE` and `0x0541A` waits on it; `0x05420` and
+`0x05424` take `ADRESL` and `ADRESH`. Eight samples are accumulated from
+`0x055C2` and divided by eight by three right-rotates from `0x055E2`. The
+comparisons at `0x0578E` and `0x05794` test that mean against each value in
+turn, and `0x0561E` consumes them in pairs, consulting the previous band inside
+the narrow interval between each pair. That is hysteresis: `600/602` and
+`766/769` give bands 0, 1 and 2.
+
+**What the voltage on AN0 actually is, is not established, so no battery, light
+or cradle label is claimed here.** Nor is 1800 turned into thirty of anything;
+the countdown's quantum was not read.
+
+#### Arch 9 does not enforce the length rule, and that is a difference
+
+His load-bearing rule elsewhere is that a group is read only when its declared
+length matches what the build expects, and otherwise the subsystem falls back to
+constants compiled into the firmware. **On arch 9 the loader does not check.**
+
+The callers do compute a demand: group 3's caller writes `1` to `0x1EF` at
+`0x05528` before writing the offset `9` to `0x1EE` and calling. The loader reads
+the group's `u8` entry count at `0x053FC` and the very next instruction,
+`0x05400`, is `RETLW 0x01`. There is no comparison between them, and `0x053DE`
+never reads `0x1EF` at all. The outer count is read at `0x053E8` and stored
+without a bounds test before indexing either.
+
+So the demands exist, and on this config they agree, `4` for group 2 and `1` for
+group 3 against lengths of 4 and 1. Nothing enforces them. An editor that
+changed a group's declared length on arch 9 would be believed.
+
+Verified here by disassembling `0x053DE` to `0x05404`, `0x05406` to `0x05428`
+and `0x05528` to `0x0554E` independently of the report that produced the
+reading. The control is that the same procedure reproduces the recorded
+`0x80` to section 13 path through `0x04B20`, and it does.
 
 ### Section 16 is a pointer table that arch 9 and arch 14 leave empty
 
