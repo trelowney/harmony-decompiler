@@ -1942,8 +1942,16 @@ seek routine `0x066A8`, and it is the only one of the image's sixteen literal
 seek calls that passes 15. The loader is `0x053DE`.
 
 **Two of the five groups are reached**, by offsets 6 and 9 into the pointer
-array, which at three bytes an entry are groups 2 and 3. Groups 0, 1 and 4 have
-no caller anywhere in the image.
+array, which at three bytes an entry are groups 2 and 3. The loader `0x053DE` has
+exactly two callers in the whole image, `0x0560E` with offset 6 and `0x05532`
+with offset 9, so **groups 0, 1 and 4 are never asked for**.
+
+> That is a different shape from the configuration-bit routine of 5r, and the
+> two were being described with the same words. `0x00172` has **no reference
+> anywhere in the image**: the code exists and nothing can reach it. `0x053DE`
+> runs perfectly well; there is simply no third caller. So the compiler emits
+> `[60]`, `[80]` and `[0]` into a config whose firmware has no instruction that
+> reads them. On one arch 9 sample, which is all there is.
 
 | group | values | what the firmware does with them |
 |---:|---|---|
