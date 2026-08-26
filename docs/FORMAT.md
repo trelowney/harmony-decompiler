@@ -1944,6 +1944,36 @@ raw. The two at the start of the span, before the first bitmap, are `00 00` on
 sample has a non-zero one, so neither the width nor the meaning is established.
 This is marked DESCRIBES.
 
+**The leading two are named, and the answer is @dannybloe's.** His
+`docs/config-format.md` calls this slot the **touch screen hit map**, read from
+the Harmony One's own firmware and confirmed on both One configs. It is a page
+array, each page an area array, each area twelve bytes of rectangle plus the key
+code a hit reports. **The Harmony One is the only remote in either corpus with a
+touch panel**, so on every other architecture the slot is empty, and empty here
+is two zero bytes rather than one because the pointer lands two bytes in front of
+the picture bank that follows, which is the same bias the bank walk starts from.
+
+That answers both halves of the question above: the width is a `u8` page count,
+the second byte is the bias, and no sample here has a non-zero one because no
+remote here has a touch panel. He confirmed it on thirteen containers; it holds
+on nine of nine here.
+
+**One thing to add, because it holds where his slot numbering does not.** He
+speaks of base slot 17, which needs a mapping. Measured against the raw table,
+the hit map is simply **the last present entry**, whatever its index:
+
+| arch | entries | last index | bytes there |
+|---:|---:|---:|---|
+| 9, the 525 | 18 | 17 | `00 00` |
+| 8, four configs | 19 | 18 | `00 00` |
+| 14, three configs | 18 | 17 | `00 00` |
+| **10, the 890 and the 895** | 21 | **20** | `00 00` |
+
+So this holds on arch 10 as well, where 5u shows the slots are shifted and his
+own mapping is deliberately refused. It is one anchor at the far end of that
+table that comes out of the file rather than out of a guess, and it costs
+nothing: the claim is only that the last entry is empty.
+
 ## 4s. Relocation, and the guard a census cannot be - SOLVED, with a stated reach
 
 A config can change length now, in this repository, on arch 9. The design is
