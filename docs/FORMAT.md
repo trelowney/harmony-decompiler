@@ -820,6 +820,58 @@ table at offset `0x0C` with four-byte entries, read one byte early. And
 `0x0672C` is how a pointer array is indexed: three bytes per entry, past a
 header of `k` bytes.
 
+### All sixteen seek call sites, and what each does next - MEASURED
+
+The sixteen were counted long before they were read. This is the map, and the
+enumeration was re-run here independently of the report that produced it:
+**sixteen direct calls to `0x066A8`, every argument a literal, sections exactly
+2 to 16 with 13 twice, none of 0, 1 or 17.**
+
+| section | seek at | in routine | what reads it |
+|---:|---|---|---|
+| 2 | `0x01024` | `0x01010` | reads a leading `u16`, follows the next `u24`, iterates the pointed data |
+| 3 | `0x0427C` | `0x04274` | seeks and returns: a cursor-positioning entry point, its two callers do the reading |
+| 4 | `0x05DB0` | `0x05DA0` | `u24` and `u16` header, then a linear scan of `u8`/`u24` entries, no index helper |
+| 5 | `0x05032` | `0x0502A` | two RAM-indexed `0x066F4` selections, a `u8` discriminator dispatched on 3, 2 and 5 |
+| 6 | `0x05BBE` | `0x05B6C` | opcode `0x7E`: record `[operand]`, `k=3` |
+| 7 | `0x04494` | `0x04482` | indexes by a `u8` read **before** the seek, `k=0`, copies the `u24` to RAM without following it |
+| 8 | `0x0240A` | `0x02402` | `u8` count immediately, then a real bounds check on RAM `0x3DA`, `k=0` |
+| 9 | `0x07A3A` | `0x07A1A` | indexes by RAM `0x2DB`, `k=1`, follows, then a per-record `u8` count |
+| 10 | `0x07EFC` | `0x07EF4` | opcode `0x7F`: `k=2` by the 16-bit operand |
+| 11 | `0x0472C` | `0x04724` | opcode `0x73`, from `0x01DF4`: `k=2` by RAM `0x2C3` |
+| 12 | `0x05B16` | `0x05B10` | seeks and tail-`GOTO`s the byte reader: the whole routine returns the section's `u8` count |
+| 13 | `0x047BA` | `0x0479A` | four `u16` header reads, then scans by runtime index `0x703`, `k=8` |
+| 13 | `0x04B26` | `0x04B20` | opcode `0x80`: `k=8` by RAM `0x1AF` |
+| 14 | `0x07AF8` | `0x07AF0` | opcode `0x72`: `k=1`, then searches records against both operand bytes |
+| 15 | `0x053E4` | `0x053DE` | the parameter block, groups 2 and 3 only |
+| 16 | `0x06CDC` | `0x06CCE` | indexes RAM `0x2CF`, `k=1`, follows, reads several record scalars |
+
+Seven of the sixteen were already identified: 6, 10, 11, 13 twice, 14 and 15.
+The other nine had no firmware-side reader named, and now have one each. They are
+marked as shapes rather than names on purpose: "routine `0x07A1A` indexes section
+9 by RAM `0x2DB`" is what the instructions say, and calling section 9 a
+particular subsystem on that basis would be the fitting this document keeps
+having to withdraw.
+
+`0x05DA0` is worth one note. Nothing `CALL`s it; `0x05E96` tail-enters it with a
+`GOTO`. So it is reachable, unlike the configuration-bit routine of 5r, which
+nothing reaches at all.
+
+#### The firmware trusts the counts, and that is a fact about writing
+
+Across all sixteen, **not one reader validates a declared count or length against
+a literal.** The only bounds test in the set is section 8's, and it is dynamic
+rather than declared: `0x0240E` reads the `u8` count into `0x014`, `0x02416`
+loads the RAM index `0x3DA`, and `0x0241A` subtracts and branches away if the
+index is not below it. That protects the firmware from its own index. Nothing
+protects it from the file.
+
+This generalises what section 15 showed on one routine. @dannybloe's arch 12 and
+arch 14 images enforce a group's length against a number the build expects, and
+fall back to compiled constants when it disagrees. **Arch 9 does not do that
+anywhere.** A config that states a wrong count is believed, so on this
+architecture the check has to be in the writer.
+
 ### Opcode 0x7F runs another action list - CONFIRMED
 
 The handler calls `0x07EF4`, which is one flash bracket end to end:
