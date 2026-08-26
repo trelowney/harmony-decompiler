@@ -1880,6 +1880,40 @@ read back from:
 | 9 | 8,192 | `0x070000..0x080000` | 8 |
 | 14 | 16,384 | `0x1E0000..0x200000` | 8 |
 
+#### What the 525's firmware does with it, and what it does not
+
+Section 2's reader is `0x01010`, seeking at `0x01024`. Counted over
+`0x01010..0x0108A`: **one `u16` read at `0x01032`, one pointer follow at
+`0x01036`, no copy-without-following at all.**
+
+Three things the firmware settles that the config side could only assume:
+
+* **The count is a loop bound.** It lands in `0x2C8:0x2C9`, `0x0103A` tests it
+  against zero and exits, and `0x01072` decrements the same pair after each item.
+* **The stride really is eight.** `0x0104A` is a literal `MOVLW 0x08` for the
+  inner byte counter. Until now the 8 came from Glen's reading and the arithmetic
+  agreeing; now an instruction says it.
+* **The writeable flash is reached the same way the config is.** `0x01036` puts
+  the first address straight into `TBLPTR` through `0x06560`, and the items are
+  then read with the ordinary advancing byte reader `0x06576`. So `0x070000` is
+  not a separate device or a separate route; it is the same SPI cursor.
+
+It also scans for erased space: each item is tested byte by byte against `0xFF`
+at `0x0105C`, and an all-`FF` item ends the scan after `0x0106C` restores that
+item's address. So the count bounds the search and an erased record stops it.
+
+**And one thing it does not do: it never reads the third field.** There is no
+second follow and no copy, so bytes 5 to 7 of the section are untouched by this
+image. Their value is what a past-the-end address would be, but it is also
+exactly `first + count * 8`, so the agreement `verify_small_sections.py` checks
+is a relation among three stored numbers rather than confirmation that anything
+consumes the third. Nothing here contradicts Glen; the firmware simply does not
+corroborate that field, and it would be honest for a future writer to know that
+it can only get that field wrong silently.
+
+Section 2 also confirms the general result above specifically: its count is
+compared with zero and never with a literal.
+
 ### Section 3 is the build time, and the weekday is what makes it checkable
 
 Section 3 holds the eleven-byte framed record
