@@ -1868,12 +1868,46 @@ into the span - the rest of which belongs to section 5's infrared subsystem
 states nothing the header does not: the whole 125 bytes carry `first` and `30`.
 `first` is 4 on protocol 8, 11 on protocol 9 and 14 on protocol 14.
 
-**What the numbering counts is not known.** The obvious reading - that these are
-the config's live state variable addresses (5c) - is measurable and false: the
-name table uses indices outside `first..first+29` on 13 of 15 containers, up to
-72 on the 650 against a range that ends at 43. This check is marked DESCRIBES
-rather than PASS in the tool, because it reads back its own declared count and
-so cannot fail the way the others can.
+The obvious reading - that these are the config's live state variable addresses
+(5c) - is measurable and false: the name table uses indices outside
+`first..first+29` on 13 of 15 containers, up to 72 on the 650 against a range
+that ends at 43. This check is marked DESCRIBES rather than PASS in the tool,
+because it reads back its own declared count and so cannot fail the way the
+others can.
+
+**What the numbering counts is settled, and the answer is @dannybloe's.** His
+`docs/config-format.md` calls this the **firmware event map** and reads the same
+bytes under different names: our `<u8 first> <u16 0>` is his `u24 fallback`, and
+our `<u8 index> <u8 first + index> <u16 0>` is his `{u8 key; u24 value}`. Field
+for field the same structure, confirmed by him on 15 configs across four
+architectures. The firmware raises an event by loading a literal key and looking
+it up here.
+
+**The values name records in section 6**, the same numbering space opcode `0x7E`
+indexes. Half of that was already here and measured independently: 4's "opcode
+`0x7E` selects a record". Joining the halves gives a check with two numbers that
+can disagree, over every config the decompiler reads:
+
+| config | records in section 6 | largest `0x7E` operand | event map range |
+|---|---:|---:|---|
+| 525 | 114 | 113 | 11..40 |
+| 880 Bedroom, 885 Bedroom, 880 Spare-1 | 130 | 129 | 4..33 |
+| 885 LivingRoom | 281 | 280 | 4..33 |
+| Update | 103 | 102 | 4..33 |
+| Update-1 | 125 | 124 | 4..33 |
+| Update-2, Update-3 | 154 | 153 | 4..33 |
+
+**The largest operand plus one equals the record count on nine of nine**, and the
+thirty values fall inside the array on nine of nine. So each of the thirty
+firmware events selects a record the way `0x7E` does, and `first` is the base of
+a reserved block of thirty inside that space.
+
+His reading also refuses on arch 10, which is a third confirmation of 5u from a
+direction that was not looking for one: section index 4 reads a count of 5,416 on
+the 890 and 5,916 on the 895 rather than thirty, because index 4 is not base
+slot 4 there.
+
+**What the thirty events are is still not established**, by him or here.
 
 ### Section 15 points into section 14, and its targets tile
 
