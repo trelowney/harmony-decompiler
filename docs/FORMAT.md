@@ -3587,6 +3587,118 @@ single-byte pointer mutation that has to make the arithmetic fail. It is not in
 this repository because it reads containers the decompiler refuses, and adding
 `GSPM` to `ARCHITECTURES` would claim support that does not exist.
 
+## 5u. The section table is a different length on every architecture, and arch 10 carries a zip - MEASURED
+
+[@glenharris](https://github.com/glenharris)'s ImHex pattern, merged in PR #30,
+says in a comment what no section of this document said: arch 9 has 18 sections
+and arch 8 has 20 slots. It also names the trap, which this project had fallen
+into and climbed out of without writing down why:
+
+> A null in the section table is not padding and not the end of the table. It
+> means that subsystem is absent, and arch 8 has one in the middle. Reading until
+> the first zero silently truncates a 20-entry table to 8.
+
+`hconfig.py` reads the table correctly today, from `0x0C` up to the head marker
+with only trailing zeros stripped, and its comment explains the null. The
+document is what was behind, so this is that gap closed rather than a new
+reading.
+
+### Measured, on nine configs
+
+The table starts at `0x0C` and the head marker follows it. Entries are the slots
+up to and including the last non-zero one; the rest are padding.
+
+| arch | cookie | head marker | at | entries | interior null |
+|---:|---|---|---:|---:|---|
+| 9 | `AHCM` | `CMAH` | `0x5B` | 18 | none |
+| 8 | `TPTP` | `WLWL` | `0x5F` | **19** | index 8 |
+| 10 | `TPTP` | `WLWL` | `0x67` | **21** | none |
+| 14 | `GSPM` | `LWJL` | `0x5B` | 18 | none |
+
+Arch 8 and arch 10 share a cookie, an end marker and a head marker and differ in
+the length of the table between them. So **the cookie does not determine the
+layout** and neither does the marker: the length has to be read.
+
+Counting the padding slot as an entry gives Glen's 20 for arch 8, which is the
+same measurement described the other way round.
+
+### The subsystems are not at the same indices on arch 10
+
+The record array index of 4b is a pointer table with a three-byte head, `u16`
+count then a zero byte, and in every config here there is **exactly one** table
+of that shape reachable from the section table. That makes it a fingerprint:
+
+| arch | the one head-3 table is at index |
+|---:|---:|
+| 9 | 6 |
+| 8 | 6 |
+| 14 | 6 |
+| **10** | **9** |
+
+Three more entries and the fingerprint three places further along. So arch 10 is
+not arch 8 with extras bolted on the end; subsystems are inserted before index 6
+and everything above them shifts.
+
+### Which does not find the device array, and that was the test
+
+The obvious next step fails, and it is worth writing down that it fails.
+
+If arch 10 were arch 9 shifted by three, the device array of 5p would sit at
+index 8 rather than index 5. @kkong42 states six devices for his 895 in issue
+#34, so there is a number to hit. Searching every entry of the table, in all
+three head shapes 4b knows, for an array whose targets all land inside the file:
+
+* the 525 gives one entry matching its known 4, at index 5, head 1;
+* the 650 and its two successors match their known 4, 5 and 6 at index 5, head 1, and index 5 is the only entry that is right on all three of them;
+* the 895 gives **no entry at all whose count is 6**, at any index, in any head shape.
+
+The 890 does have a `04` and four in-range `u24`s at index 6, which is the device
+array's exact shape, and the 895's index 6 is one byte long and empty. So the two
+arch 10 files do not even agree with each other.
+
+**Where an arch 10 config states its device count is unknown**, and section
+pointer 5 is not it. `count_devices.py` refuses rather than guessing, per 5s.
+
+### Arch 10 embeds a zip, and the other three do not
+
+Searching the 895 for its device names by ASCII found none, and found this
+instead: `PK\x03\x04` at `0x00C328`, a well-formed zip of 270 bytes ending at
+`0x00C436`, which is exactly where section 4 begins.
+
+It opens, `testzip()` returns `None`, and it holds one deflated member:
+
+```
+MetaData.xml    213 bytes, stored in 132
+```
+
+Identical in the 890 and the 895, and it is the HarmonyAssistant schema:
+
+```xml
+<MetaData><Class name="HarmonyAssistant" id="0"><Record name="AssistantMenu" id="0">
+<Field name="Show" type="boolean"><Variant name="true" id="1"/><Variant name="false" id="0"/>
+</Field></Record></Class></MetaData>
+```
+
+No `PK` header exists anywhere in an arch 8, arch 9 or arch 14 config here.
+
+So arch 10 stores as a compressed archive what arch 9 stores as the plaintext
+name table in its section 0, wrapped in `0xFEED ... 0xBEEF` and described in 4. That is the same
+subsystem in two spellings, and it is a reason for two things that looked like
+gaps: an arch 10 blob has **no readable device names at all**, and
+`count_devices.py`'s state-tree route reports nothing on it.
+
+It does not follow that the device names are in the archive. They are not; those
+213 bytes are the schema and nothing else. Where an arch 10 config keeps the
+names is open, along with where it keeps the count.
+
+### The nine pairs at section 5, still unread
+
+The thirty bytes of 5s that are identical in both arch 10 files read as nine
+records pairing 0 to 8 with 9 to 17. The span holding them is 125 bytes on the
+895 and 1,037 on the 890, so the thirty are a fixed head on something variable.
+Neither the record length nor what the pairing means comes out of two files, and
+this is recorded as unread rather than guessed at.
+
 ## 5r. The 525 can rewrite its own firmware, and its configuration bits - MEASURED
 
 `tools/hid_query.py` refuses `0x30 WRITE_FLASH`, `0x40 WRITE_FLASH_DATA`,

@@ -25,6 +25,11 @@ Layout of the arch 9 blob:
     0x00004  u32  absolute flash address of the end marker
     0x00008  u32  unknown (0x1400)
     0x0000C  u32[18]  absolute section addresses
+             the count is per architecture, not a constant: 18 here and on
+             arch 14, 19 on arch 8 with a null at index 8, 21 on arch 10.
+             The table is read to the marker rather than to a fixed length,
+             and the subsystem at a given index is not the same across them:
+             see FORMAT.md 5u
     0x00054  7 bytes of padding
     0x0005B  'CMAH'
     0x0005F  data, not covered by the section table (the 114 records live here)
