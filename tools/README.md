@@ -312,5 +312,53 @@ picture bank all come back unchanged, which is what the appending version could
 not manage. It is still an offline structural proof. Neither file has been
 written to a remote.
 
+`h525_lcd_author.py` holds one authoring rule that is easy to get wrong. The
+arch-9 container has a single generated character alphabet shared across its
+font sets, so a glyph code that is NULL in one set is **not** free for reuse: it
+is a code that set does not draw, and giving it a different meaning elsewhere
+changes what an existing page renders. The module allocates a new code only
+after the whole existing alphabet. It opens no USB device and writes no config
+by itself. `test_h525_lcd_author.py` is its offline regression, six tests.
+
+```sh
+python tools/test_h525_lcd_author.py
+```
+
+`append_525_tv_lcd_page.py` is the bounded proof that the rule works. It appends
+a real seventh TV Panasonic LCD page to the public sample, allocating glyph `7`
+as a genuinely new font-local code, rebuilding the six existing page programs so
+their footers read `N of 7`, and appending the seventh reading `7 of 7`. Five
+checks have to pass: the mode goes from six pages to seven, the new glyph
+decodes pixel-exactly at its appended code, every old footer re-reads, **the 129
+non-TV pages stay pixel-identical and every IR record address is unchanged**,
+and the result round-trips symbolically with both checksums rebuilt.
+
+```sh
+python tools/append_525_tv_lcd_page.py --out seventh.EZHex --proof seventh.json
+```
+
+`build_525_samsung_t200hd.py` is the largest of these and the one with a history:
+it built the configuration described in section 4p, the one that was written to a
+real Harmony 525 and read back byte-identical. It adds IR group 4, mode 114, 39
+self-contained class-5 records, 28 physical key bindings and three LCD pages. The
+command payloads come from a public IRDB CSV for Samsung device/subdevice 7/7 and
+are checked independently against a public LIRC capture of remote BN59-00678A;
+frame timing comes from that capture, and the once/held/tail slot roles and the
+50/500 ms wrappers come from the sample configuration itself. Both inputs are
+required arguments and neither is in this repository:
+
+```sh
+python tools/build_525_samsung_t200hd.py   --irdb-csv irdb-BN59-00678A-7,7.csv --lirc-config BN59-00678A.lircd.conf   --out candidate.EZHex --proof candidate-proof.json
+```
+
+That reproduces: on the reader as it stands today, five days of changes after the
+candidate was first built, the output is byte for byte the same 97,865-byte file,
+`sha256 5be80d72e90dca51271e7105f2bf9bfd31dd7ab5213ce4d446ab9a11c5895e75`.
+
+None of the three is a hardware-safe writer, and none of them opens USB. What
+went on the remote in 4p went through a separate review and a recovery-backed
+plan, and the honest limit stated there still holds: the device could not be
+reached, so not one of those buttons was ever pressed.
+
 All of these are arch-9/Harmony-525-specific. Screen opcode meanings are not
 assumed to carry over to architectures 8, 12 or 14.
