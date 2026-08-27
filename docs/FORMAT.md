@@ -2154,7 +2154,10 @@ the narrow interval between each pair. That is hysteresis: `600/602` and
 
 **What the voltage on AN0 actually is, is not established, so no battery, light
 or cradle label is claimed here.** Nor is 1800 turned into thirty of anything;
-the countdown's quantum was not read.
+the countdown's quantum was not read. **5y narrows it without naming it**: AN0 is
+the only analog channel the image ever selects and RA0 is the only input on its
+port, so whatever the three bands mean, there is no second reading to be confused
+with this one.
 
 #### Arch 9 does not enforce the length rule, and that is a difference
 
