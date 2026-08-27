@@ -4427,6 +4427,82 @@ config a real compiler wrote for five devices, which is discussion #33.
 repository because it reads the firmware image, Logitech's installed Java and the
 Concordance binaries, none of which are redistributable.
 
+## 5x. The thirty firmware events are the remote's error screens, and thirty of thirty are named - MEASURED
+
+4r read section 4 as @dannybloe's firmware event map and left the question open:
+the values select records in section 6, but nothing said **what raises event k**.
+Two halves are answered here, and they are answered very unevenly.
+
+### The thirty modes, read out of the config
+
+The map's fallback is 11 on the 525 and its values are 11 to 40, so it names
+modes 11 to 40 of the mode table. All thirty exist, each has exactly one page,
+and each page's screen program renders:
+
+| event | mode | screen | | event | mode | screen |
+|---:|---:|---|---|---:|---:|---|
+| 0 | 11 | Go to Website / to update settings | | 15 | 26 | Battery Fast / Charge |
+| 1 | 12 | USB / Initialization | | 16 | 27 | Battery / Trickle Charge |
+| 2 | 13 | Bootloader / Locked | | 17 | 28 | Battery Charge / Complete |
+| 3 | 14 | Real Time Clock | | 18 | 29 | IR Sending |
+| 4 | 15 | IR LEDs / and / Photodiode | | 19 | 30 | Invalid / Configuration |
+| 5 | 16 | FLASH Memory / ID | | 20 | 31 | Bootloader / Bad Image |
+| 6 | 17 | FLASH Memory / Erase | | 21 | 32 | Bootloader / Upgrade Failed |
+| 7 | 18 | FLASH Memory / Write | | 22 | 33 | Battery ADC / Not Calibrated |
+| 8 | 19 | FLASH Memory / Clear | | 23 | 34 | LightSense ADC / Not Calibrated |
+| 9 | 20 | LCD Module / Failed | | 24 | 35 | Revision ADC / Not Calibrated |
+| 10 | 21 | PLL Failure | | 25 | 36 | Application / Terminated |
+| 11 | 22 | BootRAM / Truncated | | 26 | 37 | Configuration / Corrupted |
+| 12 | 23 | Safe Mode | | 27 | 38 | Missing / License |
+| 13 | 24 | Safe Mode / Requested | | 28 | 39 | USB CONNECTED |
+| 14 | 25 | Battery Low | | 29 | 40 | Needs to be / setup. / Battery Charging |
+
+**Section 4 is the remote's error and status screen table.** That also answers
+what AN0 and the other two ADCs of 5m are for from the other direction: three of
+the thirty screens are ADC calibration failures.
+
+The decode was checked without using the glyph alphabet at all, which is the
+point: if the text is right, a repeated word must be the **same sequence of glyph
+codes**. `FLASH Memory` is code-for-code identical in modes 16, 17, 18 and 19;
+`Bootloader` in 13, 31 and 32; and the four Battery screens have first lines of
+11, 12, 7 and 14 codes, which is exactly `Battery Low`, `Battery Fast`,
+`Battery` and `Battery Charge`.
+
+### What raises them: four of thirty, and that is the honest number
+
+The firmware side is much thinner. Every entry key is read to `0x73A`,
+zero-extended through `0x014:0x015`, and compared against RAM `0x3F1:0x3F2`,
+which `0x05E8E` copies from `0x3EF:0x3F0` immediately before the tail `GOTO`
+into the reader. **Five producers write a literal into `0x3EF:0x3F0`**, and they
+supply four distinct events:
+
+| producer | event | screen | chain ends at |
+|---|---:|---|---|
+| `0x0246E` | 0 | Go to Website | action opcode `0x1F` |
+| `0x04F8C` | 0 | Go to Website | main loop `0x04BFA` |
+| `0x04DEA` | 25 | Application / Terminated | **caller cannot be determined** |
+| `0x04F78` | 26 | Configuration / Corrupted | main loop `0x04BFA` |
+| `0x04CB0` | 27 | Missing / License | main loop `0x04BFA` |
+
+Three of the four land on screens the main loop plausibly owns, and the fourth is
+an action opcode putting up the unconfigured-remote screen. **The other
+twenty-six have no site in this image that a direct-transfer scan can find.**
+That is reported as twenty-six unfound rather than twenty-six absent: the one
+computed-`PCL` dispatch in the image, `0x01100`, was checked and names no
+address in this chain, but a bootloader living outside `mcu.bin` would not be
+visible here at all, and eleven of the thirty screens are bootloader, flash and
+boot-RAM states.
+
+The fallback is reached concretely: a mismatch decrements the file's own `u16`
+count, and when it reaches zero with the match flag `0x736` still clear,
+`0x05E28` copies the fallback to the mode operand and calls `0x05B6C`. **The
+count is the file's, and 9022e3b already said nothing validates it.**
+
+`codex-work/tooling/trace_event_map.py`. Every quoted instruction word was
+re-read out of `mcu.bin` here. Negative controls: the same enumeration returns
+**1** for a routine with one `RCALL` and **0** for 5r's unreachable
+configuration-bit routine.
+
 ## 5r. The 525 can rewrite its own firmware, and its configuration bits - MEASURED
 
 `tools/hid_query.py` refuses `0x30 WRITE_FLASH`, `0x40 WRITE_FLASH_DATA`,
