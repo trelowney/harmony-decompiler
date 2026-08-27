@@ -4385,6 +4385,48 @@ tests: pointing arch 10 at raw slot 5 refuses both roots and moves two of the
 four numbers, and widening the count to `u16` or the addresses to `u32` refuses
 every non-empty root and takes the agreement from 12 to 0.
 
+## 5w. How much a 525 config may grow, and the ceiling is not the flash - MEASURED
+
+A config on the 525 sits at physical `0x820000` and the remote's writeable
+journal begins at `0x870000`. That is not a constant taken from anywhere: the
+config states it itself, in the eight byte descriptor `00 20 00 00 07 00 00 08`,
+which is `0x070000` to `0x080000` plus the `0x800000` transport offset, the same
+region @glenharris's PR #30 reads as section 2's writeable flash.
+
+| | bytes |
+|---|---:|
+| the public 525 sample | 78,486 |
+| `0x820000` to the journal at `0x870000` | 327,680 |
+| **room before the journal** | **249,194** |
+| the largest config the firmware checksum path has been checked over | 131,074 |
+| **room under that** | **52,588** |
+
+The second row is the one that binds and it is not a storage limit. The boot
+validator reads `end_addr` dynamically, subtracts the base and **divides the byte
+count by two**, so it walks `(end_addr - 2 - 0x020000) / 2` words: 39,240 of them
+today. That count stops fitting sixteen bits at `end_addr = 0x040002`, a config
+of 131,074 bytes.
+
+**What happens above that is not measured.** The four instruction words of the
+validator are pinned and they show the loop; nothing here shows what the loop
+does when its word count no longer fits. So 131,074 is the edge of what has been
+checked, not a demonstrated failure point, and it should be measured before
+anything goes near it.
+
+Against that, one device on arch 9 costs about **19,379 bytes**:
+`tools/build_525_samsung_t200hd.py` builds the sample plus a fifth device at
+97,865 bytes against 78,486. That is not 5t's 46,638 and 41,555, which were
+measured on a 845 KB protocol 14 container carrying its own screens and fonts.
+
+So there is room under the checked ceiling for roughly **two more devices after
+the fifth**, and room before the journal for about twelve. **Capacity is not what
+blocks the five-device write.** What blocks it is that nobody has an arch 9
+config a real compiler wrote for five devices, which is discussion #33.
+
+`codex-work/tooling` and the 2026-08-13 batch; the script is not in this
+repository because it reads the firmware image, Logitech's installed Java and the
+Concordance binaries, none of which are redistributable.
+
 ## 5r. The 525 can rewrite its own firmware, and its configuration bits - MEASURED
 
 `tools/hid_query.py` refuses `0x30 WRITE_FLASH`, `0x40 WRITE_FLASH_DATA`,
