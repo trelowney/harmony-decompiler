@@ -4691,8 +4691,42 @@ the eight rows are **completely full**, and 50 of 56 crosspoints are used. The
 grid was not fitted: the split came out of the instructions before the table was
 looked at, and the empty column is the prediction it made.
 
-Bit 7 is therefore a flag on the code and not part of the coordinate, and what it
-means is not established here.
+### Bit 7 means the key went down
+
+Bit 7 is a flag on the code and not part of the coordinate, and the firmware says
+which flag. `0x07160` is the whole delivery path:
+
+```
+07160:  MOVLB 0x2
+07162:  IORWF 0xDE, W      the scan code of the key currently down
+07164:  MOVLB 0x3
+07166:  MOVWF 0xC3         flag | scancode, into 0x3C3
+07168:  GOTO 0x019DC       the consumer
+```
+
+Three literals reach it, and each from a different place in the debouncer:
+
+| literal | site | when |
+|---|---|---|
+| `0x80` | `0x0712C` | after `0x07120` stores the new code as the current one - **the press** |
+| `0x40` | `0x0714E` | when the scan reads zero and a key was down - **the release** |
+| `0xC0` | `0x070F0` | on the third path, gated by `0x1C6` |
+
+A scan code is `A * 8 + B` with `A` at most 7, so it never exceeds `0x3F` and the
+two flag bits never collide with it. Sorting the 525's own table by those two
+bits:
+
+| | count |
+|---|---:|
+| neither bit, `0x00` to `0x3F` | 1 |
+| bit 6 only, `0x40`, the release | **0** |
+| bit 7 only, `0x80`, the press | **50** |
+| both, `0xC0` | **0** |
+
+So **every keypad binding in this configuration is a press**, this remote binds
+no release and nothing on the third path, and the one code with neither flag,
+`0x06`, is not a keypad event at all. The 50 strip to scan codes 1 to 57, `A` in
+0..7 and `B` never 0, which is the grid above.
 
 ### What this is worth
 
