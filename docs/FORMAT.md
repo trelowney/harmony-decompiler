@@ -4115,6 +4115,14 @@ The 890 does have a `04` and four in-range `u24`s at index 6, which is the devic
 array's exact shape, and the 895's index 6 is one byte long and empty. So the two
 arch 10 files do not even agree with each other.
 
+Those four are named, and not as devices. @dannybloe's section 183 reads raw
+slot 6 as **base slot 5, the infrared group array**: four groups holding 79, 83,
+64 and 74 records, 300 in total. His base slot 5 and 5p's device array are the
+same slot index on arch 8, 9 and 14, so either a device is an infrared group or
+one of the two names is wrong somewhere, and the 895 is the case that says they
+part company - zero groups against six devices its owner can see. That is an open
+question here rather than a settled one.
+
 **Where an arch 10 config states its device count is unknown**, and section
 pointer 5 is not it. `count_devices.py` refuses rather than guessing, per 5s.
 
@@ -4226,13 +4234,67 @@ and the seven ambiguous rows are reported as ambiguous rather than assigned.
 `codex-work/tooling/arch10_modes_vs_inventory.py`. It is not in this repository
 because it reads a container the decompiler refuses.
 
-### The nine pairs at section 5, still unread
+### The nine pairs at section 5 are the firmware event map, read one field late
 
-The thirty bytes of 5s that are identical in both arch 10 files read as nine
-records pairing 0 to 8 with 9 to 17. The span holding them is 125 bytes on the
-895 and 1,037 on the 890, so the thirty are a fixed head on something variable.
-Neither the record length nor what the pairing means comes out of two files, and
-this is recorded as unread rather than guessed at.
+That reading is withdrawn. The thirty bytes were not a fixed head on something
+variable and the pairs were not records; they were the *middle* of a structure
+this document already describes, entered five bytes after its start.
+
+[@dannybloe](https://github.com/dannybloe)'s arch 10 slot mapping, his
+`findings.md` section 183, puts **base slot 4 at raw slot 5** and notes that the
+895's raw slot 5 is exactly 125 bytes, which is base slot 4's own size. Base
+slot 4 is the firmware event map of 4r:
+
+```
++0x00  u24  fallback
++0x03  u16  count, thirty
++0x05  { u8 key; u24 value }[30]
+```
+
+`3 + 2 + 30 * 4 = 125`. Pointed at raw slot 5 the event map reader accepts both
+arch 10 files, and refuses at raw slots 4 and 6 on both:
+
+| file | slot 4 | slot 5 | slot 6 |
+|---|---|---|---|
+| H890-Bedroom-1 | count is 5,416 | **reads, 125 B** | count is 44,804 |
+| H895-Read-2 | count is 5,916 | **reads, 125 B** | count is 0 |
+
+Keys 0 to 29, values 9 to 38, fallback 9, so `N = 9` on arch 10 against 11 on
+the 525, 4 on arch 8 and 14 on arch 14. Entering the same 125 bytes at `+0x05`
+instead of `+0x00` gives key 0 against value 9, key 1 against value 10, and so on
+until the thirty bytes run out at key 8 against value 17. That is exactly what
+was reported as nine pairs.
+
+**All 125 bytes are byte identical in the 890 and the 895**, sha256
+`94155a53...`, at two different addresses. The earlier claim of thirty identical
+bytes understated it by 95, because it stopped where the misreading stopped. On
+the 890 the *span* is 1,037 bytes and the event map is the first 125 of them; the
+other 912 belong to whatever the compiler wrote next, which is 4k's rule that a
+span is where a subsystem's table sits and not a fence around it.
+
+This closes one of the four rows @dannybloe placed **by order** rather than by
+content, and it is his mapping that made the reading possible.
+
+### The two rows his mapping was contradicted on were our off-by-one
+
+`codex-work/tooling/VERIFY-DANNYS-ARCH10-MAPPING-REPORT-2026-08-26.md` returned
+11 confirmed, 2 contradicted and 4 not checkable. Both contradictions were his
+NULL entries at raw 21 and 22, refused because the harness read a 21 entry arch
+10 table. 5u's own correction later the same day says the table starts at `0x0B`
+and holds **23** entries, and under that framing both rows read:
+
+```
+890   entry 20  spare 00  addr 0x0598C1     895   entry 20  spare 00  addr 0x04727B
+      entry 21  spare 00  addr 0x000000           entry 21  spare 00  addr 0x000000
+      entry 22  spare 00  addr 0x000000           entry 22  spare 00  addr 0x000000
+   0x67  'WLWL'                                0x67  'WLWL'
+```
+
+The seven zero bytes that report called padding are two NULL table entries and
+one spare byte, and `WLWL` begins at `0x67`, exactly where a 23 entry table ends.
+Row 6 to 9 is also no longer placed by order alone, because 5t read raw slot 9 as
+the mode array from @kkong42's own page counts. **Fifteen confirmed, none
+contradicted, two not checkable**, those two being 13 to 16 and 14 to 17.
 
 ## 5r. The 525 can rewrite its own firmware, and its configuration bits - MEASURED
 
