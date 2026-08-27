@@ -4534,6 +4534,66 @@ re-read out of `mcu.bin` here. Negative controls: the same enumeration returns
 **1** for a routine with one `RCALL` and **0** for 5r's unreachable
 configuration-bit routine.
 
+## 5y. Port E bit 2 is the config flash's chip select, and the 525 has one analog input - MEASURED
+
+Two facts about the 525's pins, both from the image and neither previously here.
+
+### Every section read begins by pulling one pin low
+
+`BCF LATE, 2` and `BSF LATE, 2` occur 46 and 47 times in the image. **Twelve of
+the sixteen seeks to `0x066A8` are preceded by the assert at exactly eight
+bytes**, and the eight bytes are the same four instructions every time:
+
+```
+07AF0:  BCF LATE, 2        pull RE2 low
+07AF2:  MOVLB 0x1
+07AF4:  MOVLW 0x0E         the section number, a literal
+07AF6:  MOVWF 0x58         into 0x158
+07AF8:  CALL 0x066A8       seek to section N
+```
+
+`0x158` is where the seek routine reads N, which this document already said from
+the other end. So `RE2` is asserted before the transfer and released after: it is
+the **chip select of the serial flash the configuration lives in**, and the one
+extra release is the idle-high initialisation with no matching assert.
+
+Of the four seeks not preceded by an assert, section 15's is the one that can be
+shown positively: it is called at `0x0560E` from inside the ADC routine's own
+bracket, `BCF` at `0x05600` and `BSF` at `0x0563E`. The other three are read the
+same way, as calls made inside a caller's open bracket, but that is inference
+rather than a trace.
+
+The other two bits of the port are barely used and neither brackets a seek: bit 0
+and bit 1 each get two asserts and two releases, against bit 2's forty-six and
+forty-seven.
+
+### There is exactly one analog input, and it is AN0
+
+5m read the ADC chain and stopped at "what the voltage on AN0 actually is, is not
+established". That is still true. What is settled now is that **there is nothing
+else to confuse it with**. Seventeen instructions in the whole image touch an ADC
+register, and three independent statements agree:
+
+* **`ADCON0`'s channel select bits are never written.** The register is only ever
+  `CLRF`ed and then bit 0 set, so `CHS3:CHS0` stay zero. No instruction anywhere
+  selects a channel other than 0.
+* **`ADCON1` is loaded with `0x0E`** at all three initialisation sites,
+  `0x00E6A`, `0x055B4` and `0x07ECC`, which makes AN0 analog and every other pin
+  digital. At `0x055A6` it is set to `0x0F`, all digital, so that `PORTA` bit 0
+  can be read as a **digital level**, and then restored - the same pin serves
+  both ways.
+* **`TRISA` is loaded with `0x01`.** RA0 is the only input on port A at all; RA1
+  to RA7 are outputs, and `PORTA` is preloaded `0x2C`.
+
+`ADCON2` is `0x86`: right justified, zero `TAD` acquisition, conversion clock
+Fosc/64.
+
+The consequence for 5x: three of the thirty firmware screens are `Battery ADC`,
+`LightSense ADC` and `Revision ADC` calibration failures, and **this remote has
+one analog channel**. So the thirty are the firmware family's fixed vocabulary
+and not a list of what this model can raise, which is the same conclusion the
+four-of-thirty raise-site count reached from the other side.
+
 ## 5r. The 525 can rewrite its own firmware, and its configuration bits - MEASURED
 
 `tools/hid_query.py` refuses `0x30 WRITE_FLASH`, `0x40 WRITE_FLASH_DATA`,
