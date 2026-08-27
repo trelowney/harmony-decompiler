@@ -4597,6 +4597,71 @@ one analog channel**. So the thirty are the firmware family's fixed vocabulary
 and not a list of what this model can raise, which is the same conclusion the
 four-of-thirty raise-site count reached from the other side.
 
+## 5z. The 525's keypad is eight by seven, and its own key table says so - MEASURED
+
+5n has the arch 8 keypad, 4 by 16, because @kkong42 put a multimeter on an 880
+and an 885 board. Nobody has opened a 525. This is the same answer for arch 9
+from the firmware, checked against the config.
+
+### How the firmware finds a key
+
+One sense line, `PORTB` bit 7, and **two binary searches over the same eight
+lines**:
+
+| | routine | masks on `LATD` | contributes |
+|---|---|---|---|
+| pass 1 | `0x06FA4` | active high: `01 02 03 04 08 0C 0F 10 20 30 40 C0 F0` | **1 to 7** |
+| pass 2 | `0x0701C` | active low: `FE FD FC FB F7 F3 F0 EF DF CF BF 7F` | **`0x00` to `0x38` in eights** |
+
+Each probe is `RCALL`, then `BTFSC PORTB, 7`, then branch: thirteen writes and
+thirteen tests resolve one line in three or four steps. The two results are added
+at `0x070BE`, so a scan code is `A * 8 + B` with `A` in 0..7 and `B` in **1..7,
+never 0**.
+
+The two passes do not drive the port the same way. Pass 1's helper `0x0715A` is
+`MOVWF LATD` and a delay. Pass 2's `0x07156` is `MOVWF LATD`, then `BCF LATE, 0`
+and `BSF LATE, 0`, then `SETF LATD`, then the delay - the mask is written, `RE0`
+is pulsed, and the port returns to idle. **The natural reading is that one axis
+is driven straight off port D and the other through an external latch that `RE0`
+strobes off the same eight lines**, which is inference from the instruction
+order and is not a measurement.
+
+`RB7` is also the wake: `0x070C4` scans, calls `0x0716C` to clear `LATD`, and
+then clears `INTCON` bit 0, the port B interrupt-on-change flag.
+
+### The config agrees, and it agrees exactly
+
+The 525's key table holds 51 codes at `0x0000FB`. **Fifty carry bit 7**; the one
+that does not is `0x06`. Strip the bit and take the firmware's own split,
+`A = code >> 3` and `B = code & 7`:
+
+```
+    0 1 2 3 4 5 6 7
+A=0 . # # # # # # #
+A=1 . # # # # # # #
+A=2 . # # # # # # #
+A=3 . # # # # # # #
+A=4 . # # # # # # #
+A=5 . # # # # # # #
+A=6 . # # # # # # #
+A=7 . # . . . . . .
+```
+
+`B` is never 0, which is exactly what a pass returning 1 to 7 forces. Seven of
+the eight rows are **completely full**, and 50 of 56 crosspoints are used. The
+grid was not fitted: the split came out of the instructions before the table was
+looked at, and the empty column is the prediction it made.
+
+Bit 7 is therefore a flag on the code and not part of the coordinate, and what it
+means is not established here.
+
+### What this is worth
+
+A keypad's geometry is readable from a config alone, without opening the remote.
+That is a second route to 5n's 4 by 16 and the only route available for every
+model nobody has a board for. Whether the split is per architecture is not
+answered by one file; see `codex-work/tooling/KEYPAD-GEOMETRY-REPORT.md`.
+
 ## 5r. The 525 can rewrite its own firmware, and its configuration bits - MEASURED
 
 `tools/hid_query.py` refuses `0x30 WRITE_FLASH`, `0x40 WRITE_FLASH_DATA`,
