@@ -2040,7 +2040,9 @@ bytes under different names: our `<u8 first> <u16 0>` is his `u24 fallback`, and
 our `<u8 index> <u8 first + index> <u16 0>` is his `{u8 key; u24 value}`. Field
 for field the same structure, confirmed by him on 15 configs across four
 architectures. The firmware raises an event by loading a literal key and looking
-it up here.
+it up here. **5x names all thirty and finds five of the loads**: the values are
+modes 11 to 40 on the 525, they render as the remote's error and status screens,
+and four of the thirty events have a raise site in this image.
 
 **The values name records in section 6**, the same numbering space opcode `0x7E`
 indexes. Half of that was already here and measured independently: 4's "opcode
@@ -4497,6 +4499,35 @@ The fallback is reached concretely: a mismatch decrements the file's own `u16`
 count, and when it reaches zero with the match flag `0x736` still clear,
 `0x05E28` copies the fallback to the mode operand and calls `0x05B6C`. **The
 count is the file's, and 9022e3b already said nothing validates it.**
+
+### Where the thirty sit among the 525's modes, and the rule is not the obvious one
+
+The 525 declares 114 modes and every one of them has at least one screen. Thirty
+of the 114 are the block above, `first` to `first + 29`, and **all thirty have
+exactly one page**. Every multi-page mode in the file is a user mode.
+
+The obvious rule to draw - that a writer must leave `first..first + 29` alone
+because they are the firmware's - is **wrong in one direction and was checked
+before being written**. Across all 338 `0x7E` instructions in the config, 78
+distinct operands spanning 0 to 113, **exactly one lands inside the block**:
+
+```
+action_list at 0x00EBA9, 13 bytes
+  0x07  65533
+  0x75  18020
+  0x7E  25        <- mode 25, "Battery Low"
+  0x1F  60161
+```
+
+So the config does point into the firmware block, once, at the screen a config
+would want: the remote's own low battery display. The accurate rule is that these
+thirty modes are **shared, not reserved** - a generated config may branch to one
+and must not renumber or overwrite one. Both writers here allocate at mode 114,
+above the whole table, so neither is affected.
+
+The block's position is stated by the file, not by the architecture: `first` is 4
+on protocol 8, 11 on protocol 9 and 14 on protocol 14, so **the config declares
+which of its own modes the firmware owns**.
 
 `codex-work/tooling/trace_event_map.py`. Every quoted instruction word was
 re-read out of `mcu.bin` here. Negative controls: the same enumeration returns
