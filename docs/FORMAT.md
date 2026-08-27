@@ -4591,6 +4591,45 @@ register, and three independent statements agree:
 `ADCON2` is `0x86`: right justified, zero `TAD` acquisition, conversion clock
 Fosc/64.
 
+### The rest of the map, from the same image
+
+Counting every reference to the bank-15 register window gives the peripherals the
+firmware actually uses, and each one lands on a pin or a subsystem this document
+already describes from the file's side.
+
+| pin or unit | what the image says | what it is |
+|---|---|---|
+| `RA0` / `AN0` | `TRISA = 0x01`, `ADCON1 = 0x0E`; also read digitally at `0x055A6` | the one analog input |
+| `RB7` | the only line the keypad scan tests; `INTCON` bit 0 cleared after each scan | keypad sense and interrupt-on-change wake |
+| `RC2` | `CCP1CON = 0x0C` at `0x076BA`, `PR2` written at `0x07688`, `CCPR1L` at `0x07748`, `T2CON` bit 2 set at `0x076AC` and cleared at `0x076C6` | **the infrared LED**, driven as a CCP1 PWM carrier |
+| `RC2` again | unrolled `BSF`/`BCF PORTC, 2` runs at `0x06828` and `0x06ACE`, gated bit by bit | the same LED **bit banged**, for what the carrier cannot spell |
+| `CCP2` | `CCP2CON` written `0x04` and `0x05`, nothing else | infrared **capture**, alternating falling and rising edge |
+| port D, 8 lines | 5z | keypad drive, shared bus |
+| `RE0` | pulsed low then high after a port D write in pass two | the strobe of the second keypad axis |
+| `RE2` | 46 asserts and 47 releases, bracketing the seeks | serial flash chip select |
+| Timer 0 | `T0CON` bit 7 set and cleared around every interval | the mark and space duration timer |
+| Timer 1 | `T1CON = 0x1E`: external clock, `T1OSCEN` set, off until `0x03C92` | the Timer 1 oscillator, which is the ordinary real-time-clock arrangement, and mode 14 of 5x is `Real Time Clock` |
+| Timer 2 | only ever `TMR2ON` around the CCP1 PWM | the carrier's time base |
+| Timer 3 | `T3CON = 0xEC`: `RD16`, and `T3CCP2:T3CCP1 = 1:1` | the capture clock for both CCP modules, which is why Timer 1 stays free |
+| `SSPBUF` | written at `0x00EDA` and `0x07F7E` after clearing `WCOL`, read back at `0x07F8E` | the SPI to the configuration flash |
+| USB | `UCON` 24 times, plus `UADDR`, `UCFG`, `USTAT` and the endpoint window | the USB stack of 5r's command bytes |
+
+Two of these explain things the file already stated.
+
+**`PR2` is written from a computed value** - `DECF 0x006, W` immediately before -
+which is the PWM period formula `Fosc / (4 * prescale * Fcarrier) - 1`. So a
+class 5 record's `period_ns` reaches the hardware here, and that is why the
+carrier is per record rather than per remote. `CCPR1L` is loaded from `0x22C`,
+the duty.
+
+**`CLRF CCP1CON` is preceded by `BCF PORTC, 2` at both sites.** The carrier is
+stopped and the pin is left low, never floating with the LED half on.
+
+And `CCP2` being in capture mode with **no compare or PWM setting anywhere** is
+the firmware side of a fact this project measured by using it: the 525 is an
+infrared learner, and the hardware for it is one capture module and one edge
+polarity bit.
+
 The consequence for 5x: three of the thirty firmware screens are `Battery ADC`,
 `LightSense ADC` and `Revision ADC` calibration failures, and **this remote has
 one analog channel**. So the thirty are the firmware family's fixed vocabulary
