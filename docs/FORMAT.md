@@ -4771,7 +4771,80 @@ That is a second route to 5n's 4 by 16 and the only route available for every
 model nobody has a board for. Whether the split is per architecture is not
 answered by one file; see `codex-work/tooling/KEYPAD-GEOMETRY-REPORT.md`.
 
-## 5r. The 525 can rewrite its own firmware, and its configuration bits - MEASURED
+## 5aa. An action is `<u16 operand><u8 opcode>`, and a key press is a synthesised one - MEASURED
+
+@glenharris said in discussion #14 that an opcode "is *not* just byte0 - think of
+it as a 24 bit instruction". This is that instruction's byte order, from two
+directions that did not consult each other.
+
+### From the file
+
+Every `action_list` in the public 525 is:
+
+```
+<u8 count>  then  count x  <u16 operand, little endian> <u8 opcode>
+```
+
+The opcode is the **last** byte of the three. Checked against the decompiler's
+own instruction list over every action list in the file: **488 of 488 match**,
+count included, with `1 + 3 * count` equal to the region length each time. The
+13-byte list at `0x00EBA9` reads:
+
+```
+04                header, four actions
+fd ff 07          opcode 0x07, operand 0xFFFD
+64 46 75          opcode 0x75, operand 0x4664
+19 00 7e          opcode 0x7E, operand 0x0019   <- mode 25, Battery Low
+01 eb 1f          opcode 0x1F, operand 0xEB01
+```
+
+### From the firmware
+
+`0x019DC` takes the event byte of 5z and pushes **three bytes** into a queue,
+one at a time, through the enqueue routine at `0x01906`:
+
+```
+019E2:  MOVFF 0x3C3, 0x3C2     the event byte
+019E6:  RCALL 0x01906
+019EA:  MOVLW 0xFC
+019EC:  MOVWF 0xC2
+019EE:  RCALL 0x01906
+019F2:  MOVLW 0x1F
+019F4:  MOVWF 0xC2
+019F6:  RCALL 0x01906
+```
+
+Event, then `0xFC`, then `0x1F`. In the order the file uses that is **operand low
+byte, operand high byte, opcode** - so the firmware manufactures the action
+
+```
+opcode 0x1F, operand 0xFC00 | event
+```
+
+and drops it into the same queue the configuration's own actions run through. The
+byte order was read out of the file before this was traced, and the push order
+is the confirmation.
+
+### The queue
+
+`0x01906` is an ordinary circular FIFO and its bounds are literals:
+
+| | |
+|---|---|
+| buffer | `0x0346` to `0x03BD`, **120 bytes**, so forty actions |
+| count | `0x345` |
+| write pointer | `0x3C0:0x3C1`, wraps back to `0x0346` at `0x03BE` |
+| read pointer | `0x3BE:0x3BF`, dequeue at `0x0193A` |
+| staging byte | `0x3C2` |
+
+`0x01930` is the empty test: it returns 1 when the count is zero.
+
+So the whole path is now continuous. A finger closes two of port D's eight lines,
+5z's two binary searches turn that into `A * 8 + B`, `0x07160` ORs in `0x80` for a
+press, `0x019DC` turns it into a three-byte `0x1F` action, and the interpreter
+takes it off a forty-slot queue and runs it against the binding stack of 4q.
+**The same queue carries 5m's ADC band**, which arrives as `0x18 + band` by
+exactly the same route.
 
 `tools/hid_query.py` refuses `0x30 WRITE_FLASH`, `0x40 WRITE_FLASH_DATA`,
 `0xA0 WRITE_MISC` and `0xD0 ERASE_FLASH`, and has since the first read. That was
