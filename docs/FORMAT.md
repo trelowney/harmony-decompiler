@@ -4704,13 +4704,13 @@ which flag. `0x07160` is the whole delivery path:
 07168:  GOTO 0x019DC       the consumer
 ```
 
-Three literals reach it, and each from a different place in the debouncer:
+Exactly four transfers reach `0x07160`, and each carries a literal:
 
-| literal | site | when |
+| literal | sites | when |
 |---|---|---|
-| `0x80` | `0x0712C` | after `0x07120` stores the new code as the current one - **the press** |
-| `0x40` | `0x0714E` | when the scan reads zero and a key was down - **the release** |
-| `0xC0` | `0x070F0` | on the third path, gated by `0x1C6` |
+| `0x80` | `0x0712E` | after `0x07120` stores the new code as the current one - **the press** |
+| `0x40` | `0x0711C` and `0x07150` | two paths where the scan reads zero and a key was down - **the release** |
+| `0xC0` | `0x070F2` | the third path, gated by `0x1C6` |
 
 A scan code is `A * 8 + B` with `A` at most 7, so it never exceeds `0x3F` and the
 two flag bits never collide with it. Sorting the 525's own table by those two
@@ -4723,10 +4723,46 @@ bits:
 | bit 7 only, `0x80`, the press | **50** |
 | both, `0xC0` | **0** |
 
-So **every keypad binding in this configuration is a press**, this remote binds
-no release and nothing on the third path, and the one code with neither flag,
-`0x06`, is not a keypad event at all. The 50 strip to scan codes 1 to 57, `A` in
-0..7 and `B` never 0, which is the grid above.
+So **every keypad binding in this configuration is a press**, and this remote
+binds no release and nothing on the third path. The 50 strip to scan codes 1 to
+57, `A` in 0..7 and `B` never 0, which is the grid above.
+
+### And the table is not a key table, it is an event table
+
+The one code with neither flag, `0x06`, is not a keypad event, and the reason is
+that `0x3C3` has six writers and only one of them is the keypad. The other five
+all sit in the `0x054xx` to `0x057xx` block, which is the ADC and power code of
+5m:
+
+| site | value | |
+|---|---|---|
+| `0x0558C` | `0x0F` or `0x10` | a two-way split on a comparison against `0x700` |
+| `0x0559A` | **`0x18` plus `0x700`** | a base plus the band, so the three bands of 5m are three events |
+| `0x054A2` | `0x17` | |
+| `0x05736` | `0x28` | |
+| `0x05754` | `0x26` | |
+
+plus `0x03028`, which copies `0x706` in from somewhere else. Every literal is
+below `0x40`, so the system events live in the unflagged range and cannot collide
+with a keypad code. The whole byte reads:
+
+```
+0x00 - 0x3F   a system event
+0x40 - 0x7F   a key release
+0x80 - 0xBF   a key press
+0xC0 - 0xFF   the third path
+```
+
+**So the 51-entry table is an event table with one system entry and fifty
+presses**, and what event `0x06` is remains open: it is not one of the five
+literals above, so it arrives through `0x0559A`'s computed value or through
+`0x03028`.
+
+That `0x18 + band` is worth one more line. 5m read the ADC as a three-band value
+with hysteresis and could not say what the voltage was. It still cannot, but the
+band does not stop inside the firmware: **it becomes an event, and the event is
+looked up in the configuration's own table like a key press.** Whatever AN0 is,
+the config can bind an action to each of its three states.
 
 ### What this is worth
 
