@@ -4764,12 +4764,37 @@ band does not stop inside the firmware: **it becomes an event, and the event is
 looked up in the configuration's own table like a key press.** Whatever AN0 is,
 the config can bind an action to each of its three states.
 
-### What this is worth
+### It does not generalise, and that was checked rather than hoped
 
-A keypad's geometry is readable from a config alone, without opening the remote.
-That is a second route to 5n's 4 by 16 and the only route available for every
-model nobody has a board for. Whether the split is per architecture is not
-answered by one file; see `codex-work/tooling/KEYPAD-GEOMETRY-REPORT.md`.
+The obvious next claim is that a keypad's geometry is readable from any config,
+which would be a route to every model nobody has a board for. **It is not.** The
+same test - one split where `B = 0` is unused and at least one row is full - was
+run over all fourteen containers here, every key table located, no refusals:
+
+| | |
+|---|---:|
+| containers where exactly one split passes | **1 of 14**, the 525 |
+| containers with no bit 7 code at all | 0 of 14 |
+| **does arch 8's winning split give 4 by 16** | **no - there is no winning split** |
+
+Arch 8's by-4 numbers *are* 4 by 16, which is 5n's measured shape, and 53 or 55
+of those 64 crosspoints are used. What fails is the test: `B = 0` **is** used on
+arch 8 and no row is full. So the empty column is a signature of **this
+firmware's** binary search returning 1 to 7, not a property of Harmony key
+tables. The disagreement with 5n is that the code test finds no winner, **not
+that it finds a different shape**; 5n stands unchanged.
+
+Three negative controls, on stride-4 windows that are not key tables, did not
+fire for any split, so the test is not vacuous - it is simply arch 9's.
+
+Worth noting in passing: on arch 8 and arch 10 **every** code carries bit 7, 53
+of 53 and 55 of 55. Those configurations bind presses and nothing else at all,
+where the 525 also carries one system event.
+
+`codex-work/KEYPAD-GEOMETRY-REPORT.md` and `keypad_geometry.py`. The locator is
+`find_keytables.find_runs`, self-tested on the 525's 51 records at `0x0000FB`,
+which fixes terminator `0x7F`; that matters because unrelated 60-record
+structures outrank the real table in several files.
 
 ## 5aa. An action is `<u16 operand><u8 opcode>`, and a key press is a synthesised one - MEASURED
 
