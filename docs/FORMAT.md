@@ -3574,6 +3574,11 @@ Two things about it are worth knowing before anyone needs it:
 
 ## 5p. Counting the devices in any config, and what arch 14 does that arch 9 does not
 
+> **Read 5v with this.** Section 5 is the **infrared group array**, and the count
+> below is a group count that happens to equal the device count because the
+> compiler writes one group per device. Everything measured here stands; what it
+> is called does not.
+
 Section 5o ends on one question: how does a config say there are five devices
 rather than four. Nobody here has a five-device arch 9 config, but there are
 five-device configs on other architectures already sitting in this project's
@@ -4117,11 +4122,10 @@ arch 10 files do not even agree with each other.
 
 Those four are named, and not as devices. @dannybloe's section 183 reads raw
 slot 6 as **base slot 5, the infrared group array**: four groups holding 79, 83,
-64 and 74 records, 300 in total. His base slot 5 and 5p's device array are the
-same slot index on arch 8, 9 and 14, so either a device is an infrared group or
-one of the two names is wrong somewhere, and the 895 is the case that says they
-part company - zero groups against six devices its owner can see. That is an open
-question here rather than a settled one.
+64 and 74 records, 300 in total. His base slot 5 and 5p's device array turn out
+to be the same array at the same address on all twelve non-arch-10 containers,
+which **5v** measures; the 895's zero is an empty infrared database and not a
+device count, and where an arch 10 config states its devices is still unknown.
 
 **Where an arch 10 config states its device count is unknown**, and section
 pointer 5 is not it. `count_devices.py` refuses rather than guessing, per 5s.
@@ -4295,6 +4299,91 @@ one spare byte, and `WLWL` begins at `0x67`, exactly where a 23 entry table ends
 Row 6 to 9 is also no longer placed by order alone, because 5t read raw slot 9 as
 the mode array from @kkong42's own page counts. **Fifteen confirmed, none
 contradicted, two not checkable**, those two being 13 to 16 and 14 to 17.
+
+## 5v. The device array is the infrared group array, and it has been one array all along - MEASURED
+
+5p calls section 5 the **device array**. [@dannybloe](https://github.com/dannybloe)'s
+`findings.md` section 183 calls base slot 5 the **infrared group array**. On arch
+8, 9 and 14 that is the same slot index, so either a device is an infrared group
+or one of the two names is wrong. The 895 is the case that looked like it would
+part them, because its array is empty and its owner can see six devices.
+
+They are the same array. Not two readings of one span, the **same address**:
+
+| container | arch | slot | address | devices | groups | records | class |
+|---|---:|---:|---|---:|---:|---:|---:|
+| 525 | 9 | 5 | `0x02FEA2` | 4 | 4 | 8+67+61+64 = 200 | 5 |
+| 880-Bedroom | 8 | 5 | `0x03E650` | 4 | 4 | 79+83+64+74 = 300 | 1 |
+| 880-Spare-1 | 8 | 5 | `0x03E650` | 4 | 4 | 300 | 1 |
+| 885-Bedroom | 8 | 5 | `0x03E650` | 4 | 4 | 300 | 1 |
+| 885-LivingRoom | 8 | 5 | `0x05D968` | 7 | 7 | 460 | 1 |
+| Update | 8 | 5 | `0x038B59` | 3 | 3 | 234 | 1 |
+| Update-1 | 8 | 5 | `0x04D351` | 6 | 6 | 397 | 1 |
+| Update-2 | 8 | 5 | `0x050A5F` | 7 | 7 | 454 | 1 |
+| Update-3 | 8 | 5 | `0x050FED` | 7 | 7 | 462 | 1 |
+| 650 | 14 | 5 | `0x073CDF` | 4 | 4 | 236 | 1 |
+| 650 +1 device | 14 | 5 | `0x07CF6A` | 5 | 5 | 308 | 1 |
+| 650 +2 devices | 14 | 5 | `0x084860` | 6 | 6 | 350 | 1 |
+| 890 | 10 | **6** | `0x04EB4F` | refused | 4 | 79+83+64+74 = 300 | 1 |
+| 895 | 10 | **6** | `0x03C4C1` | refused | 0 | none | - |
+
+**Twelve of fourteen**, same address and same count, and the group reading is the
+stronger of the two: `devices_from_section_5` counts pointers, while this one
+also requires every group to open with `u8 zero`, `u16 count` and `u24` record
+addresses, and every record to land on a class 1 or class 5 header carrying the
+self pointer of 4h. 3,201 records read that way across the corpus and not one
+group refused.
+
+So `count_devices.py` has been counting infrared groups and calling them devices,
+and it was right because the compiler writes one group per device. It was right
+for a reason it did not state, which is a different thing from being right.
+
+### What that costs, and it lands on the write that is blocked
+
+A count that is really a group count can be wrong in two ways, and neither has
+been seen or ruled out:
+
+* @glenharris's rule, 4k, is that a child an earlier subsystem already wrote is
+  **pointed at rather than written again**, and 156 shared targets were found on
+  the 525. Two devices with the same infrared database would then be four groups
+  for five devices;
+* a device with no infrared codes at all - a device the user added and never
+  taught - has nothing for a group to hold.
+
+5t's three 650s add a device and gain a group each time, 4 then 5 then 6, so the
+one-to-one held across two additions by a real compiler. That is the evidence
+there is, and it is three files from one account.
+
+### The 895's zero is real, and it agrees with him independently
+
+`devices_from_section_5` refuses the 895 and the mapped raw slot 6 states a `u8`
+count of **0**. That is not a broken read: @dannybloe's section 181 reads the
+infrared database on arch 10 by a route that needs no slot at all, and finds that
+**a Harmony 895 has none**. Two unrelated readings, one of a count and one of the
+records, saying the same thing.
+
+So the 895 stores no infrared database in this array, its six devices are stated
+somewhere this document still cannot name, and **the zero must never be reported
+as a device count**. 5s's refusal stands and is now explained rather than only
+observed: raw slot 5 on arch 10 is the event map of 5u, and raw slot 6 is this
+array.
+
+### Two things that fell out
+
+The 890's four groups hold **79, 83, 64 and 74 records**, which is byte for byte
+the split in @kkong42's `880-Bedroom`, `880-Spare-1` and `885-Bedroom`. One room,
+four remotes, two architectures, one infrared database.
+
+And the records are **class 1 on arch 8, 10 and 14 and class 5 on arch 9**. The
+decompiler counts regions of kind `ir_record_header` and therefore reports 200 on
+the 525 and **zero on every arch 8 and arch 10 file**, while refusing all three
+arch 14 files on their `GSPM` magic. The class 1 database is read by tooling and
+is not in the decompiler's own region kinds.
+
+`codex-work/tooling/slot5_device_or_ir_groups.py` and its report. Three negative
+tests: pointing arch 10 at raw slot 5 refuses both roots and moves two of the
+four numbers, and widening the count to `u16` or the addresses to `u32` refuses
+every non-empty root and takes the agreement from 12 to 0.
 
 ## 5r. The 525 can rewrite its own firmware, and its configuration bits - MEASURED
 
