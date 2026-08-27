@@ -135,7 +135,7 @@ round trip unchanged while making a button perform the wrong action.
 | `verify_arch8_standard_bindings.py` | the join that fixes all 55 arch 8 keys, 11,520 relabellings to one. Needs `--explorations` and `--manual` at Logitech's H880 user guide, which is not redistributed here |
 | `ir_keymap_oracle.py` | name a key from what it transmits: catalogue, measurement plan, matcher |
 | `check_525_mode_pages.py` | group modes by physical-list shape, and refuse a page count the file has no precedent for |
-| `count_devices.py` | how many devices a config has, two independent ways, on any architecture |
+| `count_devices.py` | count the infrared groups, which is the device count on arch 8, 9 and 14 and is not one on arch 10 (FORMAT 5v) |
 | `harmony-ir-learner/` | capture infrared through a Harmony over USB, no LearnIR and no account (PowerShell) |
 | `verify_ir_keymap_oracle_robustness.py` | offline parser, truncation and multi-seed replay checks for the IR key matcher |
 | `manual_layout.py` | pull button labels with coordinates out of a manual PDF |
