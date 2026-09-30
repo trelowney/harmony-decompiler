@@ -1875,9 +1875,11 @@ entries with opcode `0x7F` and consecutive operands `0x01D5` to `0x01D8`, tagged
 with the four soft keys `0x9E`, `0x9F`, `0xA7`, `0xA6`. That binding list is the
 device list; four keys, four devices.
 
-> **Corrected 2026-09-30, 5ad.** The firmware's lookup says the page keys
-> *are* reachable in `Devices`: the global map passes every key on, and nothing
-> removes list 1. The reason below is not supported, and 5o's cause is open.
+> **Corrected 2026-09-30, 5ad.** The effect is right and the mechanism is not.
+> On the remote the page keys do nothing in `Devices` and page `TV Panasonic`
+> normally, so something stops them in this menu. But nothing removes list 1
+> (4p's `0x0222DD` is infrared header bytes), and what does stop them is not
+> known.
 
 So a fifth device on arch 9 is not "add a page". At minimum the page keys have
 to be reachable while that mode is up, the second page needs its own binding
@@ -5072,11 +5074,13 @@ So Danny's offset 8 and his slot 0 are confirmed on a file, and the end marker
 is new. The decompiler does not read arch 7 yet; `roundtrip.py` refuses it by
 its magic.
 
-## 5ad. A key falls through the global map, and 4q's reason for 5o does not hold - MEASURED
+## 5ad. A key falls through the global map, and what stops paging in Devices is not the stack - MEASURED
 
 4q said the fifth device's page in 5o was never drawn because the page keys
-could not be reached while `Devices` was up. Reading the lookup in the firmware
-does not support that, and the cause of 5o is open again.
+could not be reached while `Devices` was up, because list 1 is removed. The
+firmware's lookup does not support the mechanism, and the remote, pressed on
+the same day, confirms the effect: the page keys work in device modes and do
+nothing in `Devices`. What stops them is open.
 
 ### How a key press is resolved
 
