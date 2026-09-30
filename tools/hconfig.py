@@ -251,7 +251,7 @@ def parse_name_table(blob: bytes, start: int, end: int):
         records.append({
             "parent": int.from_bytes(blob[off + 3:off + 5], "little"),
             "index": int.from_bytes(blob[off + 5:off + 7], "little"),
-            "name": blob[off + 7:off + 3 + ln].decode("ascii", "replace"),
+            "name": blob[off + 7:off + 3 + ln].decode("latin-1"),
         })
         off += 3 + ln
     if off != term:
@@ -1988,7 +1988,7 @@ def emit_region(r: dict, resolve=None) -> bytes:
     if kind == "name_table":
         body = bytearray()
         for rec in r["records"]:
-            name = rec["name"].encode("ascii")
+            name = rec["name"].encode("latin-1")
             body += bytes([NAME_REC])
             body += (len(name) + 4).to_bytes(2, "little")
             body += rec["parent"].to_bytes(2, "little")
