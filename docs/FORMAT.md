@@ -4787,6 +4787,11 @@ that it finds a different shape**; 5n stands unchanged.
 Three negative controls, on stride-4 windows that are not key tables, did not
 fire for any split, so the test is not vacuous - it is simply arch 9's.
 
+**And arch 9's it is, now on three files rather than one.** On 2026-09-30 the
+Harmony 515 of issue #35 and the 555 of #42 were run through the same test and
+both pass it: column 0 empty, seven full rows. That makes it **3 of 3 arch 9
+containers and 0 of the thirteen others**. See 5ab.
+
 Worth noting in passing: on arch 8 and arch 10 **every** code carries bit 7, 53
 of 53 and 55 of 55. Those configurations bind presses and nothing else at all,
 where the 525 also carries one system event.
@@ -4961,6 +4966,102 @@ Two further notes, since this is where a reader will look for them:
   verified. A relocated config is longer, and the margin before a third erase
   block is needed is about 36 KiB - but the failure mode is loud rather than
   silent, because the verify pass reads back what was programmed.
+
+## 5ab. Three arch 9 remotes run one firmware, and 5y to 5aa hold on all three - MEASURED
+
+Everything in 5x to 5aa was read from a single image, the 525's. @kkong42's
+Harmony 515 (issue #35) and 555 (#42) came with concordance firmware dumps, and
+they are real ones: 38% and 34% `0xFF`, where the empty 650 dump of #8 was 99.9%.
+
+**A correction first, because it was said aloud on 2026-08-31.** The 515's
+64 KiB dump is not "twice the size" of the 525's firmware. `mcu.bin` is the
+PIC18LF4550's whole 32 KiB program memory, bootloader included, and nothing
+larger fits that part. The 64 KiB dumps are the external flash copy, and the
+525 has one too, `fw0.bin`. Its first `0x7000` bytes are byte identical to
+`mcu.bin` from `0x1000`, and the 515 and 555 dumps have the same layout: the
+application at offset 0, `0xFF` from `0x7000`, and an `AHCM` container at
+`0x8000`. So there is no hidden bootloader in the bigger file, and 5x's
+twenty-six events without a raise site stay unfound.
+
+Mapped back to `0x1000`, the three applications give identical counts on every
+shape this document measured on the 525:
+
+| shape | 525 | 515 | 555 |
+|---|---:|---:|---:|
+| `BCF LATE, 2` / `BSF LATE, 2` in the application | 40 / 41 | 40 / 41 | 40 / 41 |
+| seek prologues, sections named | 12: 2-6, 8-11, 13, 14, 16 | same | same |
+| calls to the one seek routine | 16 | 16 | 16 |
+| `ADCON1`, `ADCON2`, `TRISA` literals | `0E 0F`, `86`, `01` | same | same |
+| `CCP1CON`, `CCP2CON` literals | `0C`, `04 05` | same | same |
+| `T1CON`, `T3CON` literals | `1E`, `EC` | same | same |
+| event push, `0xFC` then `0x1F` | 1 | 1 | 1 |
+| FIFO wrap literals `0x46` and `0xBE` | present | present | present |
+| writers of `0x3C3` | 6 | 6 | 6 |
+| `CLRF CCP1CON` | 3 | 3 | 3 |
+
+5y's 46 and 47 count the whole image; 6 of each sit in the bootloader below
+`0x1000`, which the dumps do not carry. The builds are not the same file: the
+555's dump is 52,051 of 65,536 bytes identical to the 525's and the 515's only
+27,249, with different call targets. What is the same is the program.
+
+**The keypad of 5z is the family's.** The 515's key table, 52 entries at
+`0x0000F5`, and the 555's, 54 at `0x0000FB`, fall into the same 8 by 7 grid:
+`B = 0` never used, seven full rows. The 555 uses two positions the others do
+not, row 7 columns 2 and 5, and both bind system event `0x07` as well as the
+525's `0x06`. The 555's configuration is otherwise empty; the table is there
+anyway.
+
+**Why RA0 is read digitally.** 5y lists a digital read of the analog pin at
+`0x055A6`: `ADCON1 = 0x0F`, `PORTA & 1`, then `ADCON1 = 0x0E` again. Its one
+caller is `0x063AC`, in a routine that switches on `0x418 & 0x1F` for the
+values 0, 1 and 2 and replies through `0x420`. `0x418` to `0x41A` are a USB
+SETUP packet's `bmRequestType`, `bRequest` and `wValue`, and the routine has the
+shape of chapter 9's `GET_STATUS`: for the device recipient it sets bit 0 of the
+reply when RA0 reads high, and bit 1 from `0x1FD` bit 0. The code at `0x063FE`
+sets and clears that same bit for `bRequest` 3 against 1, `SET_FEATURE` and
+`CLEAR_FEATURE`, when `wValue` is 1, `DEVICE_REMOTE_WAKEUP`, which is what makes
+the reading safe. **Bit 0 of `GET_STATUS` is "self powered".** So the one pin 5m
+reads as a three-band analog value is also what the remote reports to USB as
+whether it powers itself. That it senses the battery is an inference this does
+not prove; that the firmware treats it as a power indication is read off the
+code.
+
+`codex-work/tooling/arch9_firmware_family.py`. The firmware stays out of the
+repository.
+
+## 5ac. Arch 7 is the same container family, and its end marker is `GHGH` - MEASURED
+
+@howradisit's Harmony 659 from discussion #29 is protocol 7, skin 9, board
+0.6.0, and the first arch 7 configuration either this project or @dannybloe's
+has had. His findings list the arch 7 cookie `BMBM` from concordance's
+`remote_info.h` and record the end marker as unknown for want of a sample, and
+his reading of Logitech's client constants places the arch 7 pointer table at
+offset 8, with base slots 0, 2 and 3 named `data`, `event` and `basedate`.
+
+On the file:
+
+* the blob is 295,154 bytes, exactly `BINARYDATASIZE`; it starts `BMBM` and
+  **ends `GHGH`**, and the word before the marker is not the arch 9 trailer
+  checksum of everything before it;
+* the base is `0x020000`. The `{ u8 spare; u24 address }` at offset 4 is
+  `0x0680EE`, which lands exactly on `GHGH` at `len - 4`, the same end address
+  field the other architectures carry;
+* the first twelve entries from offset 8 read in that framing, nulls at 1, 7
+  and 9. **Slot 0, `data`, is the `0xFEED` name table**, 13 records and 307
+  bytes, and this repository's arch 9 reader parses it unchanged: `Root`,
+  `StateVariables`, `Clock::Second_60` and so on;
+* slot 3, `basedate`, is framed `DE AD` ... `BE EF` where arch 9's is `DF AD`
+  ... `BF EF`, with six fields between rather than seven:
+  `0A 12 03 05 03 17`. **This one could not be confirmed.** Every assignment of
+  the six bytes to minute, hour, day, month, weekday and year was tried against
+  the calendar under four weekday conventions and both month origins, and 236
+  of them pass. Six small numbers, two of them equal, are no oracle. Arch 9's
+  own order with its seconds field dropped does not fit: it gives 2023-04-03,
+  a Monday, against a stored weekday of 5.
+
+So Danny's offset 8 and his slot 0 are confirmed on a file, and the end marker
+is new. The decompiler does not read arch 7 yet; `roundtrip.py` refuses it by
+its magic.
 
 ## 6. Prior art
 
