@@ -1808,6 +1808,11 @@ pushed bottom to top, so searched in the reverse order, with list 1 as the last
 resort. That program is one entry of section 10. There is exactly one push of
 list 1 in the file, and exactly one removal of it, `01 fd 21` at `0x0222DD`.
 
+> **Corrected 2026-09-30, 5ad.** `0x0222DD` is inside an infrared record
+> header; nothing in the config removes a stack entry. And "searched in the
+> reverse order" is right, but a wide list's binding can carry a flag that runs
+> its action and keeps searching, and list 2 flags all 51 of its bindings.
+
 ### Why this is the interesting section
 
 This is the mechanism behind every key on the remote, not a detail about menus.
@@ -1869,6 +1874,10 @@ operand `0x050D`, and one page whose binding list at `0x031CE6` holds four
 entries with opcode `0x7F` and consecutive operands `0x01D5` to `0x01D8`, tagged
 with the four soft keys `0x9E`, `0x9F`, `0xA7`, `0xA6`. That binding list is the
 device list; four keys, four devices.
+
+> **Corrected 2026-09-30, 5ad.** The firmware's lookup says the page keys
+> *are* reachable in `Devices`: the global map passes every key on, and nothing
+> removes list 1. The reason below is not supported, and 5o's cause is open.
 
 So a fifth device on arch 9 is not "add a page". At minimum the page keys have
 to be reachable while that mode is up, the second page needs its own binding
@@ -5062,6 +5071,77 @@ On the file:
 So Danny's offset 8 and his slot 0 are confirmed on a file, and the end marker
 is new. The decompiler does not read arch 7 yet; `roundtrip.py` refuses it by
 its magic.
+
+## 5ad. A key falls through the global map, and 4q's reason for 5o does not hold - MEASURED
+
+4q said the fifth device's page in 5o was never drawn because the page keys
+could not be reached while `Devices` was up. Reading the lookup in the firmware
+does not support that, and the cause of 5o is open again.
+
+### How a key press is resolved
+
+* The stack is built once, by one program, action list 91: list 1, `0xFE`,
+  `0xFD`, `0xFC`, list 2. `0x01B10` searches it from the top, pointer
+  `0x338 + depth - 1`, decremented. Entry `0xFC` searches the list named by
+  `0x341`, `0xFE` the one named by `0x340`, and **`0xFD` calls `0x05C40`, which
+  searches the current page's binding list and then the mode's physical list**,
+  both read from the mode entry.
+* **Nothing in the config removes a stack entry.** 4p's removal of list 1 at
+  `0x0222DD` is three bytes inside an infrared record header that happen to
+  read `01 fd 21`; a scan of the whole blob finds the five pushes of list 91 and
+  nothing else.
+* **A wide binding list has a flag byte per binding, and bit 0 means run the
+  action and keep searching.** `0x07A5A` stages the entry as flags, tag,
+  operand, opcode, runs the action at `0x01AF2`, and at `0x07AC2` to `0x07ACC`
+  reports a match only when bit 0 is clear. Narrow lists have no flag and stop
+  at the first match.
+* **Section 9 list 2 is the global map: wide, 51 bindings, all 51 flagged.** So
+  every key runs its global action first and then falls through. For the page
+  keys that is lists 58 and 59, identical, which set display variables through
+  opcodes `0x1F` `0xE9` to `0xEB` and `0xFB`, test state with the conditional
+  opcodes `0x70`/`0x71`, and switch the display controller with `0x0F`
+  operand `0x60` (`0x03602`). They turn no page.
+* The only page turn is `0x0F` with an operand low byte in `0xA0` to `0xAF`,
+  dispatched at `0x022E4` to `0x05C88`, the only caller. It needs `0x109` bit 2,
+  which `0x04DF0` sets when the configuration validates, steps `0x3DD`, wraps at
+  the page count read from the mode entry, and redraws through `0x05E48`, which
+  finds page k at `3k` into the mode entry's page array (`0x0672C`), sends event
+  `0x29` through `0x05C40` and draws that page's screen program.
+
+`Devices` binds neither page key, nothing above list 1 claims them narrowly,
+and the manual gives the 525 dedicated "screen paging arrows". By this reading
+the arrows should have turned the page in 5o. They did not visibly. **What went
+wrong on 2026-08-22 is unknown again.** One remaining possibility is that the
+page did turn and the `Devices` screen was not redrawn; which one a hardware
+press distinguishes cheaply, since the first soft key enters mode 73 on page 1
+and the new mode 114 on page 2.
+
+### Two things measured on the way
+
+**@dannybloe's arch 12 page key rule is half true on arch 9.** His sections 275
+and 293: a one page mode binds both page keys, 598 of 598, and a multi page mode
+neither, 0 of 58. On the 525 the second half holds, 6 of 6 multi page modes bind
+neither, and the first does not: 13 of 108 one page modes bind both, 4 of them
+to the null instruction.
+
+**Every page's binding list has a copy in a pool, in page table order, 135 of
+135**, and the two pools also hold the eight section 9 lists. A copy may call a
+different action list with identical instructions: `Devices` page 0 calls
+`0x1D5` to `0x1D8`, its copy `0x145` to `0x148`. The 5o build added four pages
+and no copies, so `hconfig.arch9_record_body_regions` refuses that file. The
+firmware's paging path does not read the pool, so this is not shown to be the
+cause; it is what the compiler writes and 5o did not. A candidate with the four
+copies inserted through `relocate_arch9` reads 115 mode lists, 139 copies and 8
+section 9 lists, and refuses both negative mutations of the new copies. It is
+in `codex-work` and has not been written to a remote.
+
+**And a device with no power variable already exists on the 525.** Run through
+@dannybloe's own reader, the X96 Box has an infrared group and a device mode,
+no name tree entry, no state variables, and is not in the all off list, which
+names the other three devices' variables 17, 16 and 19. His section 280 finds
+such devices on other models too. The 5o fifth device has that shape and his
+reader sees it the same way, so the power variable, off list and activity
+machinery of his composer are not needed for a device like it.
 
 ## 6. Prior art
 
