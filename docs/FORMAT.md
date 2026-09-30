@@ -5110,11 +5110,34 @@ does not support that, and the cause of 5o is open again.
 
 `Devices` binds neither page key, nothing above list 1 claims them narrowly,
 and the manual gives the 525 dedicated "screen paging arrows". By this reading
-the arrows should have turned the page in 5o. They did not visibly. **What went
-wrong on 2026-08-22 is unknown again.** One remaining possibility is that the
-page did turn and the `Devices` screen was not redrawn; which one a hardware
-press distinguishes cheaply, since the first soft key enters mode 73 on page 1
-and the new mode 114 on page 2.
+the arrows should have turned the page in 5o. They did not visibly.
+
+### And on the remote, the same day: the reading is incomplete
+
+The 5o file plus the four pool copies below was written to the 525 on
+2026-09-30, read back byte identical, pressed, and the original restored and
+read back byte identical to the backup. Observed by the owner:
+
+* the remote booted to its ordinary screen, and `Devices` showed the four
+  original devices;
+* **the paging arrows did nothing in `Devices`**, and the top left soft key
+  pressed straight afterwards opened `TV Panasonic`, which is page 1's binding.
+  On page 2 that key is not bound at all, so **the page did not turn**; it was
+  not merely left undrawn;
+* **the same arrows page `TV Panasonic` normally**, through its six pages.
+
+So the page keys work, and something specific to `Devices` stops them before
+the page turn. This section's static reading misses it, and so does the pool,
+since the copies were present and nothing changed. The obvious suspect is what
+makes `Devices` different from the modes that page: its physical list's one
+binding, key `0xAF` to opcode `0x72`, which @dannybloe's reader shows is on the
+path to the all off list, and which none of the six paging modes has. Not
+established.
+
+One join between the matrix and the case falls out of it: `Devices` page 1
+binds tag `0xA6` to action list `0x1D8`, which enters mode 78, `TV Panasonic`,
+and the owner's top left soft key opened `TV Panasonic`. **The top left soft
+key is event `0xA6`**, the first physical position this document has named.
 
 ### Two things measured on the way
 
