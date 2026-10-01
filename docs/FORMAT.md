@@ -5138,10 +5138,21 @@ binding, key `0xAF` to opcode `0x72`, which @dannybloe's reader shows is on the
 path to the all off list, and which none of the six paging modes has. Not
 established.
 
+> **Answered 2026-10-01, 5ae.** `Devices` is not one mode. The screen on the
+> remote was almost certainly mode 82, the idle remote's Devices, which has one
+> page; the 5o build and this candidate gave a second page to mode 45, the
+> Devices of one activity. `0xAF` is the Devices / Activities toggle, not a
+> step toward the all off list.
+
 One join between the matrix and the case falls out of it: `Devices` page 1
 binds tag `0xA6` to action list `0x1D8`, which enters mode 78, `TV Panasonic`,
 and the owner's top left soft key opened `TV Panasonic`. **The top left soft
 key is event `0xA6`**, the first physical position this document has named.
+
+> **Withdrawn 2026-10-01, 5ae.** That assumed the screen was mode 45. Modes 82
+> and 90 bind `TV Panasonic` to `0xA7`, and 100 to `0xA6`, and the idle remote
+> shows 82. The top left soft key is most likely `0xA7`; one look at the idle
+> Devices screen settles all four.
 
 ### Two things measured on the way
 
@@ -5169,6 +5180,114 @@ names the other three devices' variables 17, 16 and 19. His section 280 finds
 such devices on other models too. The 5o fifth device has that shape and his
 reader sees it the same way, so the power variable, off list and activity
 machinery of his composer are not needed for a device like it.
+
+## 5ae. There are four Devices screens, one per activity context - MEASURED
+
+5ad left open what stops paging in `Devices`. Nothing does. The 525 does not
+have one Devices screen, it has four reachable ones, and the one on the remote
+was not the one that had been given a second page.
+
+### Five modes have the Devices page
+
+Five modes open on a page whose four soft keys `0x9E`, `0x9F`, `0xA6`, `0xA7`
+each enter one of the four device modes 73, 78, 111 and 113: **45, 82, 90, 100
+and 101**. The order differs. 45 and 100 put `TV Panasonic` (78) on `0xA6`;
+82, 90 and 101 put it on `0xA7`. Nothing in the file enters 101 (no
+`0x7E 0x65` anywhere), so four are reachable.
+
+### Which one `0xAF` opens is a RAM byte the activities set
+
+* No mode outside the device lists binds `0xAF`. **Section 9 lists 4, 5, 6 and
+  7 do, and send it to modes 45, 82, 90 and 100.** The firmware searches the
+  one RAM `0x340` names, as the stack's `0xFE` entry (5ad).
+* `0x340` is written by opcode `0x1F` with operand high byte `0xFF`: the
+  handler at `0x02048` compares `0x3D8` against `0xFF`, copies the low byte to
+  `0x3D0` and calls `0x01BF4`, which stores it at `0x340`. Start up sets `0xFF`
+  in both `0x340` and `0x341` (`0x019C2`).
+* In the config, eight action lists do it. **The activities menu's three soft
+  keys** (mode 47 page 0: `0x9F` → 466, `0xA7` → 467, `0xA6` → 468) set lists
+  7, 4 and 6; their pool twins 329 to 331 do the same. **List 184 sets list 5**
+  and so does 421. Section 8's leading list, the one the remote runs before any
+  page, calls 184 three times.
+* Section 14 records 4 and 8 state the same map from the other side, against
+  state variable 15: **0 → 90, 1 → 45, 2 → 100, 3 → 82**. Record 1, against the
+  same variable, gives each activity's own screen: 0 → 46, 1 → 58, 2 → 79, and
+  3 → `0x72 0x000D`, the activities menu, 47.
+* A device list's own `0xAF` binding, `0x72 0x050D`, is record 5, whose one
+  item is `0x72 0x010F`: variable 15 through record 1. So **`0xAF` is the
+  Devices / Activities toggle**, and from a device list it returns to the
+  running activity or, with none, to the menu.
+
+So with no activity running, as after every write, `Devices` is **mode 82**.
+The 5o build, and the candidate written in 5ad, gave a second page to mode 45,
+which is the Devices of variable 15 = 1. On 82 the page turn ran exactly as 5ad
+reads it: `0x05C88` reads the page count from the current mode's entry
+(`0x3E4`, at `+4`), found 1, and wrapped to page 0.
+
+### Section 11 is one instruction per stream on the 525
+
+Every one of the 525's 22 section 11 streams is a single five byte item,
+`11 <u16 operand> <opcode> 00`, which is what makes the chain above readable
+without a renderer: `0x7E` to a mode, `0x72` onward, `0x7F` to a list, `0x1F`
+to `0x340`, `0x8F` once.
+
+### The 515 has the same shape
+
+A second arch 9 config, the 515 from issue #35, three devices: section 9 lists
+4, 5 and 6 send `0xAF` to modes 44, 76 and 92, section 14 records 5 and 10 map
+variable 15 to the same three, and section 8's leading list runs list 245,
+which sets list 4, so the idle 515 shows mode 44. It also has **one device list
+nothing enters, mode 74**, a copy of the idle one, as the 525's 101 is a copy of
+82. The 555 from #42 has no devices and one list.
+
+### 101 is unreachable
+
+Nothing in the 525 names mode 101: no action operand, no binding, no section 11
+stream. The one way the firmware enters a mode by itself, section 4's event map
+read at `0x05DA0` (a `u24` default, a `u16` count, then `u8` event and `u24`
+mode), names modes 11 to 40 only. Its entry is referenced by section 6 alone.
+The same holds for the 515's 74. What the compiler writes it for is not known.
+
+### Where the four soft keys are, read off the screens
+
+`tools/render_525_screens.py` draws every page. On each Devices page the four
+names sit in the four corners, and the page's binding list says which key
+enters which device, so each name ties a key to a corner. Mode 82 has `TV
+Panasonic` top left and binds it to `0xA7`; mode 45 has it top right and binds
+it to `0xA6`. Taking those two as given, the other six names on the two pages
+fall on `0x9F` bottom left and `0x9E` bottom right with no contradiction, and
+modes 90 and 100 and the activities menu agree:
+
+| corner | key | matrix (5z) |
+|---|---|---|
+| top left | `0xA7` | row 4, column 7 |
+| top right | `0xA6` | row 4, column 6 |
+| bottom left | `0x9F` | row 3, column 7 |
+| bottom right | `0x9E` | row 3, column 6 |
+
+It also names the four device modes: 78 `TV Panasonic` (six pages), 113
+`XBOX 360`, 111 `X96 Box`, 73 `Amplifier Genius` (two pages, which the owner
+counted on the remote on 2026-09-30). And the three activities: `Watch DVD`
+(top left) sets list 4, so its Devices is 45; `Watch TV` (top right) list 6,
+mode 90; `Play on XBOX` (bottom left) list 7, mode 100. Each activity's Devices
+puts that activity's devices first.
+
+The one hardware observation it can be checked against holds: from the idle
+remote the top left key opened `TV Panasonic`, which is 82's `0xA7`. This
+replaces 5ad's `0xA6`, which read 45's order. It rests on the labels being
+drawn beside their keys, which the rendering shows and nothing else in the file
+states.
+
+### What is not settled
+
+* That the idle Devices is 82 rests on the remote being idle when it was
+  pressed. The other three contexts fit as well except 45, `Watch DVD`, which
+  would have paged.
+
+A candidate with the second page in 45, 82, 90 and 100, sharing one page record,
+is in `codex-work` and has not been written to a remote.
+`codex-work/tooling/arch9_device_lists.py` prints every line of this section
+from a config.
 
 ## 6. Prior art
 
