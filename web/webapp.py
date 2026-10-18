@@ -68,7 +68,7 @@ def screen_modes(container: bytes) -> list:
     """The modes worth showing: the Devices screen, each device, the activity menu."""
     raw = bytes(container)
     d = compose525._Doc(raw)
-    modes = [d.devices_modes()[0]]
+    modes = [d.idle_devices_mode()]     # the Devices screen with no activity running
     modes += sorted({x.mode for x in compose525.devices(raw)})
     try:
         modes.append(compose525._menu_mode(d))

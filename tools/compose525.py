@@ -217,6 +217,30 @@ class _Doc:
             raise ComposeError("no Devices screen found")
         return modes
 
+    def idle_devices_mode(self) -> int:
+        """The Devices screen the remote shows with no activity running: the key
+        set section 8's leading list selects at start up (0x1F 0xFFnn, list 184
+        on the sample), and what 0xAF enters there (FORMAT 5ae: mode 82)."""
+        leading = [r for r in self.regions if r["kind"] == "action_list" and r.get("section") == 8]
+        stack = [(int(i["opcode"], 16), i["operand"]) for r in leading for i in r["instructions"]]
+        seen = set()
+        while stack:
+            op, operand = stack.pop(0)
+            if op == 0x1F and operand >> 8 == 0xFF:
+                at = ir.u24(self.blob, self.S[9] + 1 + 3 * (operand & 0xFF)) - BASE
+                for tag, o, v in cmp.tagged(self.blob, at):
+                    if tag == 0xAF:
+                        if o == 0x7E:
+                            return v
+                        if o == 0x7F:
+                            hits = [x for oo, x in self.ins(v) if oo == 0x7E]
+                            if hits:
+                                return hits[0]
+            elif op == 0x7F and operand not in seen:
+                seen.add(operand)
+                stack[0:0] = self.ins(operand)
+        return self.devices_modes()[0]
+
     def pool_copy(self, page_list_offset: int) -> dict:
         """The pool copy of a page list. Copies sit in the pools in the order of
         the page records in the mode table, each record counted once, which is
@@ -689,7 +713,7 @@ def devices(raw: bytes) -> list[Device]:
     """The devices as the remote lists them, read off the Devices screens."""
     d = _Doc(raw)
     names = d.alphabet             # glyph code -> character
-    first = d.devices_modes()[0]
+    first = d.idle_devices_mode()      # what the remote shows with nothing running
     out = []
     for page_index, page in enumerate(d.mode(first)["pages"]):
         drawn = []
@@ -1098,7 +1122,7 @@ def delete_device(raw: bytes, mode: int) -> bytes:
     gone.add(group_region["id"])
 
     # ---- the Devices screens: the entry, the drawn name, maybe the page ----
-    first = devices_modes[0]
+    first = d.idle_devices_mode()
     pages0 = d.mode(first)["pages"]
     page = pages0[device.page]
     shared = all(d.mode(m)["pages"][device.page]["address"] == page["address"] for m in devices_modes) \
