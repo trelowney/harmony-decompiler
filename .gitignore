@@ -24,3 +24,4 @@ graphify-out/
 
 # strings_blob.py writes this next to wherever it is run
 blob_strings.txt
+!web/irdb-index.json
