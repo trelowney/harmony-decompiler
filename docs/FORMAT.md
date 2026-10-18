@@ -5323,7 +5323,9 @@ this, and none of it came from Logitech's compiler or MyHarmony:
   remote. The 525 had volume on CH+/CH-, Menu sending Settings, and Menu and @
   stored under the wrong NEC address.
 
-Each item below is what that took, and the measurement that settled it.
+The config the remote runs at the end of the day is published as
+`samples/harmony525/composed-2026-10-18.EZHex`, beside the original it was built
+from. Each item below is what that took, and the measurement that settled it.
 
 ### A symbol block holds at most 127 words
 

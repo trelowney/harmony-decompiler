@@ -91,3 +91,33 @@ succeeded.
 This restore has now been run: see `docs/FORMAT.md` section 5o. A config was
 written to the 525 this sample came from and the original was put back, and a
 dump taken afterwards is byte-identical to the file in this directory.
+
+## `composed-2026-10-18`: the same remote, configured here
+
+| file | size | what it is |
+|---|---|---|
+| `composed-2026-10-18.EZHex` | 101,581 B | the complete file as written to the remote |
+| `composed-2026-10-18.bin` | 98,428 B | just the blob |
+
+The same 525, after ten configs composed in this repository were written to it
+on 2026-10-18 (FORMAT 5af). This is the last of them, and the one the remote
+runs. Not one byte of it came from Logitech's compiler or MyHarmony beyond what
+`config.EZHex` above already holds. Against that original it has:
+
+* a fifth device, a Samsung T200HD (39 commands), on a second `Devices` page,
+  top left;
+* a sixth device, a PC, top right on that page: 18 NEC commands on address
+  `0xD5`, which no catalogued device uses, read by a script on the owner's PC;
+* the X96 Box re-keyed to the codes its own handset sends, volume on the volume
+  keys, three commands added that the original stored under the wrong address;
+* `1 OF 2` and `2 OF 2` on the `Devices` pages;
+* every Samsung record cut into symbols of at most 16 words, the change that
+  made the television answer.
+
+Concordance wrote it, a dump straight afterwards was byte identical to this
+file, and then every device was tried on the remote. The XML header is the
+original's with only `<BINARYDATASIZE>` changed, so the privacy notes above hold
+for it too.
+
+The same warning applies, more so: it is set up for one owner's equipment, and
+it is a composed config, not one a Logitech service ever produced.
