@@ -1,6 +1,6 @@
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.mjs";
-import { Harmony525 } from "./hid525.js";
-import { RemoteView } from "./remote.js";
+import { Harmony525 } from "./hid525.js?v=e4361e7e64";
+import { RemoteView } from "./remote.js?v=96312a460e";
 
 const MODULES = ["_paths", "flipper_ir", "pic18dis", "hconfig", "analyze_525_ir", "check_525_mode_pages",
   "class5_ir_encoder", "verify_525_semantics", "render_525_screens", "h525_lcd_author",
