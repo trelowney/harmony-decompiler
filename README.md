@@ -64,16 +64,20 @@ python verify_compose525.py                   # add five devices to the sample, 
 `web/` reads a Harmony 525 over USB straight from Chrome or Edge (WebHID), or
 opens a saved `.EZHex`, and shows its devices, activities and rendered screens,
 with a backup to save. It runs the same Python as `tools/` in the browser
-(Pyodide), sends nothing anywhere, and can only send two commands: the version
-query and flash reads. On 2026-10-18 it read the owner's 525 byte identical to
-`concordance --dump-config`. Serve the repository and open `web/`:
+(Pyodide) and sends nothing anywhere but to the remote. It also changes the
+configuration (add or delete a device or an activity) and writes it back the
+way Concordance does, only inside the configuration's own flash and only after
+a box is ticked, with a backup saved first. On 2026-10-18 it read the owner's
+525 byte identical to `concordance --dump-config`, and wrote it back, reset it
+and set its clock, after which Concordance read the same bytes. Serve the
+repository and open `web/`:
 
 ```sh
 python -m http.server 8525      # then http://127.0.0.1:8525/web/
 ```
 
 The USB reading follows [@dannybloe](https://github.com/dannybloe)'s protocol
-work in harmony-explorations (MIT). Writing from the page comes later.
+work in harmony-explorations (MIT); the write follows libconcord step by step.
 
 ## Scope
 

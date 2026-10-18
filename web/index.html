@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Harmony 525 Reader</title>
+<title>Harmony 525</title>
 <style>
   :root { --bg: #f6f5f2; --fg: #1d1d1b; --muted: #6b6a66; --line: #d9d6cf; --accent: #2d5bd7;
           --ok: #1e7a3a; --bad: #b3261e; --lcd: #c9d4b2; --ink: #22281a; }
@@ -24,7 +24,10 @@
   button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
   button:disabled { opacity: .5; cursor: default; }
   input[type=file] { display: none; }
-  #status { margin-top: 12px; color: var(--muted); min-height: 1.5em; }
+  #status { color: var(--muted); min-height: 1.5em; }
+  .bar { position: sticky; top: 0; z-index: 10; background: var(--bg); padding: 10px 0;
+         border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
+  .sep { flex: 1; }
   #status.bad { color: var(--bad); }
   progress { width: 260px; }
   table { border-collapse: collapse; width: 100%; }
@@ -52,23 +55,36 @@
   .keys label { flex-direction: row; align-items: center; justify-content: space-between; }
   .soft { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; width: 100%; }
   #dev-commands td { padding: 2px 4px; }
+  label.check { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; color: var(--fg); }
+  button.danger { background: var(--bad); color: #fff; border-color: var(--bad); }
 </style>
 </head>
 <body>
 <main>
-  <h1>Harmony 525 Reader</h1>
+  <h1>Harmony 525</h1>
   <p class="lead">Reads a Logitech Harmony 525 over USB in this browser, or opens a saved
-    <code>.EZHex</code>, and shows its devices, activities and screens. Nothing is sent anywhere,
-    and this page cannot write to the remote: it only sends the version query and flash reads.</p>
+    <code>.EZHex</code>, shows its devices, activities and screens, changes them, and writes the
+    result back the way Concordance does. Nothing is sent anywhere but to the remote, and nothing
+    is written to it unless you tick the box and press Write.</p>
 
-  <div class="row">
-    <button id="connect" class="primary">Read the remote</button>
-    <label class="button" for="file">Open a .EZHex</label>
-    <input id="file" type="file" accept=".EZHex,.ezhex">
-    <button id="save" disabled>Save backup (.EZHex)</button>
-    <progress id="progress" value="0" max="1" hidden></progress>
+  <div class="bar">
+    <div class="row">
+      <button id="connect" class="primary">Read the remote</button>
+      <label class="button" for="file">Open a .EZHex</label>
+      <input id="file" type="file" accept=".EZHex,.ezhex">
+      <button id="save" disabled>Save .EZHex</button>
+      <span class="sep"></span>
+      <label class="check"><input type="checkbox" id="write-ok"> I keep the backup and want to
+        replace my remote's configuration</label>
+      <button id="write" class="danger" disabled>Write to the remote</button>
+      <button id="finish" class="primary" hidden>Reconnect and finish</button>
+      <button id="restore" hidden>Write the backup back</button>
+    </div>
+    <div class="row">
+      <progress id="progress" value="0" max="1" hidden></progress>
+      <div id="status">Loading the reader…</div>
+    </div>
   </div>
-  <div id="status">Loading the reader…</div>
 
   <section id="result" hidden>
     <h2>Remote</h2>
@@ -127,6 +143,16 @@
         <div id="dev-soft" class="soft"></div>
         <button>Add the device</button>
       </form>
+    </div>
+
+    <h2>Write to the remote</h2>
+    <div class="panel wide" id="write-panel">
+      <p class="hint">Writes the configuration on show to the remote the way Concordance does:
+        it invalidates the old one, erases only the configuration's own flash (never the firmware),
+        writes, reads everything back and compares, restarts the remote and sets its clock. Before it
+        starts, the page saves what it read from the remote as a backup file. Only possible after
+        reading the remote in this page.</p>
+      <p class="hint">The write controls are in the bar at the top, which stays in view.</p>
     </div>
 
     <h2>Screens</h2>

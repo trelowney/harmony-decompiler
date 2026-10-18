@@ -319,6 +319,100 @@ async function main() {
   });
 
   $("dev-add-command").addEventListener("click", () => addCommandRow());
+
+  // ---- writing ----
+  let backupBytes = null;              // what this page read off the remote
+  const download = (bytes, name) => {
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+  const refreshWrite = () => {
+    $("write").disabled = !(identity && $("write-ok").checked && history.length);
+  };
+  $("write-ok").addEventListener("change", refreshWrite);
+  const observer = new MutationObserver(refreshWrite);
+  observer.observe($("changes"), { childList: true, characterData: true, subtree: true });
+
+  async function writeBytes(bytes, label) {
+    let remote;
+    let blob;
+    try {
+      blob = toJs(webapp.blob_of(bytes));
+    } catch (error) {
+      status(`Not written: ${String(error.message ?? error).split("\n").filter(Boolean).pop()}`, true);
+      return false;
+    }
+    $("write").disabled = true;
+    $("progress").hidden = false;
+    try {
+      remote = await Harmony525.connect();
+      await remote.writeConfig(blob, (stage, done, total) => {
+        $("progress").max = total || 1;
+        $("progress").value = done;
+        status(`${label}: ${stage}…`);
+      });
+      remote = null;
+      pending = { bytes, label };
+      $("finish").hidden = false;
+      status(`${label}: written and verified, and the remote is restarting. When its screen is ` +
+        `back, press Reconnect and finish and choose the remote again: the page sets its clock and ` +
+        `reads it back.`);
+      return true;
+    } catch (error) {
+      status(`${label} failed: ${error.message ?? error}. The backup can be written back.`, true);
+      $("restore").hidden = !backupBytes;
+      return false;
+    } finally {
+      $("progress").hidden = true;
+      if (remote) { try { await remote.close(); } catch { /* gone */ } }
+      refreshWrite();
+    }
+  }
+
+  // After the reset: Chrome forgot the remote when it left the bus, so the
+  // user picks it again; then the clock, then a full read back.
+  let pending = null;
+  $("finish").addEventListener("click", async () => {
+    if (!pending) return;
+    let remote;
+    try {
+      remote = await Harmony525.connect();
+      await remote.drain();
+      status(`${pending.label}: setting the clock…`);
+      await remote.setClock();
+      status(`${pending.label}: reading the remote back…`);
+      const back = toJs(webapp.ezhex_from_blob(await remote.readConfig()));
+      const same = back.length === pending.bytes.length && back.every((b, i) => b === pending.bytes[i]);
+      if (!same) throw new Error("the remote does not read back as what was written");
+      history = [{ bytes: back, label: `${pending.label}, read back` }];
+      show();
+      status(`${pending.label}: done. The remote reads back byte for byte and its clock is set. Try it.`);
+      pending = null;
+      $("finish").hidden = true;
+    } catch (error) {
+      status(`Finishing failed: ${error.message ?? error}`, true);
+      $("restore").hidden = !backupBytes;
+    } finally {
+      if (remote) { try { await remote.close(); } catch { /* gone */ } }
+    }
+  });
+
+  $("write").addEventListener("click", async () => {
+    if (!identity) return;
+    backupBytes = history[0].bytes;
+    download(backupBytes, `harmony525-backup-before-write-${new Date().toISOString().slice(0, 19).replace(/:/g, "")}.EZHex`);
+    $("write-ok").checked = false;
+    await writeBytes(current().bytes, "writing");
+  });
+
+  $("restore").addEventListener("click", async () => {
+    if (!backupBytes) return;
+    if (await writeBytes(backupBytes, "writing the backup back")) $("restore").hidden = true;
+  });
 }
 
 main();

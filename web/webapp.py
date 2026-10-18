@@ -30,6 +30,24 @@ def ezhex_from_blob(blob: bytes) -> bytes:
     return xml + sep + blob
 
 
+def blob_of(container: bytes) -> bytes:
+    """The bytes that go to flash: the container without its XML header, after
+    the checks a write needs. Refuses rather than hands back a file that would
+    not load."""
+    raw = bytes(container)
+    xml, _, blob = hconfig.split_container(raw)
+    if blob[:4] != b"AHCM":
+        raise ValueError("not an arch 9 (Harmony 525) configuration")
+    if int.from_bytes(blob[-6:-4], "little") != hconfig.trailer_checksum(blob):
+        raise ValueError("the configuration's own checksum is wrong")
+    if hconfig.compile_config(hconfig.decompile(raw, "write")) != raw:
+        raise ValueError("the configuration does not read back byte for byte")
+    for tag in (b"<PROTOCOL>9</PROTOCOL>", b"<SKIN>22</SKIN>"):
+        if tag not in xml:
+            raise ValueError(f"the file is not for this remote: no {tag.decode()}")
+    return blob
+
+
 def summary(container: bytes) -> dict:
     raw = bytes(container)
     blob = hconfig.split_container(raw)[2]
