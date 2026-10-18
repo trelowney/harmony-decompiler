@@ -182,58 +182,51 @@ async function change(label, run) {
 }
 
 // ---- the add device form ----
-function commandNames() {
-  return [...$("dev-commands").querySelectorAll("tbody tr")]
-    .map((tr) => tr.querySelector(".c-name").value.trim()).filter(Boolean);
-}
+const REPEATING_KEYS = new Set(["Up", "Down", "Left", "Right", "VolumeUp", "VolumeDown",
+  "ChannelUp", "ChannelDown", "Rewind", "FastForward"]);
 
-function refreshCommandChoices() {
-  const names = commandNames();
-  for (const select of document.querySelectorAll(".cmd-choice")) {
-    const keep = select.value;
-    select.replaceChildren(option("", "—"), ...names.map((n) => option(n, n)));
-    select.value = names.includes(keep) ? keep : "";
-  }
-}
-
-function addCommandRow(name = "", code = "", repeat = false) {
+// One row per thing the device answers: a 525 key, or a soft key with its label.
+function learnRow(first, repeat) {
   const tr = document.createElement("tr");
-  tr.innerHTML = `<td><input class="c-name" size="12"></td><td><input class="c-code" size="6" placeholder="0x0A"></td>` +
-    `<td><input type="checkbox" class="c-repeat"></td>` +
+  tr.innerHTML = `<td class="r-what"></td><td><input class="c-code" size="9" placeholder="—"></td>` +
+    `<td><label class="check"><input type="checkbox" class="c-repeat"> repeats</label></td>` +
     `<td><button type="button" class="c-learn">Learn</button> <button type="button" class="c-del">×</button></td>`;
-  tr.querySelector(".c-name").value = name;
-  tr.querySelector(".c-code").value = code;
+  tr.querySelector(".r-what").append(first);
   tr.querySelector(".c-repeat").checked = repeat;
-  tr.querySelector(".c-name").addEventListener("input", refreshCommandChoices);
-  tr.querySelector(".c-del").addEventListener("click", () => { tr.remove(); refreshCommandChoices(); });
   tr.querySelector(".c-code").addEventListener("input", () => { delete tr.dataset.learned; });
+  tr.querySelector(".c-del").addEventListener("click", () => {
+    delete tr.dataset.learned;
+    tr.querySelector(".c-code").value = "";
+  });
   tr.querySelector(".c-learn").addEventListener("click", () => learnInto(tr));
-  $("dev-commands").querySelector("tbody").append(tr);
-  refreshCommandChoices();
+  return tr;
+}
+
+function rowName(tr) {
+  return tr.dataset.key || tr.querySelector(".soft-label")?.value.trim() || "this key";
 }
 
 // The 525 as a receiver: point the device's own remote at the bottom end of
 // the 525, below the keypad, press Learn and then the key, a short tap.
 async function learnInto(tr) {
-  const name = tr.querySelector(".c-name").value.trim() || "this command";
+  const name = rowName(tr);
   let remote;
   try {
     remote = await Harmony525.connect();
-    status(`Learning ${name}: point the original remote at the bottom end of the 525 and tap the key…`);
+    status(`Learning ${name}: point the device's remote at the bottom end of the 525 and tap the key…`);
     const capture = await remote.learnIR();
     if (!capture) throw new Error("nothing was received within five seconds");
     const decoded = toJs(webapp.decode_capture(capture.durations));
     if (decoded.nec) {
       const [a, a2, cmd] = decoded.nec;
-      tr.dataset.learned = JSON.stringify({ address: a, address2: a2 });
-      tr.querySelector(".c-code").value = `0x${cmd.toString(16).padStart(2, "0").toUpperCase()}`;
-      if (!$("dev-address").value.trim()) $("dev-address").value = `0x${a.toString(16).toUpperCase()}`;
+      tr.dataset.learned = JSON.stringify({ address: a, address2: a2, code: cmd });
+      tr.querySelector(".c-code").value = `NEC ${a.toString(16)} ${cmd.toString(16).padStart(2, "0")}`.toUpperCase();
       status(`Learned ${name}: NEC, address 0x${a.toString(16)} ${a2.toString(16)}, command 0x${cmd.toString(16)}.`);
     } else {
       tr.dataset.learned = JSON.stringify({ carrier: capture.carrier, durations: capture.durations });
       tr.querySelector(".c-code").value = "learned";
-      status(`Learned ${name}: not NEC, kept as it was received (${capture.durations.length} ` +
-        `durations at ${capture.carrier} Hz).`);
+      status(`Learned ${name}: kept as it was received (${capture.durations.length} durations ` +
+        `at ${capture.carrier} Hz).`);
     }
   } catch (error) {
     status(`Learning ${name} failed: ${error.message ?? error}`, true);
@@ -243,30 +236,31 @@ async function learnInto(tr) {
 }
 
 function buildDeviceForm() {
-  const keys = $("dev-keys");
-  for (const key of toJs(webapp.key_names())) {
-    const l = document.createElement("label");
-    const s = document.createElement("select");
-    s.className = "cmd-choice";
-    s.dataset.key = key;
-    l.append(key, s);
-    keys.append(l);
-  }
-  const soft = $("dev-soft");
+  const soft = $("dev-soft").querySelector("tbody");
   CORNERS.forEach((corner, i) => {
-    const l = document.createElement("label");
     const label = document.createElement("input");
     label.className = "soft-label";
     label.placeholder = `${corner} label`;
     label.maxLength = 10;
-    const s = document.createElement("select");
-    s.className = "cmd-choice soft-cmd";
-    s.dataset.corner = i;
-    l.append(corner, label, s);
-    soft.append(l);
+    const tr = learnRow(label, false);
+    tr.dataset.corner = i;
+    soft.append(tr);
   });
-  for (const [n, c, r] of [["Up", "", true], ["Down", "", true], ["Left", "", true],
-    ["Right", "", true], ["OK", "", false], ["Exit", "", false]]) addCommandRow(n, c, r);
+  const keys = $("dev-keys").querySelector("tbody");
+  for (const key of toJs(webapp.key_names())) {
+    const tr = learnRow(key, REPEATING_KEYS.has(key));
+    tr.dataset.key = key;
+    keys.append(tr);
+  }
+}
+
+// A row's command: learned, or typed as NEC on the address field.
+function rowCommand(tr, name) {
+  const repeat = tr.querySelector(".c-repeat").checked;
+  if (tr.dataset.learned) return { name, repeat, ...JSON.parse(tr.dataset.learned) };
+  const typed = tr.querySelector(".c-code").value.trim();
+  if (!typed) return null;
+  return { name, repeat, code: parseNumber(typed, `the code for ${name}`) };
 }
 
 function parseNumber(text, what) {
@@ -396,38 +390,43 @@ async function main() {
 
   $("f-add-device").addEventListener("submit", (event) => {
     event.preventDefault();
-    let address, commands;
+    const commands = [], keys = {}, lcd = [null, null, null, null];
+    let typed = false;
     try {
-      const rows = [...$("dev-commands").querySelectorAll("tbody tr")]
-        .filter((tr) => tr.querySelector(".c-name").value.trim());
-      const allLearned = rows.every((tr) => tr.dataset.learned);
-      address = allLearned && !$("dev-address").value.trim() ? 0
-        : parseNumber($("dev-address").value, "the NEC address");
-      commands = rows.map((tr) => {
-        const learned = tr.dataset.learned ? JSON.parse(tr.dataset.learned) : {};
-        const command = { name: tr.querySelector(".c-name").value.trim(),
-                          repeat: tr.querySelector(".c-repeat").checked, ...learned };
-        if (!learned.durations) {
-          command.code = parseNumber(tr.querySelector(".c-code").value, `the code of ${command.name}`);
-        }
-        return command;
-      });
+      for (const tr of $("dev-keys").querySelectorAll("tbody tr")) {
+        const c = rowCommand(tr, `key:${tr.dataset.key}`);
+        if (!c) continue;
+        typed ||= !tr.dataset.learned;
+        commands.push(c);
+        keys[tr.dataset.key] = c.name;
+      }
+      for (const tr of $("dev-soft").querySelectorAll("tbody tr")) {
+        const label = tr.querySelector(".soft-label").value.trim();
+        const c = rowCommand(tr, `soft:${tr.dataset.corner}`);
+        if (!c && !label) continue;
+        if (!c || !label) throw new Error(`soft key ${CORNERS[tr.dataset.corner]} needs both a label and a command`);
+        typed ||= !tr.dataset.learned;
+        commands.push(c);
+        lcd[Number(tr.dataset.corner)] = [label, c.name];
+      }
+      if (!commands.length) throw new Error("learn or type at least one command");
+      if (!lcd.some(Boolean)) throw new Error("give the device at least one soft key");
     } catch (error) {
       status(error.message, true);
       return;
     }
-    const keys = {};
-    for (const s of $("dev-keys").querySelectorAll("select")) if (s.value) keys[s.dataset.key] = s.value;
-    const lcd = [...$("dev-soft").querySelectorAll("label")].map((l) => {
-      const label = l.querySelector(".soft-label").value.trim();
-      const cmd = l.querySelector(".soft-cmd").value;
-      return label && cmd ? [label, cmd] : null;
-    });
+    let address = 0;
+    if (typed) {
+      try {
+        address = parseNumber($("dev-address").value, "the NEC address for typed codes");
+      } catch (error) {
+        status(error.message, true);
+        return;
+      }
+    }
     const name = $("dev-name").value.trim();
     change(`add ${name}`, (bytes) => webapp.op_add_device(bytes, name, address, commands, keys, lcd));
   });
-
-  $("dev-add-command").addEventListener("click", () => addCommandRow());
 
   // ---- writing ----
   let backupBytes = null;              // what this page read off the remote

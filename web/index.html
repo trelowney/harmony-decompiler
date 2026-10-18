@@ -57,7 +57,9 @@
   .keys { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; width: 100%; }
   .keys label { flex-direction: row; align-items: center; justify-content: space-between; }
   .soft { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; width: 100%; }
-  #dev-commands td { padding: 2px 4px; }
+  .learn-table { width: auto; }
+  .learn-table td { padding: 2px 6px; border-bottom: 1px solid var(--line); }
+  .learn-table .r-what { min-width: 110px; }
   label.check { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; color: var(--fg); }
   button.danger { background: var(--bad); color: #fff; border-color: var(--bad); }
 </style>
@@ -175,22 +177,18 @@
 
       <form id="f-add-device" class="panel wide">
         <h3>Add a device</h3>
-        <p class="hint">Learn each command from the device's own remote: press Learn, point that
-          remote at the bottom end of the 525 (below the keypad, a hand's width away) and tap the key.
-          NEC codes are recognised; anything else is kept as it was received. Or type NEC codes.</p>
+        <p class="hint">For each 525 key the device should answer, press Learn, point the device's
+          own remote at the bottom end of the 525 (below the keypad, a hand's width away) and tap that
+          key on it. Any infrared works: NEC is recognised and shown, anything else is kept as it was
+          received. Or type an NEC command, with the NEC address below. Keys left empty do nothing.</p>
         <div class="row">
           <label>Name <input id="dev-name" required maxlength="20"></label>
-          <label>NEC address <input id="dev-address" placeholder="learned" size="8"></label>
+          <label>NEC address, for typed codes <input id="dev-address" placeholder="0xD5" size="8"></label>
         </div>
-        <table id="dev-commands">
-          <thead><tr><th>command</th><th>code</th><th>repeats when held</th><th></th></tr></thead>
-          <tbody></tbody>
-        </table>
-        <button type="button" id="dev-add-command">Add a command</button>
-        <h4>Which 525 key sends it</h4>
-        <div id="dev-keys" class="keys"></div>
-        <h4>Soft keys beside the screen</h4>
-        <div id="dev-soft" class="soft"></div>
+        <h4>Soft keys beside the screen (label, then its command)</h4>
+        <table id="dev-soft" class="learn-table"><tbody></tbody></table>
+        <h4>525 keys</h4>
+        <table id="dev-keys" class="learn-table"><tbody></tbody></table>
         <button>Add the device</button>
       </form>
     </div>
