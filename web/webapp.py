@@ -6,6 +6,7 @@ It reads a configuration with the same modules the command line uses
 import hashlib
 
 import compose525
+import flipper_ir
 import hconfig
 import render_525_screens as renderer
 import verify_525_semantics as sem
@@ -185,7 +186,9 @@ def op_add_device(container: bytes, name: str, address: int, commands, keys, lcd
     commands, keys, lcd = _py(commands), _py(keys), _py(lcd)
     cmds = []
     for c in commands:
-        if c.get("durations"):
+        if c.get("flipper"):
+            cmds.append(flipper_ir.command(str(c["name"]), dict(c["flipper"]), bool(c.get("repeat"))))
+        elif c.get("durations"):
             cmds.append(_raw_command(str(c["name"]), int(c.get("carrier") or 0), c["durations"],
                                      bool(c.get("repeat"))))
         else:
@@ -217,3 +220,106 @@ def screen_modes(container: bytes) -> list:
     except compose525.ComposeError:
         pass
     return modes
+
+
+def remote_model(container: bytes) -> dict:
+    """Everything the page's drawn remote needs to act like the real one: which
+    screen each soft key leads to or what it sends, what each 525 key sends in
+    each device and activity, and the Devices and activity menu screens.
+    Commands are named as the remote names them (compose525.device_commands)."""
+    raw = bytes(container)
+    d = compose525._Doc(raw)
+    cmp = compose525.cmp
+    labels = compose525.device_commands(raw)
+    devs = compose525.devices(raw)
+    by_group = {x.group: x.name for x in devs}
+    key_name = {v: k for k, v in compose525.KEYS.items()}
+
+    def send_text(operand):
+        g, c = operand >> 8, operand & 0xFF
+        dev, label = labels.get((g, c), (by_group.get(g, f"group {g}"), f"command {c}"))
+        return {"device": dev, "label": label}
+
+    def sends(op, v, depth=0, seen=None):
+        seen = set() if seen is None else seen
+        if op == 0x7D:
+            return [send_text(v)]
+        if op != 0x7F or depth > 5 or v in seen:
+            return []
+        seen.add(v)
+        out = []
+        for o, x in d.ins(v):
+            out += sends(o, x, depth + 1, seen)
+        return out
+
+    def keys_of(lists):
+        out = {}
+        for at in lists:
+            for tag, op, v in cmp.tagged(d.blob, at):
+                if tag in key_name and key_name[tag] not in out:
+                    s = sends(op, v)
+                    if s:
+                        out[key_name[tag]] = s
+        return out
+
+    def soft_of(mode):
+        pages = []
+        for p in d.mode(mode)["pages"]:
+            row = [None] * 4
+            for tag, op, v in cmp.tagged(d.blob, p["list"]):
+                if tag in compose525.SOFT:
+                    s = sends(op, v)
+                    if s:
+                        row[compose525.SOFT.index(tag)] = s
+            pages.append(row)
+        return pages
+
+    def pages_of(mode):
+        return len(d.mode(mode)["pages"])
+
+    modes = {}
+    for x in devs:
+        f = d.mode(x.mode)
+        modes[x.mode] = {"pages": pages_of(x.mode), "soft": soft_of(x.mode), "keys": keys_of([f["start"]])}
+    acts = []
+    try:
+        menu = compose525._menu_mode(d)
+        for a in compose525.activities(raw):
+            at = compose525.ir.u24(d.blob, d.S[9] + 1 + 3 * a.key_set) - compose525.BASE
+            m = a.work_mode
+            if m not in modes:
+                modes[m] = {"pages": pages_of(m), "soft": soft_of(m),
+                            "keys": keys_of([at, d.mode(m)["start"]])}
+            does = [_step_text(s) for s in compose525.describe_activity(raw, a.name)]
+            acts.append({"name": a.name, "page": a.page, "corner": a.corner, "mode": m, "does": does})
+        menu_pages = pages_of(menu)
+    except compose525.ComposeError:
+        menu, menu_pages = None, 0
+    idle = d.idle_devices_mode()
+    return {
+        "devices_mode": idle, "devices_pages": pages_of(idle),
+        "menu_mode": menu, "menu_pages": menu_pages,
+        "devices": [{"name": x.name, "mode": x.mode, "page": x.page, "corner": x.corner} for x in devs],
+        "activities": acts,
+        "modes": {str(k): v for k, v in modes.items()},
+    }
+
+
+def flipper_device(text: str) -> dict:
+    """A Flipper-IRDB file read for the add device form: every signal it can
+    send, which 525 key each is proposed for, the rest offered as soft keys,
+    and the ones that cannot be sent with why."""
+    signals = flipper_ir.parse(str(text))
+    ok, skipped = [], []
+    for s in signals:
+        try:
+            flipper_ir.durations(s)
+            ok.append(s)
+        except (flipper_ir.FlipperError, KeyError, ValueError) as e:
+            skipped.append(f"{s.get('name')}: {e}")
+    plan = flipper_ir.propose(ok)
+    item = lambda i: {"name": ok[i]["name"], "label": flipper_ir.label(ok[i]["name"]),
+                      "code": flipper_ir.describe(ok[i]), "signal": ok[i]}
+    return {"keys": {k: item(i) for k, i in plan["keys"].items()},
+            "soft": [item(i) for i in plan["soft"]], "skipped": skipped,
+            "repeating": sorted(flipper_ir.REPEATING)}

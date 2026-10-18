@@ -1,0 +1,275 @@
+"""Flipper-IRDB files as 525 commands.
+
+Flipper-IRDB (github.com/Lucaslhm/Flipper-IRDB, CC0) holds some nine thousand
+remotes as `.ir` files: each button a name and either a parsed signal
+(protocol, address, command) or raw durations. This module reads such a file,
+turns each signal into the durations an infrared LED has to send, and proposes
+which 525 key each button goes on.
+
+The timings and bit layouts are the ones Flipper Zero's own firmware encodes
+(flipperdevices/flipperzero-firmware, lib/infrared/encoder_decoder), since that
+is what the files' numbers mean: NECext's address is 16 bits sent low byte
+first, Kaseikyo's address packs vendor, genres and id, and so on. Two of them
+are checked against signals the 525 is known to send: Kaseikyo against the
+Panasonic TV of the public sample and Samsung32 against the Samsung T200HD
+(tools/verify_flipper_ir.py).
+"""
+from __future__ import annotations
+
+import re
+
+import _paths  # noqa: F401
+from compose525 import Command, _spaces
+
+# protocol -> (carrier Hz, frame period us, frames in one press)
+PROTOCOLS = {
+    "NEC": (38_000, 110_000, 1), "NECext": (38_000, 110_000, 1),
+    "NEC42": (38_000, 110_000, 1), "NEC42ext": (38_000, 110_000, 1),
+    "Samsung32": (38_000, 108_000, 1), "Kaseikyo": (38_000, 130_000, 1),
+    "RC5": (36_000, 113_778, 1), "RC5X": (36_000, 113_778, 1),
+    "RC6": (36_000, 106_667, 1),
+    "SIRC": (40_000, 45_000, 3), "SIRC15": (40_000, 45_000, 3), "SIRC20": (40_000, 45_000, 3),
+}
+
+
+class FlipperError(ValueError):
+    """A signal this module cannot turn into durations."""
+
+
+# ------------------------------------------------------------------ parsing ---
+
+def parse(text: str) -> list[dict]:
+    """The signals of a Flipper `.ir` file, in file order: {name, type,
+    protocol, address, command} or {name, type: raw, frequency, data}."""
+    out, cur = [], {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            if line.startswith("#") and cur.get("name"):
+                out.append(cur)
+                cur = {}
+            continue
+        key, _, value = line.partition(":")
+        key, value = key.strip().lower(), value.strip()
+        if key == "name" and cur.get("name"):
+            out.append(cur)
+            cur = {}
+        if key in ("address", "command"):
+            cur[key] = int.from_bytes(bytes(int(b, 16) for b in value.split()), "little")
+        elif key == "data":
+            cur[key] = [int(v) for v in value.split()]
+        elif key == "frequency":
+            cur[key] = int(value)
+        elif key in ("name", "type", "protocol"):
+            cur[key] = value
+    if cur.get("name"):
+        out.append(cur)
+    return [s for s in out if s.get("type") in ("parsed", "raw")]
+
+
+# ------------------------------------------------------------------ framing ---
+
+def _pulse_distance(header, bits, mark, zero, one, stop=True):
+    d = list(header)
+    for b in bits:
+        d += [mark, one if b else zero]
+    if stop:
+        d.append(mark)
+    return d
+
+
+def _lsb(value, n):
+    return [value >> i & 1 for i in range(n)]
+
+
+def _msb(value, n):
+    return [value >> (n - 1 - i) & 1 for i in range(n)]
+
+
+def _bytes_lsb(data):
+    return [b for byte in data for b in _lsb(byte, 8)]
+
+
+def _halves_to_durations(halves):
+    """(level, us) halves -> durations, mark first, merged, ending on a mark."""
+    merged = []
+    for level, us in halves:
+        if merged and merged[-1][0] == level:
+            merged[-1][1] += us
+        else:
+            merged.append([level, us])
+    while merged and not merged[0][0]:
+        merged.pop(0)
+    while merged and not merged[-1][0]:
+        merged.pop()
+    return [us for _, us in merged]
+
+
+def frame(protocol: str, address: int, command: int) -> list[int]:
+    """One frame of a parsed signal, durations in us, mark first, ending on a
+    mark; the gap after it is the caller's."""
+    p = protocol
+    if p == "NEC":
+        a, c = address & 0xFF, command & 0xFF
+        return _pulse_distance((9000, 4500), _bytes_lsb((a, ~a & 0xFF, c, ~c & 0xFF)), 560, 560, 1690)
+    if p == "NECext":
+        data = (address & 0xFF, address >> 8 & 0xFF, command & 0xFF, command >> 8 & 0xFF)
+        return _pulse_distance((9000, 4500), _bytes_lsb(data), 560, 560, 1690)
+    if p in ("NEC42", "NEC42ext"):
+        if p == "NEC42":
+            bits = _lsb(address & 0x1FFF, 13) + _lsb(~address & 0x1FFF, 13) + \
+                _lsb(command & 0xFF, 8) + _lsb(~command & 0xFF, 8)
+        else:
+            bits = _lsb(address & 0x3FFFFFF, 26) + _lsb(command & 0xFFFF, 16)
+        return _pulse_distance((9000, 4500), bits, 560, 560, 1690)
+    if p == "Samsung32":
+        a, c = address & 0xFF, command & 0xFF
+        return _pulse_distance((4500, 4500), _bytes_lsb((a, a, c, ~c & 0xFF)), 550, 550, 1650)
+    if p == "Kaseikyo":
+        ident, vendor = address >> 24 & 3, address >> 8 & 0xFFFF
+        genre1, genre2 = address >> 4 & 0xF, address & 0xF
+        d = [vendor & 0xFF, vendor >> 8, 0, 0, 0, 0]
+        parity = d[0] ^ d[1]
+        parity = (parity & 0xF) ^ (parity >> 4)
+        d[2] = (parity & 0xF) | genre1 << 4
+        d[3] = (genre2 & 0xF) | (command & 0xF) << 4
+        d[4] = (ident << 6 | command >> 4) & 0xFF
+        d[5] = d[2] ^ d[3] ^ d[4]
+        return _pulse_distance((3456, 1728), _bytes_lsb(d), 432, 432, 1296)
+    if p in ("SIRC", "SIRC15", "SIRC20"):
+        n = {"SIRC": 5, "SIRC15": 8, "SIRC20": 13}[p]
+        bits = _lsb(command & 0x7F, 7) + _lsb(address & ((1 << n) - 1), n)
+        d = [2400, 600]
+        for b in bits:
+            d += [1200 if b else 600, 600]
+        return d[:-1]
+    if p in ("RC5", "RC5X"):
+        # bi-phase, 888 us halves, a 1 is space then mark; start bits, toggle 0
+        bits = [1, 1 if p == "RC5" else 0, 0] + _msb(address & 0x1F, 5) + _msb(command & 0x3F, 6)
+        halves = []
+        for b in bits:
+            halves += [(0, 888), (1, 888)] if b else [(1, 888), (0, 888)]
+        return _halves_to_durations(halves)
+    if p == "RC6":
+        # leader, then bi-phase 444 us halves, a 1 is mark then space; mode 0,
+        # the toggle bit twice as long
+        halves = [(1, 2666), (0, 889)]
+        bits = [(1, 444), (0, 444), (0, 444), (0, 444), (0, 889)] + \
+            [(b, 444) for b in _msb(address & 0xFF, 8) + _msb(command & 0xFF, 8)]
+        for b, t in bits:
+            halves += [(1, t), (0, t)] if b else [(0, t), (1, t)]
+        return _halves_to_durations(halves)
+    raise FlipperError(f"protocol {p} is not supported yet")
+
+
+def durations(signal: dict) -> tuple[int, list[int], int, int]:
+    """(carrier Hz, one frame, gap after it us, frames per press)."""
+    if signal.get("type") == "raw":
+        data = [max(1, int(v)) for v in signal["data"]]
+        if len(data) % 2 == 0:
+            gap = data.pop()
+        else:
+            gap = 40_000
+        return int(signal.get("frequency") or 38_000), data, max(gap, 20_000), 1
+    p = signal.get("protocol", "")
+    if p not in PROTOCOLS:
+        raise FlipperError(f"protocol {p} is not supported yet")
+    carrier, period, count = PROTOCOLS[p]
+    f = frame(p, int(signal["address"]), int(signal["command"]))
+    return carrier, f, max(period - sum(f), 4_000), count
+
+
+def _words(frame_us: list[int], gap_us: int) -> tuple:
+    words = []
+    for i, us in enumerate(frame_us):
+        if i % 2 == 0:
+            words.append(0x8000 | min(us, 0x7FFF))
+        else:
+            words.extend(_spaces(us))
+    return tuple(words) + _spaces(gap_us)
+
+
+def command(name: str, signal: dict, repeat: bool = False, repeat_delay_ms: int = 450) -> Command:
+    """A 525 command for a Flipper signal, laid out like compose525.nec_command:
+    one-shot after Logitech's 500 ms lead; repeating after a 50 ms lead with a
+    pause before the held block, so a normal press sends once."""
+    carrier, f, gap, count = durations(signal)
+    one = _words(f, gap)
+    if repeat:
+        first = _spaces(50_000) + one * (count - 1) + _words(f, repeat_delay_ms * 1000) + (1,)
+        return Command(name, (first, one + (1,), None), period_ns=round(1e9 / carrier))
+    first = _spaces(500_000) + one * count + (1,)
+    return Command(name, (first, None, None), period_ns=round(1e9 / carrier))
+
+
+def describe(signal: dict) -> str:
+    """Short text for the page: "NECext 7201 1E" or "raw, 38 kHz"."""
+    if signal.get("type") == "raw":
+        return f"raw, {round((signal.get('frequency') or 38000) / 1000)} kHz"
+    return f"{signal.get('protocol')} {signal.get('address', 0):X} {signal.get('command', 0):X}"
+
+
+# ------------------------------------------------------------------ mapping ---
+
+def _norm(name: str) -> str:
+    n = name.lower().replace("+", "up").replace("-", "down")
+    n = re.sub(r"[^a-z0-9#*]", "", n)
+    return n.replace("dn", "down")
+
+
+# 525 key -> names a Flipper file uses for it, best first
+SYNONYMS = {
+    "Up": ["up", "uparrow", "arrowup", "cursorup", "navup"],
+    "Down": ["down", "downarrow", "arrowdown", "cursordown", "navdown"],
+    "Left": ["left", "leftarrow", "arrowleft", "cursorleft", "navleft"],
+    "Right": ["right", "rightarrow", "arrowright", "cursorright", "navright"],
+    "OK": ["ok", "select", "okenter", "center", "enter"],
+    "Exit": ["exit", "back", "return"],
+    "Menu": ["menu", "mainmenu", "setup", "home"],
+    "Guide": ["guide", "epg", "topmenu"],
+    "Info": ["info", "display", "osd"],
+    "VolumeUp": ["volup", "volumeup"],
+    "VolumeDown": ["voldown", "volumedown"],
+    "Mute": ["mute"],
+    "ChannelUp": ["chup", "channelup", "chnext", "progup", "pup", "pageup"],
+    "ChannelDown": ["chdown", "channeldown", "chprev", "progdown", "pdown", "pagedown"],
+    "Prev": ["recall", "last", "prech", "lastch", "previouschannel"],
+    "Play": ["play", "playpause"],
+    "Pause": ["pause", "playpause"],
+    "Stop": ["stop"],
+    "Record": ["rec", "record"],
+    "Rewind": ["rew", "rewind", "rwd", "fastback", "fr"],
+    "FastForward": ["ff", "ffwd", "fastforward", "fwd"],
+    "SkipBack": ["prev", "previous", "skipback", "skipprev"],
+    "SkipForward": ["next", "skipnext", "skipfwd", "skipforward"],
+    "Red": ["red"], "Green": ["green"], "Yellow": ["yellow"], "Blue": ["blue"],
+    "Star": ["star", "*", "asterisk"], "Hash": ["#", "hash", "pound"],
+    **{str(n): [str(n), f"num{n}", f"digit{n}", f"key{n}"] for n in range(10)},
+}
+REPEATING = {"Up", "Down", "Left", "Right", "VolumeUp", "VolumeDown", "ChannelUp",
+             "ChannelDown", "Rewind", "FastForward"}
+
+
+def propose(signals: list[dict]) -> dict:
+    """Which button goes where: {keys: {525 key: index}, soft: [index, ...]},
+    indexes into `signals`. Every button not on a key is offered for the soft
+    keys, power first and Flipper's "unknown" ones last; one signal per name."""
+    by_norm: dict[str, int] = {}
+    for i, s in enumerate(signals):
+        by_norm.setdefault(_norm(s["name"]), i)
+    keys, used = {}, set()
+    for key, names in SYNONYMS.items():
+        for n in names:
+            if n in by_norm:
+                keys[key] = by_norm[n]
+                used.add(by_norm[n])
+                break
+    rest = [i for n, i in by_norm.items() if i not in used]
+    rest.sort(key=lambda i: (0 if "power" in _norm(signals[i]["name"]) else
+                             2 if _norm(signals[i]["name"]).startswith("unknown") else 1, i))
+    return {"keys": keys, "soft": rest}
+
+
+def label(name: str) -> str:
+    """A soft key label from a Flipper button name: "Vol_up" -> "Vol up"."""
+    return re.sub(r"\s+", " ", name.replace("_", " ")).strip()[:12]

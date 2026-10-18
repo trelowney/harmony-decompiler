@@ -61,6 +61,11 @@
   .learn-table td { padding: 2px 6px; border-bottom: 1px solid var(--line); }
   .learn-table .r-what { min-width: 110px; }
   label.check { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; color: var(--fg); }
+  .db { width: 100%; }
+  .db-results { list-style: none; padding: 0; margin: 4px 0; max-height: 240px; overflow-y: auto; width: 100%; }
+  .db-results li button { width: 100%; text-align: left; border: none; border-bottom: 1px solid var(--line);
+                          border-radius: 0; padding: 4px 8px; font-size: 13px; }
+  .db-results li button:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
   button.danger { background: var(--bad); color: #fff; border-color: var(--bad); }
 </style>
 </head>
@@ -181,6 +186,12 @@
           own remote at the bottom end of the 525 (below the keypad, a hand's width away) and tap that
           key on it. Any infrared works: NEC is recognised and shown, anything else is kept as it was
           received. Or type an NEC command, with the NEC address below. Keys left empty do nothing.</p>
+        <div class="db">
+          <label>Or find it in the Flipper-IRDB database (some 8,900 remotes, CC0)
+            <input id="db-search" placeholder="brand and type, e.g. philips tv" size="34" autocomplete="off"></label>
+          <ul id="db-results" class="db-results"></ul>
+          <p id="db-note" class="hint"></p>
+        </div>
         <div class="row">
           <label>Name <input id="dev-name" required maxlength="20"></label>
           <label>NEC address, for typed codes <input id="dev-address" placeholder="0xD5" size="8"></label>

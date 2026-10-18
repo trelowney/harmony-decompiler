@@ -1,7 +1,7 @@
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.mjs";
 import { Harmony525 } from "./hid525.js";
 
-const MODULES = ["_paths", "pic18dis", "hconfig", "analyze_525_ir", "check_525_mode_pages",
+const MODULES = ["_paths", "flipper_ir", "pic18dis", "hconfig", "analyze_525_ir", "check_525_mode_pages",
   "class5_ir_encoder", "verify_525_semantics", "render_525_screens", "h525_lcd_author",
   "clone_525_device", "compose525"];
 const CORNERS = ["top left", "top right", "bottom left", "bottom right"];
@@ -276,7 +276,100 @@ function removeSoftPage(page) {
   $("dev-soft-page").disabled = soft.querySelectorAll("tr.soft-head").length >= 6;
 }
 
+// ---- Flipper-IRDB ----
+let irdb = null;
+
+async function irdbIndex() {
+  if (!irdb) irdb = await (await fetch("irdb-index.json")).json();
+  return irdb;
+}
+
+async function searchDatabase() {
+  const terms = $("db-search").value.toLowerCase().split(/\s+/).filter(Boolean);
+  const list = $("db-results");
+  if (!terms.length) { list.replaceChildren(); return; }
+  const index = await irdbIndex();
+  const hits = index.files.filter((f) => {
+    const p = f.toLowerCase().replaceAll("_", " ");
+    return terms.every((t) => p.includes(t));
+  });
+  list.replaceChildren(...hits.slice(0, 60).map((path) => {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = path.replace(/\.ir$/, "").replaceAll("/", " / ").replaceAll("_", " ");
+    b.addEventListener("click", () => useDatabaseFile(path));
+    li.append(b);
+    return li;
+  }));
+  $("db-note").textContent = hits.length > 60 ? `${hits.length} found, the first 60 shown; add a word.`
+    : hits.length ? "" : "Nothing found. Try the brand alone.";
+}
+
+function clearDeviceRows() {
+  while ($("dev-soft").querySelectorAll("tr.soft-head").length > 1) {
+    removeSoftPage($("dev-soft").querySelectorAll("tr.soft-head").length - 1);
+  }
+  for (const tr of document.querySelectorAll("#dev-keys tbody tr, #dev-soft tbody tr:not(.soft-head)")) {
+    delete tr.dataset.learned;
+    tr.querySelector(".c-code").value = "";
+    tr.querySelector(".c-code").title = "";
+    const label = tr.querySelector(".soft-label");
+    if (label) label.value = "";
+  }
+}
+
+function putSignal(tr, item) {
+  tr.dataset.learned = JSON.stringify({ flipper: item.signal });
+  const code = tr.querySelector(".c-code");
+  code.value = item.code;
+  code.title = `${item.name}: ${item.code}`;
+}
+
+async function useDatabaseFile(path) {
+  const index = await irdbIndex();
+  const url = `https://raw.githubusercontent.com/${index.repo}/${index.commit}/` +
+    path.split("/").map(encodeURIComponent).join("/");
+  status(`Fetching ${path}…`);
+  let plan;
+  try {
+    const text = await (await fetch(url)).text();
+    plan = toJs(webapp.flipper_device(text));
+  } catch (error) {
+    status(`${path} could not be read: ${error.message ?? error}`, true);
+    return;
+  }
+  clearDeviceRows();
+  for (const tr of $("dev-keys").querySelectorAll("tbody tr")) {
+    const item = plan.keys[tr.dataset.key];
+    if (item) putSignal(tr, item);
+  }
+  const soft = plan.soft.slice(0, 24);
+  soft.forEach((item, i) => {
+    const page = Math.floor(i / 4), corner = i % 4;
+    while ($("dev-soft").querySelectorAll("tr.soft-head").length <= page) addSoftPage();
+    const tr = $("dev-soft").querySelector(`tr[data-page="${page}"][data-corner="${corner}"]`);
+    tr.querySelector(".soft-label").value = item.label.slice(0, 10);
+    putSignal(tr, item);
+  });
+  const parts = path.split("/");
+  if (!$("dev-name").value.trim()) $("dev-name").value = `${parts[1]} ${parts[0].replace(/s$/, "")}`.slice(0, 20);
+  const keys = Object.keys(plan.keys).length;
+  const left = plan.soft.length - soft.length;
+  $("db-note").textContent = `${path}: ${keys} buttons on 525 keys, ${soft.length} on soft keys` +
+    (left ? `, ${left} more did not fit (24 soft keys at most)` : "") +
+    (plan.skipped.length ? `; ${plan.skipped.length} cannot be sent: ${plan.skipped.join("; ")}` : "") +
+    ". Change anything below before adding. Database codes are only known to work on your device " +
+    "once written and tried; if some do not, try another file of the same brand.";
+  status(`Loaded ${path}. Check the keys below, then Add the device.`);
+}
+
 function buildDeviceForm() {
+  let timer;
+  $("db-search").addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => searchDatabase().catch((e) => status(`Search failed: ${e.message ?? e}`, true)), 200);
+  });
   addSoftPage();
   $("dev-soft-page").addEventListener("click", addSoftPage);
   const keys = $("dev-keys").querySelector("tbody");
