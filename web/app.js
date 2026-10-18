@@ -322,7 +322,8 @@ function clearDeviceRows() {
 function putSignal(tr, item) {
   tr.dataset.learned = JSON.stringify({ flipper: item.signal });
   const code = tr.querySelector(".c-code");
-  code.value = item.code;
+  // the button as the database names it; address and command on hover
+  code.value = `${item.name} (${item.code.split(/[ ,]/)[0]})`;
   code.title = `${item.name}: ${item.code}`;
 }
 
