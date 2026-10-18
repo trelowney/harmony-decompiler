@@ -97,6 +97,28 @@ def main() -> int:
             return 1
     print("PASS five devices composed onto the public sample, pages and counters as expected")
 
+    # delete from the middle, so groups, modes and action lists renumber
+    names = {x.name: x for x in c.devices(raw)}
+    raw = c.delete_device(raw, names["Box B"].mode)
+    left = sorted((x.name, x.page, x.corner) for x in c.devices(raw))
+    want = sorted((n, x.page, x.corner) for n, x in names.items() if n != "Box B")
+    if left != want:
+        print(f"FAIL after deleting Box B: {left}")
+        return 1
+    print("PASS Box B deleted from the middle: everything after it renumbered, its corner empty")
+    # the last page's only device: the page goes and the counters say OF 2
+    raw = c.delete_device(raw, {x.name: x for x in c.devices(raw)}["Box E"].mode)
+    blob = hconfig.split_container(raw)[2]
+    S = sem.section_offsets(blob)
+    for m in c._Doc(raw).devices_modes():
+        texts = [counter_text(blob, p["program"]) for p in mode_fields(blob, S, m)["pages"]]
+        if texts != ["1 OF 2", "2 OF 2"]:
+            print(f"FAIL Devices mode {m} counters {texts} after deleting Box E")
+            return 1
+    if args.out:
+        (args.out / "deleted-b-and-e.EZHex").write_bytes(raw)
+    print("PASS Box E deleted with its page, every Devices screen reads OF 2")
+
     sample = Path(Path(__file__).resolve().parents[1] / "samples" / "harmony525" / "config.EZHex").read_bytes()
     rekeyed = rekey_x96(sample)
     x96 = [d for d in c.devices(rekeyed) if d.name == "X96 Box"][0]

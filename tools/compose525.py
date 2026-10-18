@@ -866,3 +866,324 @@ def rekey_device(raw: bytes, mode: int, commands: dict, keys: dict,
         raise AssertionError(f"screens changed that should not have: {changed}")
     _check_container(out)
     return out
+
+
+# ------------------------------------------------------------- references ---
+# An action list, a mode and an infrared group are named by index. These are
+# every place a 525 config names one (FORMAT 5af): action lists, the section 8
+# leading list among them; tagged lists; section 11 streams; section 13
+# transitions. 0x7F names an action list, 0x7E a mode, and the high byte of
+# 0x7D and 0x7C an infrared group.
+
+def _remap(op: int, operand: int, actions: dict, modes: dict, groups: dict):
+    """The operand after renumbering, or None when it names something deleted."""
+    if op == 0x7F:
+        return actions.get(operand, operand) if operand not in actions or actions[operand] is not None else None
+    if op == 0x7E:
+        return modes.get(operand, operand) if operand not in modes or modes[operand] is not None else None
+    if op in (0x7C, 0x7D):
+        g = operand >> 8
+        if g in groups and groups[g] is None:
+            return None
+        return (groups.get(g, g) << 8) | (operand & 0xFF)
+    return operand
+
+
+def _transition_sites(blob: bytes, S) -> list[tuple[int, int, int]]:
+    """(blob offset of the operand, opcode, operand) of every section 13 transition."""
+    s13 = S[13]
+    out = []
+    for v in range(ir.u16(blob, s13)):
+        record = ir.u24(blob, s13 + 8 + 3 * v) - BASE
+        for t in range(ir.u16(blob, record + 4)):
+            at = record + 7 + 8 * t
+            out.append((at + 5, blob[at + 7], ir.u16(blob, at + 5)))
+    return out
+
+
+def _patch_bytes(d: _Doc, at: int, value: bytes) -> None:
+    holder = [r for r in d.regions if r["offset"] <= at and at + len(value) <= r["offset"] + r["length"]
+              and "data" in r]
+    if len(holder) != 1:
+        raise ComposeError(f"no single data region holds 0x{at:X}")
+    data = bytearray(bytes.fromhex("".join(holder[0]["data"])))
+    data[at - holder[0]["offset"]:at - holder[0]["offset"] + len(value)] = value
+    holder[0]["data"] = hconfig._hex_lines(bytes(data))
+
+
+def _apply_maps(d: _Doc, actions: dict, modes: dict, groups: dict, keep) -> None:
+    """Renumber every reference in the kept regions. A reference to something
+    deleted is an error: the caller decided what goes and must have removed it."""
+    def fix(op, operand, where):
+        new = _remap(op, operand, actions, modes, groups)
+        if new is None:
+            raise ComposeError(f"{where} still names something being deleted (0x{op:02X} {operand})")
+        return new
+    for r in d.regions:
+        if not keep(r):
+            continue
+        if r["kind"] == "action_list":
+            for i in r["instructions"]:
+                op = int(i["opcode"], 16)
+                i["operand"] = fix(op, i["operand"], r["id"])
+        elif r["kind"] == "tagged_list":
+            for e in r["entries"]:
+                e["operand"] = fix(e["opcode"], e["operand"], r["id"])
+        elif r["kind"] == "screen_instruction" and r.get("opcode") == "0x11":
+            raw = bytes.fromhex(r["operands"])
+            if len(raw) == 3:
+                operand = fix(raw[2], raw[0] | raw[1] << 8, r["id"])
+                r["operands"] = (operand.to_bytes(2, "little") + raw[2:]).hex()
+    for at, op, operand in _transition_sites(d.blob, d.S):
+        new = fix(op, operand, f"section 13 transition at 0x{at:X}")
+        if new != operand:
+            _patch_bytes(d, at, new.to_bytes(2, "little"))
+
+
+# ------------------------------------------------------------ delete_device ---
+
+def delete_device(raw: bytes, mode: int) -> bytes:
+    """Delete a device: its Devices entry and name, its mode and pages, its
+    action lists and its infrared group, renumbering everything after them.
+
+    Refuses when anything that stays still uses the device: an activity's keys,
+    a power or input transition, another device's list. Those have to go first.
+    A Devices page left empty is removed when it is the last one."""
+    d = _Doc(raw)
+    blob, S = d.blob, d.S
+    found = [x for x in devices(raw) if x.mode == mode]
+    if len(found) != 1:
+        raise ComposeError(f"mode {mode} is not a device on the Devices screens")
+    device = found[0]
+    group = device.group
+    if mode <= 40:
+        raise ComposeError("modes up to 40 are the firmware's status screens")
+    devices_modes = d.devices_modes()
+    f = d.mode(mode)
+
+    # ---- what goes: the action lists only this device reaches ----
+    referrers: dict[int, set] = {}
+    def note(src, op, operand):
+        if op == 0x7F:
+            referrers.setdefault(operand, set()).add(src)
+    for i in range(d.n_actions):
+        for op, operand in d.ins(i):
+            note(("list", i), op, operand)
+    for r in d.regions:
+        if r["kind"] == "tagged_list":
+            for e in r["entries"]:
+                note(("tagged", r["offset"]), e["opcode"], e["operand"])
+        elif r["kind"] == "action_list" and r.get("section") == 8:
+            for i in r["instructions"]:
+                note(("leading", r["offset"]), int(i["opcode"], 16), i["operand"])
+        elif r["kind"] == "screen_instruction" and r.get("opcode") == "0x11":
+            raw3 = bytes.fromhex(r["operands"])
+            if len(raw3) == 3:
+                note(("stream", r["offset"]), raw3[2], raw3[0] | raw3[1] << 8)
+    for at, op, operand in _transition_sites(blob, S):
+        note(("transition", at), op, operand)
+
+    own_lists = {f["start"]} | {p["list"] for p in f["pages"]}
+    pool_twins = {d.pool_copy(p["list"])["offset"] for p in f["pages"]}
+    seeds = set()
+    for off in own_lists:
+        seeds |= {v for _, op, v in cmp.tagged(blob, off) if op == 0x7F}
+    selections = set()
+    for m in devices_modes:
+        for p in d.mode(m)["pages"]:
+            for tag, op, v in cmp.tagged(blob, p["list"]):
+                if op == 0x7F and d.selection_target(v) == mode:
+                    selections.add(v)
+    doomed = set(seeds | selections)
+    changed = True
+    while changed:
+        changed = False
+        for i in list(doomed):
+            for op, operand in d.ins(i):
+                if op == 0x7F and operand not in doomed:
+                    doomed.add(operand)
+                    changed = True
+    # keep any list something that stays still reaches
+    def staying_source(src):
+        kind, where = src
+        if kind == "list":
+            return where not in doomed
+        if kind == "tagged":
+            devices_lists = {p["list"] for m in devices_modes for p in d.mode(m)["pages"]}
+            twins = set()
+            for off in devices_lists:
+                try:
+                    twins.add(d.pool_copy(off)["offset"])
+                except ComposeError:
+                    pass
+            if where in own_lists or where in pool_twins:
+                return False
+            if where in devices_lists or where in twins:
+                return False      # the Devices entries for this device are removed below
+            return True
+        return True
+    changed = True
+    while changed:
+        changed = False
+        for i in list(doomed):
+            if any(staying_source(s) for s in referrers.get(i, ())):
+                doomed.discard(i)
+                changed = True
+    for i in range(d.n_actions):
+        if i in doomed:
+            continue
+        for op, operand in d.ins(i):
+            if op in (0x7C, 0x7D) and operand >> 8 == group:
+                raise ComposeError(f"action list {i}, which stays, sends to this device's group "
+                                   f"{group}: an activity or a transition uses it")
+            if op == 0x7E and operand == mode:
+                raise ComposeError(f"action list {i}, which stays, enters mode {mode}")
+    for at, op, operand in _transition_sites(blob, S):
+        if op in (0x7C, 0x7D) and operand >> 8 == group:
+            raise ComposeError(f"a section 13 transition sends to group {group}")
+
+    # ---- renumbering maps ----
+    keep_actions = [i for i in range(d.n_actions) if i not in doomed]
+    actions = {i: None for i in doomed}
+    actions.update({old: new for new, old in enumerate(keep_actions) if old != new})
+    modes = {mode: None, **{m: m - 1 for m in range(mode + 1, d.n_modes)}}
+    n_groups = len(ir.ir_groups(blob, S))
+    groups = {group: None, **{g: g - 1 for g in range(group + 1, n_groups)}}
+
+    # ---- regions that go ----
+    gone = set()
+    def drop_program(root):
+        for item in sem.screen_program_path(blob, root):
+            gone.update(r["id"] for r in d.at[item["offset"]] if r["kind"] != "section")
+            if item["opcode"] == 5:
+                gone.update(r["id"] for r in d.at.get(item["offset"] + 3, []) if r["kind"] == "glyph_string")
+    gone.add(d.region(f["entry"], "record_header")["id"])
+    gone.add(d.region(f["start"], "tagged_list")["id"])
+    for p in f["pages"]:
+        gone.add(d.region(p["address"], "mode_page")["id"])
+        gone.add(d.region(p["list"], "tagged_list")["id"])
+        gone.add(d.pool_copy(p["list"])["id"])
+        drop_program(p["program"])
+    action_regions = {d.actions[i] - BASE if d.actions[i] >= BASE else d.actions[i]: i
+                      for i in range(d.n_actions)}
+    for r in d.regions:
+        if r["kind"] == "action_list" and action_regions.get(r["offset"]) in doomed:
+            gone.add(r["id"])
+    group_region = d.region(ir.u24(blob, S[5] + 1 + 3 * group) - BASE, "ir_group")
+    gone.add(group_region["id"])
+
+    # ---- the Devices screens: the entry, the drawn name, maybe the page ----
+    first = devices_modes[0]
+    pages0 = d.mode(first)["pages"]
+    page = pages0[device.page]
+    shared = all(d.mode(m)["pages"][device.page]["address"] == page["address"] for m in devices_modes) \
+        if device.page > 0 else False
+    if not shared:
+        raise ComposeError("deleting a device from a Devices page 1, which differs per "
+                           "activity, is not written yet")
+    tag = SOFT[device.corner]
+    plist = d.region(page["list"], "tagged_list")
+    twin = d.pool_copy(page["list"])
+    plist["entries"] = [e for e in plist["entries"] if e["tag"] != tag]
+    twin["entries"] = [e for e in twin["entries"] if e["tag"] != tag]
+    rows = (13, 24) if device.corner < 2 else (35, 46)
+    right = device.corner in (1, 3)
+    for item in sem.screen_program_path(blob, page["program"]):
+        if item["opcode"] in (4, 5) and item["operands"][1] in rows and \
+                (item["operands"][0] >= 48) == right:
+            gone.update(r["id"] for r in d.at[item["offset"]])
+            if item["opcode"] == 5:
+                gone.update(r["id"] for r in d.at.get(item["offset"] + 3, []) if r["kind"] == "glyph_string")
+    n_pages = len(pages0)
+    page_removed = not plist["entries"] and device.page == n_pages - 1
+    if page_removed:
+        gone.update((plist["id"], twin["id"], d.region(page["address"], "mode_page")["id"]))
+        drop_program(page["program"])
+        record_id = d.region(page["address"], "mode_page")["id"]
+        for m in devices_modes:
+            e = d.region(d.mode(m)["entry"], "record_header")
+            e["targets"] = [t for t in e["targets"] if t["to"] != record_id]
+        n_pages -= 1
+        totals = {}
+        for m in devices_modes:
+            for k, p in enumerate(d.mode(m)["pages"][:n_pages]):
+                totals[p["program"]] = (k + 1, n_pages)
+        if n_pages == 1:
+            for root in totals:
+                for item in sem.screen_program_path(blob, root):
+                    if item["opcode"] == 5 and item["operands"][1] == 56 or (
+                            item["opcode"] == 0x10 and bytes(item["operands"]) == b"\x04"):
+                        gone.update(r["id"] for r in d.at[item["offset"]])
+                        gone.update(r["id"] for r in d.at.get(item["offset"] + 3, [])
+                                    if r["kind"] == "glyph_string")
+        else:
+            _set_counters(d, totals, f"del{mode}_counter")
+
+    # ---- tables ----
+    mt = d.region(S[sem.MODE_SLOT], "pointer_table")
+    del mt["targets"][mode]
+    at_ = d.region(S[sem.ACTION_SLOT], "pointer_table")
+    at_["targets"] = [t for i, t in enumerate(at_["targets"]) if i not in doomed]
+    gt = d.region(S[5], "pointer_table")
+    del gt["targets"][group]
+
+    _apply_maps(d, actions, modes, groups, keep=lambda r: r["id"] not in gone)
+
+    # the group's records, and whatever only they reached: infrared regions that
+    # become unreferenced now (ones nothing referenced before are left alone)
+    ir_kinds = {"ir_record_header", "ir_class5_body", "ir_symbol_table", "ir_symbol_block"}
+    def referenced_ids(regions):
+        ids = {t["to"] for r in regions for t in (r.get("targets") or []) if t}
+        return ids | {r["back_reference"]["to"] for r in regions if r.get("back_reference")}
+    loose_before = {r["id"] for r in d.regions if r["kind"] in ir_kinds} - referenced_ids(d.regions)
+    d.regions[:] = [r for r in d.regions if r["id"] not in gone]
+    while True:
+        live = referenced_ids(d.regions)
+        orphans = {r["id"] for r in d.regions if r["kind"] in ir_kinds
+                   and r["id"] not in live and r["id"] not in loose_before}
+        if not orphans:
+            break
+        gone |= orphans
+        d.regions[:] = [r for r in d.regions if r["id"] not in orphans]
+    dangling = [(r["id"], t["to"]) for r in d.regions for t in (r.get("targets") or [])
+                if t and t["to"] in gone]
+    if dangling:
+        raise ComposeError(f"still referenced after deletion: {dangling[:3]}")
+    out = d.compile()
+
+    # ---- checks ----
+    after = _Doc(out)
+    a = after.blob
+    g0, g1 = ir.ir_groups(blob, S), ir.ir_groups(a, after.S)
+    if [[class5_source(blob, x) for x in g] for i, g in enumerate(g0) if i != group] != \
+            [[class5_source(a, x) for x in g] for g in g1]:
+        raise AssertionError("a remaining infrared group changed")
+    if after.n_actions != len(keep_actions):
+        raise AssertionError("action count")
+    for new, old in enumerate(keep_actions):
+        want = [(op, _remap(op, v, actions, modes, groups)) for op, v in d.ins(old)]
+        if after.ins(new) != want:
+            raise AssertionError(f"action list {old} -> {new} changed")
+    if after.n_modes != d.n_modes - 1:
+        raise AssertionError("mode count")
+    for old in range(d.n_modes):
+        if old == mode:
+            continue
+        new = modes.get(old, old)
+        f0, f1 = d.mode(old), after.mode(new)
+        t0 = [(t, o, _remap(o, v, actions, modes, groups)) for t, o, v in cmp.tagged(blob, f0["start"])]
+        if t0 != cmp.tagged(a, f1["start"]):
+            raise AssertionError(f"mode {old} -> {new}: key list changed")
+    r0, r1 = render_map(blob), render_map(a)
+    devices_set = set(devices_modes)
+    for (m, k), value in r0.items():
+        if m == mode or m in devices_set:
+            continue
+        if r1.get((modes.get(m, m), k), (None,))[0] != value[0]:
+            raise AssertionError(f"screen of mode {m} page {k} changed")
+    before_names = sorted((x.name, x.page, x.corner) for x in devices(raw) if x.mode != mode)
+    after_names = sorted((x.name, x.page, x.corner) for x in devices(out))
+    if before_names != after_names:
+        raise AssertionError(f"device list {after_names} != {before_names}")
+    _check_container(out)
+    return out
