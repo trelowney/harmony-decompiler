@@ -71,6 +71,8 @@
   .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .pair > * { text-align: center; padding-left: 6px; padding-right: 6px; }
   #changes { font-size: 12px; }
+  .credits p { font-size: 11px; margin: 0; }
+  .credits a { color: inherit; }
   #empty { text-align: left; padding: 48px 0; max-width: 520px; }
   @media (max-width: 1100px) {
     .app { grid-template-columns: 1fr; height: auto; }
@@ -259,7 +261,7 @@
           Learn, type or pick from the database to change one, × to make it send nothing. Keys left as
           they are keep what they send.</p>
         <div class="db">
-          <label>Find it in the Flipper-IRDB database (some 8,900 remotes, CC0)
+          <label>Or find it in a code database: Flipper-IRDB (some 8,900 remotes) and irdb (3,200 more)
             <input id="db-search" placeholder="brand and type, e.g. philips tv" autocomplete="off"></label>
           <ul id="db-results" class="db-results"></ul>
           <p id="db-note" class="hint"></p>
@@ -429,8 +431,15 @@
       <button id="finish" class="primary wide" hidden>Reconnect and finish</button>
       <button id="restore" class="wide" hidden>Write the backup back</button>
     </div>
+
+    <div class="side-block credits">
+      <p class="muted">Code databases: <a href="https://github.com/Lucaslhm/Flipper-IRDB">Flipper-IRDB</a>
+        (CC0). Contains/accesses irdb by Simon Peter and contributors, used under permission. For
+        licensing details and for information on how to contribute to the database, see
+        <a href="https://github.com/probonopd/irdb">https://github.com/probonopd/irdb</a></p>
+    </div>
   </aside>
 </div>
-<script type="module" src="app.js?v=c71fc7b5c6"></script>
+<script type="module" src="app.js?v=3bd15f0aae"></script>
 </body>
 </html>

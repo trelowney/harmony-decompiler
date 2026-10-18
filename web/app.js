@@ -2,7 +2,7 @@ import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodi
 import { Harmony525 } from "./hid525.js?v=e4361e7e64";
 import { RemoteView } from "./remote.js?v=96312a460e";
 
-const MODULES = ["_paths", "flipper_ir", "pronto", "pic18dis", "hconfig", "analyze_525_ir", "check_525_mode_pages",
+const MODULES = ["_paths", "flipper_ir", "pronto", "irdb", "pic18dis", "hconfig", "analyze_525_ir", "check_525_mode_pages",
   "class5_ir_encoder", "verify_525_semantics", "render_525_screens", "h525_lcd_author",
   "clone_525_device", "compose525"];
 const CORNERS = ["top left", "top right", "bottom left", "bottom right"];
@@ -385,7 +385,7 @@ function addSoftPage() {
     const label = document.createElement("input");
     label.className = "soft-label";
     label.placeholder = `${corner} label`;
-    label.maxLength = 10;
+    label.maxLength = 20;
     const tr = learnRow(label, false);
     tr.dataset.corner = i;
     tr.dataset.page = page;
@@ -411,29 +411,39 @@ function removeSoftPage(page) {
   $("dev-soft-page").disabled = soft.querySelectorAll("tr.soft-head").length >= 6;
 }
 
-// ---- Flipper-IRDB ----
-let irdb = null;
+// ---- the code databases: Flipper-IRDB (CC0) and irdb (Simon Peter and contributors) ----
+const SOURCES = {
+  flipper: { index: "irdb-index.json", tag: "Flipper" },
+  irdb: { index: "irdb-probonopd-index.json", tag: "irdb" },
+};
+const indexes = {};
 
-async function irdbIndex() {
-  if (!irdb) irdb = await (await fetch("irdb-index.json")).json();
-  return irdb;
+async function sourceIndex(source) {
+  if (!indexes[source]) indexes[source] = await (await fetch(SOURCES[source].index)).json();
+  return indexes[source];
 }
+
+const shownPath = (source, path) => (source === "irdb" ? path.replace(/^codes\//, "") : path)
+  .replace(/\.(ir|csv)$/, "").replaceAll("/", " / ").replaceAll("_", " ");
 
 async function searchDatabase() {
   const terms = $("db-search").value.toLowerCase().split(/\s+/).filter(Boolean);
   const list = $("db-results");
   if (!terms.length) { list.replaceChildren(); return; }
-  const index = await irdbIndex();
-  const hits = index.files.filter((f) => {
-    const p = f.toLowerCase().replaceAll("_", " ");
-    return terms.every((t) => p.includes(t));
-  });
-  list.replaceChildren(...hits.slice(0, 60).map((path) => {
+  const hits = [];
+  for (const source of Object.keys(SOURCES)) {
+    const index = await sourceIndex(source);
+    for (const f of index.files) {
+      const p = shownPath(source, f).toLowerCase();
+      if (terms.every((t) => p.includes(t))) hits.push([source, f]);
+    }
+  }
+  list.replaceChildren(...hits.slice(0, 60).map(([source, path]) => {
     const li = document.createElement("li");
     const b = document.createElement("button");
     b.type = "button";
-    b.textContent = path.replace(/\.ir$/, "").replaceAll("/", " / ").replaceAll("_", " ");
-    b.addEventListener("click", () => useDatabaseFile(path));
+    b.textContent = `${shownPath(source, path)}  ·  ${SOURCES[source].tag}`;
+    b.addEventListener("click", () => useDatabaseFile(source, path));
     li.append(b);
     return li;
   }));
@@ -464,15 +474,15 @@ function putSignal(tr, item) {
   code.title = `${item.name}: ${item.code}`;
 }
 
-async function useDatabaseFile(path) {
-  const index = await irdbIndex();
+async function useDatabaseFile(source, path) {
+  const index = await sourceIndex(source);
   const url = `https://raw.githubusercontent.com/${index.repo}/${index.commit}/` +
     path.split("/").map(encodeURIComponent).join("/");
   status(`Fetching ${path}…`);
   let plan;
   try {
     const text = await (await fetch(url)).text();
-    plan = toJs(webapp.flipper_device(text));
+    plan = toJs(source === "irdb" ? webapp.irdb_device(text) : webapp.flipper_device(text));
   } catch (error) {
     status(`${path} could not be read: ${error.message ?? error}`, true);
     return;
@@ -487,11 +497,14 @@ async function useDatabaseFile(path) {
     const page = Math.floor(i / 4), corner = i % 4;
     while ($("dev-soft").querySelectorAll("tr.soft-head").length <= page) addSoftPage();
     const tr = $("dev-soft").querySelector(`tr[data-page="${page}"][data-corner="${corner}"]`);
-    tr.querySelector(".soft-label").value = item.label.slice(0, 10);
+    tr.querySelector(".soft-label").value = item.label.slice(0, 20);
     putSignal(tr, item);
   });
   const parts = path.split("/");
-  if (!$("dev-name").value.trim()) $("dev-name").value = `${parts[1]} ${parts[0].replace(/s$/, "")}`.slice(0, 20);
+  if (!$("dev-name").value.trim()) {
+    $("dev-name").value = (source === "irdb" ? `${parts[1]} ${parts[2]}`
+      : `${parts[1]} ${parts[0].replace(/s$/, "")}`).slice(0, 20);
+  }
   const keys = Object.keys(plan.keys).length;
   const left = plan.soft.length - soft.length;
   $("db-note").textContent = `${path}: ${keys} buttons on 525 keys, ${soft.length} on soft keys` +
@@ -540,7 +553,7 @@ function loadDeviceIntoForm() {
     row.forEach((item, corner) => {
       if (!item) return;
       const tr = $("dev-soft").querySelector(`tr[data-page="${page}"][data-corner="${corner}"]`);
-      tr.querySelector(".soft-label").value = item.label.slice(0, 10);
+      tr.querySelector(".soft-label").value = item.label.slice(0, 20);
       setCurrent(tr, item);
     });
   });

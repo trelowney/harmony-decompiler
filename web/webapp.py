@@ -7,6 +7,7 @@ import hashlib
 
 import compose525
 import flipper_ir
+import irdb
 import pronto
 import hconfig
 import render_525_screens as renderer
@@ -328,8 +329,18 @@ def flipper_device(text: str) -> dict:
     """A Flipper-IRDB file read for the add device form: every signal it can
     send, which 525 key each is proposed for, the rest offered as soft keys,
     and the ones that cannot be sent with why."""
-    signals = flipper_ir.parse(str(text))
-    ok, skipped = [], []
+    return _device_plan(flipper_ir.parse(str(text)), [])
+
+
+def irdb_device(text: str) -> dict:
+    """The same for an irdb CSV (Contains/accesses irdb by Simon Peter and
+    contributors, used under permission; https://github.com/probonopd/irdb)."""
+    signals, skipped = irdb.parse(str(text))
+    return _device_plan(signals, skipped)
+
+
+def _device_plan(signals: list, skipped: list) -> dict:
+    ok, skipped = [], list(skipped)
     for s in signals:
         try:
             flipper_ir.durations(s)

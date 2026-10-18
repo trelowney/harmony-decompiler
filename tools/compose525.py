@@ -443,11 +443,14 @@ def _device_pages(d: _Doc, prefix: str, name: str, lcd, act: dict, donor_root: i
         for c, item in enumerate(page):
             if item is None:
                 continue
-            codes = d.text(item[0])
-            y = 16 if c < 2 else 35
-            x = 0 if c in (0, 2) else 96 - d.width(codes)
-            for band in _bands(y):
-                per_band.setdefault(band, []).append(_draw(x, y, codes, f"{prefix}_p{k}_k{c}_b{band}"))
+            # one line, or two where Logitech draws two ("Input" over "Hdmi1")
+            lines = _name_lines(d, item[0])
+            ys = ((16,) if c < 2 else (35,)) if len(lines) == 1 else ((13, 24) if c < 2 else (35, 46))
+            for n, (codes, y) in enumerate(zip(lines, ys)):
+                x = 0 if c in (0, 2) else 96 - d.width(codes)
+                for band in _bands(y):
+                    per_band.setdefault(band, []).append(
+                        _draw(x, y, codes, f"{prefix}_p{k}_k{c}_l{n}_b{band}"))
         if len(lcd) > 1:
             per_band.setdefault(7, []).extend([
                 opaque(f"{prefix}_p{k}_cf", b"\x10\x04"),

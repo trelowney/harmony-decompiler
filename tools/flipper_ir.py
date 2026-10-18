@@ -29,6 +29,10 @@ PROTOCOLS = {
     "RC5": (36_000, 113_778, 1), "RC5X": (36_000, 113_778, 1),
     "RC6": (36_000, 106_667, 1),
     "SIRC": (40_000, 45_000, 3), "SIRC15": (40_000, 45_000, 3), "SIRC20": (40_000, 45_000, 3),
+    # two more that irdb uses and Flipper does not name: NECx (Samsung and its
+    # kin, a 4.5 ms header and two free address bytes) and Panasonic (Kaseikyo
+    # with Panasonic's vendor code, device, subdevice and function)
+    "NECx": (38_000, 108_000, 1), "Panasonic": (37_000, 130_000, 1),
 }
 
 
@@ -125,6 +129,13 @@ def frame(protocol: str, address: int, command: int) -> list[int]:
     if p == "Samsung32":
         a, c = address & 0xFF, command & 0xFF
         return _pulse_distance((4500, 4500), _bytes_lsb((a, a, c, ~c & 0xFF)), 550, 550, 1650)
+    if p == "NECx":
+        data = (address & 0xFF, address >> 8 & 0xFF, command & 0xFF, ~command & 0xFF)
+        return _pulse_distance((4500, 4500), _bytes_lsb(data), 560, 560, 1690)
+    if p == "Panasonic":
+        dev, sub, fn = address & 0xFF, address >> 8 & 0xFF, command & 0xFF
+        return _pulse_distance((3456, 1728), _bytes_lsb((0x02, 0x20, dev, sub, fn, dev ^ sub ^ fn)),
+                               432, 432, 1296)
     if p == "Kaseikyo":
         ident, vendor = address >> 24 & 3, address >> 8 & 0xFFFF
         genre1, genre2 = address >> 4 & 0xF, address & 0xF
@@ -223,17 +234,17 @@ SYNONYMS = {
     "Down": ["down", "downarrow", "arrowdown", "cursordown", "navdown"],
     "Left": ["left", "leftarrow", "arrowleft", "cursorleft", "navleft"],
     "Right": ["right", "rightarrow", "arrowright", "cursorright", "navright"],
-    "OK": ["ok", "select", "okenter", "center", "enter"],
-    "Exit": ["exit", "back", "return"],
+    "OK": ["ok", "select", "okenter", "center", "cursorenter", "cursorenterselect", "cursorok", "enter"],
+    "Exit": ["exit", "back", "return", "cursorexit"],
     "Menu": ["menu", "mainmenu", "setup", "home"],
     "Guide": ["guide", "epg", "topmenu"],
-    "Info": ["info", "display", "osd"],
+    "Info": ["info", "inforecall", "display", "osd", "information"],
     "VolumeUp": ["volup", "volumeup"],
     "VolumeDown": ["voldown", "volumedown"],
-    "Mute": ["mute"],
+    "Mute": ["mute", "mutetoggle", "volumemutetoggle", "audiomute"],
     "ChannelUp": ["chup", "channelup", "chnext", "progup", "pup", "pageup"],
     "ChannelDown": ["chdown", "channeldown", "chprev", "progdown", "pdown", "pagedown"],
-    "Prev": ["recall", "last", "prech", "lastch", "previouschannel"],
+    "Prev": ["recall", "last", "prech", "lastch", "previouschannel", "channelprevious"],
     "Play": ["play", "playpause"],
     "Pause": ["pause", "playpause"],
     "Stop": ["stop"],
@@ -242,9 +253,10 @@ SYNONYMS = {
     "FastForward": ["ff", "ffwd", "fastforward", "fwd"],
     "SkipBack": ["prev", "previous", "skipback", "skipprev"],
     "SkipForward": ["next", "skipnext", "skipfwd", "skipforward"],
-    "Red": ["red"], "Green": ["green"], "Yellow": ["yellow"], "Blue": ["blue"],
+    "Red": ["red", "colorbuttonred"], "Green": ["green", "colorbuttongreen"],
+    "Yellow": ["yellow", "colorbuttonyellow"], "Blue": ["blue", "colorbuttonblue"],
     "Star": ["star", "*", "asterisk"], "Hash": ["#", "hash", "pound"],
-    **{str(n): [str(n), f"num{n}", f"digit{n}", f"key{n}"] for n in range(10)},
+    **{str(n): [str(n), f"num{n}", f"digit{n}", f"key{n}"] + (["digit010"] if n == 0 else []) for n in range(10)},
 }
 REPEATING = {"Up", "Down", "Left", "Right", "VolumeUp", "VolumeDown", "ChannelUp",
              "ChannelDown", "Rewind", "FastForward"}
@@ -271,5 +283,10 @@ def propose(signals: list[dict]) -> dict:
 
 
 def label(name: str) -> str:
-    """A soft key label from a Flipper button name: "Vol_up" -> "Vol up"."""
-    return re.sub(r"\s+", " ", name.replace("_", " ")).strip()[:12]
+    """A soft key label from a database button name: "Vol_up" -> "Vol up",
+    irdb's capitals "INPUT VIDEO 1" -> "Input video 1". The remote wraps a
+    label over two lines and cuts what still does not fit."""
+    text = re.sub(r"\s+", " ", name.replace("_", " ")).strip()
+    if text.isupper():
+        text = text.capitalize()
+    return text[:20].strip()

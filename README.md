@@ -85,6 +85,18 @@ python -m http.server 8525      # then http://127.0.0.1:8525/web/
 The USB reading follows [@dannybloe](https://github.com/dannybloe)'s protocol
 work in harmony-explorations (MIT); the write follows libconcord step by step.
 
+A device can be learned through the 525 itself, typed as NEC, pasted as a
+Pronto code, or looked up in two code databases, whose files the page fetches
+when one is picked:
+[Flipper-IRDB](https://github.com/Lucaslhm/Flipper-IRDB) (CC0) and irdb.
+Contains/accesses irdb by Simon Peter and contributors, used under permission.
+For licensing details and for information on how to contribute to the database,
+see https://github.com/probonopd/irdb
+
+The encoders behind both are checked against what the remote is known to send:
+the Panasonic TV's and the Samsung's frames come out of the databases bit for
+bit (`tools/verify_flipper_ir.py`, `tools/verify_irdb.py`, `tools/verify_pronto.py`).
+
 ## Scope
 
 This repository is about **the config format and the toolchain around it**.
