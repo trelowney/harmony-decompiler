@@ -157,6 +157,32 @@ def main() -> int:
     if args.out:
         (args.out / "two-activities.EZHex").write_bytes(raw)
     print("PASS two activities: Test in the menu's free corner, Games on a new page 2")
+
+    # delete them again, the first from before the second, so values and key
+    # sets renumber; the result must read as the original sample did
+    raw = c.delete_activity(raw, "Test")
+    got = {a.name: (a.value, a.key_set) for a in c.activities(raw)}
+    if got.get("Games") != (4, 8) or "Test" in got:
+        print(f"FAIL after deleting Test: {got}")
+        return 1
+    raw = c.delete_activity(raw, "Games")
+    if args.out:
+        (args.out / "activities-deleted.EZHex").write_bytes(raw)
+    blob = hconfig.split_container(raw)[2]
+    sblob = hconfig.split_container(sample)[2]
+    if c.activities(raw) != c.activities(sample) or c.devices(raw) != c.devices(sample):
+        print("FAIL the menu or the device list differs from the original sample")
+        return 1
+    from clone_525_device import render_map
+    r0, r1 = render_map(sblob), render_map(blob)
+    if {k: v[0] for k, v in r0.items()} != {k: v[0] for k, v in r1.items()}:
+        print("FAIL a screen differs from the original sample")
+        return 1
+    d0, d1 = c._Doc(sample), c._Doc(raw)
+    if [d0.ins(i) for i in range(d0.n_actions)] != [d1.ins(i) for i in range(d1.n_actions)]:
+        print("FAIL the action lists differ from the original sample")
+        return 1
+    print("PASS both deleted again: every action list, screen, activity and device as in the sample")
     return 0
 
 

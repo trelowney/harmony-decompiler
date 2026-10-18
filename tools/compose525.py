@@ -218,18 +218,30 @@ class _Doc:
         return modes
 
     def pool_copy(self, page_list_offset: int) -> dict:
-        """The pool copy of a page list: same tags, same opcodes, and 0x7F
-        operands that name lists doing the same thing (FORMAT 5ad)."""
-        original = self.region(page_list_offset, "tagged_list")
-        def shape(entries):
-            return [(e["tag"], e["opcode"],
-                     tuple(self.ins(e["operand"])) if e["opcode"] == 0x7F else e["operand"])
-                    for e in entries]
-        hits = [r for r in self.regions if r.get("role") == "page_binding_copy"
-                and shape(r["entries"]) == shape(original["entries"])]
-        if not hits:
+        """The pool copy of a page list. Copies sit in the pools in the order of
+        the page records in the mode table, each record counted once, which is
+        how arch9_record_body_regions pairs them (FORMAT 5ad); matching by shape
+        is not enough, because a copied screen's list looks like its original's."""
+        if not hasattr(self, "_copies"):
+            seen, order = set(), []
+            for m in range(self.n_modes):
+                for p in self.mode(m)["pages"]:
+                    if p["address"] not in seen:
+                        seen.add(p["address"])
+                        order.append(p["list"])
+            copies = sorted((r for r in self.regions if r.get("role") == "page_binding_copy"),
+                            key=lambda r: r["offset"])
+            if len(copies) != len(order):
+                raise ComposeError(f"{len(copies)} pool copies for {len(order)} pages")
+            self._copies = dict(zip(order, copies))
+        if page_list_offset not in self._copies:
             raise ComposeError(f"no pool copy of the page list at 0x{page_list_offset:X}")
-        return hits[0]
+        copy_ = self._copies[page_list_offset]
+        original = self.region(page_list_offset, "tagged_list")
+        if [(e["tag"], e["opcode"]) for e in copy_["entries"]] != \
+                [(e["tag"], e["opcode"]) for e in original["entries"]]:
+            raise ComposeError(f"the pool copy at 0x{copy_['offset']:X} does not mirror its page list")
+        return copy_
 
     def band_ends(self, root: int) -> dict[int, int]:
         """Offset of each band's closing 0x17 in a screen program."""
@@ -875,8 +887,20 @@ def rekey_device(raw: bytes, mode: int, commands: dict, keys: dict,
 # transitions. 0x7F names an action list, 0x7E a mode, and the high byte of
 # 0x7D and 0x7C an infrared group.
 
-def _remap(op: int, operand: int, actions: dict, modes: dict, groups: dict):
-    """The operand after renumbering, or None when it names something deleted."""
+def _remap(op: int, operand: int, actions: dict, modes: dict, groups: dict,
+           sets: dict | None = None, values: dict | None = None):
+    """The operand after renumbering, or None when it names something deleted.
+    `sets` renumbers key sets (0x1F 0xFFnn and 0xE8nn), `values` the
+    CurrentActivityState values written by 0x8F."""
+    if op == 0x1F and sets and operand >> 8 in (0xFF, 0xE8):
+        k = operand & 0xFF
+        if k in sets:
+            return None if sets[k] is None else (operand & 0xFF00) | sets[k]
+        return operand
+    if op == 0x8F and values:
+        if operand in values:
+            return values[operand]
+        return operand
     if op == 0x7F:
         return actions.get(operand, operand) if operand not in actions or actions[operand] is not None else None
     if op == 0x7E:
@@ -911,11 +935,12 @@ def _patch_bytes(d: _Doc, at: int, value: bytes) -> None:
     holder[0]["data"] = hconfig._hex_lines(bytes(data))
 
 
-def _apply_maps(d: _Doc, actions: dict, modes: dict, groups: dict, keep) -> None:
+def _apply_maps(d: _Doc, actions: dict, modes: dict, groups: dict, keep,
+                sets: dict | None = None, values: dict | None = None) -> None:
     """Renumber every reference in the kept regions. A reference to something
     deleted is an error: the caller decided what goes and must have removed it."""
     def fix(op, operand, where):
-        new = _remap(op, operand, actions, modes, groups)
+        new = _remap(op, operand, actions, modes, groups, sets, values)
         if new is None:
             raise ComposeError(f"{where} still names something being deleted (0x{op:02X} {operand})")
         return new
@@ -1685,5 +1710,253 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
     changed = [k for k in r0 if k[0] != menu and r0[k][0] != r1[k][0]]
     if changed:
         raise AssertionError(f"screens changed that should not have: {changed}")
+    _check_container(out)
+    return out
+
+
+def _drop_counters(d: _Doc, roots, gone: set) -> None:
+    for root in roots:
+        for item in sem.screen_program_path(d.blob, root):
+            if item["opcode"] == 5 and item["operands"][1] == 56 or (
+                    item["opcode"] == 0x10 and bytes(item["operands"]) == b"\x04"):
+                gone.update(r["id"] for r in d.at[item["offset"]])
+                gone.update(r["id"] for r in d.at.get(item["offset"] + 3, []) if r["kind"] == "glyph_string")
+
+
+def _drop_program(d: _Doc, root: int, gone: set) -> None:
+    for item in sem.screen_program_path(d.blob, root):
+        gone.update(r["id"] for r in d.at[item["offset"]] if r["kind"] != "section")
+        if item["opcode"] == 5:
+            gone.update(r["id"] for r in d.at.get(item["offset"] + 3, []) if r["kind"] == "glyph_string")
+
+
+def _drop_corner(d: _Doc, page: dict, corner: int, gone: set) -> None:
+    """Take a corner's entry and drawn name off a two-line corner page."""
+    tag = SOFT[corner]
+    plist = d.region(page["list"], "tagged_list")
+    twin = d.pool_copy(page["list"])
+    plist["entries"] = [e for e in plist["entries"] if e["tag"] != tag]
+    twin["entries"] = [e for e in twin["entries"] if e["tag"] != tag]
+    rows = (13, 24) if corner < 2 else (35, 46)
+    right = corner in (1, 3)
+    for item in sem.screen_program_path(d.blob, page["program"]):
+        if item["opcode"] in (4, 5) and item["operands"][1] in rows and (item["operands"][0] >= 48) == right:
+            gone.update(r["id"] for r in d.at[item["offset"]])
+            if item["opcode"] == 5:
+                gone.update(r["id"] for r in d.at.get(item["offset"] + 3, []) if r["kind"] == "glyph_string")
+
+
+def delete_activity(raw: bytes, name: str) -> bytes:
+    """Delete an activity: its menu entry and name, key set, start, re-pick and
+    menu lists and whatever only they reach, the screens only it shows, and its
+    CurrentActivityState value, renumbering later action lists, modes, key
+    sets and values. A last menu page it leaves empty goes too."""
+    d = _Doc(raw)
+    blob, S = d.blob, d.S
+    acts = activities(raw)
+    hit = [a for a in acts if a.name == name]
+    if len(hit) != 1:
+        raise ComposeError(f"no single activity named {name!r}: {[a.name for a in acts]}")
+    act = hit[0]
+    menu = _menu_mode(d)
+    cas_var = 0x8F - 0x80
+    cas_record = ir.u24(blob, S[13] + 8 + 3 * cas_var) - BASE
+    idle, top = ir.u16(blob, cas_record), ir.u16(blob, cas_record + 2)
+    v, k = act.value, act.key_set
+    values = {x: x - 1 for x in range(v + 1, top + 1)}
+    values[v] = None
+    n_sets = blob[S[9]]
+    sets = {k: None, **{j: j - 1 for j in range(k + 1, n_sets)}}
+
+    # ---- the lists only this activity reaches ----
+    menu_pages = d.mode(menu)["pages"]
+    page = menu_pages[act.page]
+    menu_select = {t: x for t, o, x in cmp.tagged(blob, page["list"])}[SOFT[act.corner]]
+    set_at = ir.u24(blob, S[9] + 1 + 3 * k) - BASE
+    set_entries = {t: (o, x) for t, o, x in cmp.tagged(blob, set_at)}
+    seeds = {menu_select, act.start} | ({act.repick} if act.repick is not None else set())
+    doomed = set(seeds)
+    grow = True
+    while grow:
+        grow = False
+        for i in list(doomed):
+            for o, x in d.ins(i):
+                if o == 0x7F and x not in doomed:
+                    doomed.add(x)
+                    grow = True
+    menu_twin = d.pool_copy(page["list"])["offset"]
+    # who names each list, outside what goes
+    def outside_refs(i):
+        for j in range(d.n_actions):
+            if j not in doomed and (0x7F, i) in d.ins(j):
+                return True
+        for r in d.regions:
+            if r["kind"] == "tagged_list" and r["offset"] not in (set_at, page["list"], menu_twin):
+                if any(e["opcode"] == 0x7F and e["operand"] == i for e in r["entries"]):
+                    return True
+            if r["kind"] == "action_list" and r.get("section") == 8:
+                if any(int(x["opcode"], 16) == 0x7F and x["operand"] == i for x in r["instructions"]):
+                    return True
+        for at, o, x in _transition_sites(blob, S):
+            if o == 0x7F and x == i:
+                return True
+        return False
+    # the menu page's own entry for this activity goes; other entries of it stay
+    shrink = True
+    while shrink:
+        shrink = False
+        for i in list(doomed):
+            if outside_refs(i):
+                doomed.discard(i)
+                shrink = True
+    if menu_select not in doomed or act.start not in doomed:
+        raise ComposeError("the activity's menu or start list is used elsewhere")
+
+    # ---- the screens only it shows ----
+    candidate_modes = {x for i in doomed for o, x in d.ins(i) if o == 0x7E}
+    s14 = S[14]
+    items = []                                     # (record, key, item offset, stream offset)
+    for r_i in range(blob[s14]):
+        rec = ir.u24(blob, s14 + 1 + 3 * r_i) - BASE
+        for j in range(blob[rec + 1]):
+            items.append((r_i, ir.u16(blob, rec + 2 + 5 * j), rec + 2 + 5 * j,
+                          ir.u24(blob, rec + 4 + 5 * j) - BASE))
+    gone_streams = set()
+    for r_i, key, at, stream in items:
+        if key == v and not any(s == stream and kk != v for _, kk, _, s in items):
+            gone_streams.add(stream)
+    for stream in gone_streams:
+        if blob[stream + 3] == 0x7E:
+            candidate_modes.add(ir.u16(blob, stream + 1))
+    def mode_named_elsewhere(m):
+        for j in range(d.n_actions):
+            if j not in doomed and (0x7E, m) in d.ins(j):
+                return True
+        own = {d.mode(x)["start"] for x in candidate_modes} | {
+            p["list"] for x in candidate_modes for p in d.mode(x)["pages"]}
+        for r in d.regions:
+            if r["kind"] == "tagged_list" and r["offset"] not in own | {set_at}:
+                if any(e["opcode"] == 0x7E and e["operand"] == m for e in r["entries"]):
+                    return True
+            if r["kind"] == "screen_instruction" and r.get("opcode") == "0x11" and r["offset"] not in gone_streams:
+                raw3 = bytes.fromhex(r["operands"])
+                if len(raw3) == 3 and raw3[2] == 0x7E and raw3[0] | raw3[1] << 8 == m:
+                    return True
+        return False
+    doomed_modes = set(candidate_modes)
+    shrink = True
+    while shrink:
+        shrink = False
+        for m in sorted(doomed_modes):
+            if mode_named_elsewhere(m):
+                doomed_modes.discard(m)
+                shrink = True
+    if any(m <= 40 for m in doomed_modes):
+        raise ComposeError("would delete a firmware status screen")
+
+    # ---- maps ----
+    keep_actions = [i for i in range(d.n_actions) if i not in doomed]
+    actions = {i: None for i in doomed}
+    actions.update({old: new for new, old in enumerate(keep_actions) if old != new})
+    keep_modes = [m for m in range(d.n_modes) if m not in doomed_modes]
+    modes = {m: None for m in doomed_modes}
+    modes.update({old: new for new, old in enumerate(keep_modes) if old != new})
+
+    # ---- regions that go ----
+    gone = set()
+    for m in doomed_modes:
+        f = d.mode(m)
+        gone.add(d.region(f["entry"], "record_header")["id"])
+        gone.add(d.region(f["start"], "tagged_list")["id"])
+        for p in f["pages"]:
+            gone.add(d.region(p["address"], "mode_page")["id"])
+            gone.add(d.region(p["list"], "tagged_list")["id"])
+            gone.add(d.pool_copy(p["list"])["id"])
+            _drop_program(d, p["program"], gone)
+    for r in d.regions:
+        if r["kind"] == "action_list" and r.get("section") != 8:
+            idx = next((i for i, a in enumerate(d.actions) if a == r["offset"]), None)
+            if idx in doomed:
+                gone.add(r["id"])
+    gone.add(d.region(set_at, "tagged_list")["id"])
+    s11 = d.region(S[11], "pointer_table")
+    for stream in gone_streams:
+        reg = next(r for r in d.at[stream] if r["kind"] == "screen_instruction")
+        end = next(r for r in d.at[stream + 4] if r["kind"] == "screen_instruction")
+        gone.update((reg["id"], end["id"]))
+        s11["targets"] = [t for t in s11["targets"] if t["to"] != reg["id"]]
+    # section 14: drop key v, lower the keys above it
+    for r_i in sorted({r for r, *_ in items}):
+        rec = ir.u24(blob, s14 + 1 + 3 * r_i) - BASE
+        mine = [(key, at) for rr, key, at, _ in items if rr == r_i]
+        if any(key == v for key, _ in mine):
+            at = next(at for key, at in mine if key == v)
+            if at == rec + 2:
+                raise ComposeError(f"value {v} is section 14 record {r_i}'s first key; not written yet")
+            gone.add(next(r for r in d.at[at] if r["kind"] == "opaque")["id"])
+            gone.add(next(r for r in d.at[at + 2] if r["kind"] == "raw_pointer")["id"])
+            _patch_bytes(d, rec + 1, bytes((blob[rec + 1] - 1,)))
+        for key, at in mine:
+            if key > v and key in values:
+                _patch_bytes(d, at, values[key].to_bytes(2, "little"))
+    # CurrentActivityState: max one lower, idle renumbered with the rest
+    new_idle = values.get(idle, idle) if idle != v else None
+    if new_idle is None:
+        raise ComposeError("the activity holds the idle value")
+    _patch_bytes(d, cas_record, new_idle.to_bytes(2, "little"))
+    _patch_bytes(d, cas_record + 2, (top - 1).to_bytes(2, "little"))
+
+    # ---- the menu ----
+    _drop_corner(d, page, act.corner, gone)
+    plist = d.region(page["list"], "tagged_list")
+    n_pages = len(menu_pages)
+    if not plist["entries"] and act.page == n_pages - 1 and n_pages > 1:
+        twin = d.pool_copy(page["list"])
+        gone.update((plist["id"], twin["id"], d.region(page["address"], "mode_page")["id"]))
+        _drop_program(d, page["program"], gone)
+        entry = d.region(d.mode(menu)["entry"], "record_header")
+        rid = d.region(page["address"], "mode_page")["id"]
+        entry["targets"] = [t for t in entry["targets"] if t["to"] != rid]
+        n_pages -= 1
+        if n_pages == 1:
+            _drop_counters(d, [menu_pages[0]["program"]], gone)
+        else:
+            _set_counters(d, {p["program"]: (i + 1, n_pages) for i, p in enumerate(menu_pages[:n_pages])},
+                          f"delact{v}_counter")
+
+    # ---- tables, maps, removal ----
+    at_ = d.region(S[sem.ACTION_SLOT], "pointer_table")
+    at_["targets"] = [t for i, t in enumerate(at_["targets"]) if i not in doomed]
+    mt = d.region(S[sem.MODE_SLOT], "pointer_table")
+    mt["targets"] = [t for i, t in enumerate(mt["targets"]) if i not in doomed_modes]
+    st = d.region(S[9], "pointer_table")
+    del st["targets"][k]
+    _apply_maps(d, actions, modes, {}, keep=lambda r: r["id"] not in gone, sets=sets, values=values)
+    d.regions[:] = [r for r in d.regions if r["id"] not in gone]
+    dangling = [(r["id"], t["to"]) for r in d.regions for t in (r.get("targets") or []) if t and t["to"] in gone]
+    if dangling:
+        raise ComposeError(f"still referenced after deletion: {dangling[:3]}")
+    out = d.compile()
+
+    # ---- checks ----
+    after = _Doc(out)
+    a = after.blob
+    for new, old in enumerate(keep_actions):
+        want = [(o, _remap(o, x, actions, modes, {}, sets, values)) for o, x in d.ins(old)]
+        if after.ins(new) != want:
+            raise AssertionError(f"action list {old} -> {new}")
+    want_acts = sorted((x.name, values.get(x.value, x.value), sets.get(x.key_set, x.key_set))
+                       for x in acts if x.name != name)
+    got_acts = sorted((x.name, x.value, x.key_set) for x in activities(out))
+    if got_acts != want_acts:
+        raise AssertionError(f"activities {got_acts} != {want_acts}")
+    if [(x.name, x.page, x.corner) for x in devices(out)] != [(x.name, x.page, x.corner) for x in devices(raw)]:
+        raise AssertionError("the device list changed")
+    r0, r1 = render_map(blob), render_map(a)
+    for (m, p), value in r0.items():
+        if m in doomed_modes or m == menu:
+            continue
+        if r1.get((modes.get(m, m), p), (None,))[0] != value[0]:
+            raise AssertionError(f"screen of mode {m} page {p} changed")
     _check_container(out)
     return out
