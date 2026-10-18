@@ -23,8 +23,6 @@
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg);
          font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  header, .bar-inner, .layout { max-width: 1280px; margin: 0 auto; padding: 0 16px; }
-  header { padding-top: 20px; }
   h1 { font-size: 22px; margin: 0; }
   h2 { font-size: 16px; margin: 0 0 10px; }
   h3 { font-size: 15px; margin: 0 0 8px; }
@@ -51,23 +49,35 @@
              background: var(--bad-soft); font-size: 13px; line-height: 1.5; }
   .warning strong { color: var(--bad); }
 
-  .bar { position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--bg) 92%, transparent);
-         backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); }
-  .bar-inner { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; padding-bottom: 10px; }
-  .bar .check { max-width: 430px; }
   #status { color: var(--muted); font-size: 13px; min-height: 1.4em; }
   #status.bad { color: var(--bad); }
-  progress { width: 220px; }
+  .empty { color: var(--muted); }
 
-  .empty { text-align: center; padding: 64px 16px; color: var(--muted); }
-  .layout { display: grid; grid-template-columns: 330px minmax(0, 1fr); gap: 24px; padding-top: 20px;
-            padding-bottom: 64px; align-items: start; }
-  .layout[hidden] { display: none; }
-  .remote-col { position: sticky; top: 124px; max-height: calc(100vh - 132px); overflow-y: auto;
-                padding: 4px 4px 12px; scrollbar-width: thin; }
-  @media (max-width: 900px) {
-    .layout { grid-template-columns: 1fr; }
-    .remote-col { position: static; max-width: 360px; margin: 0 auto; }
+  /* three columns the height of the window: the remote, the tabs (the only part
+     that scrolls), and the file and write controls; stacked on a narrow screen */
+  .r-fit { transform-origin: top center; }
+  .app { display: grid; grid-template-columns: clamp(300px, 24vw, 520px) minmax(0, 1fr) 300px; height: 100vh; }
+  .remote-col { height: 100vh; overflow: hidden; padding: 16px 18px; border-right: 1px solid var(--line); }
+  .center { height: 100vh; overflow-y: auto; padding: 16px 24px 48px; }
+  .center > * { max-width: 1000px; }
+  .side { height: 100vh; overflow-y: auto; padding: 16px; border-left: 1px solid var(--line);
+          display: flex; flex-direction: column; gap: 14px; background: var(--card); }
+  .side-block { display: flex; flex-direction: column; gap: 8px; }
+  .side-block + .side-block { border-top: 1px solid var(--line); padding-top: 14px; }
+  .side h3 { margin: 0; }
+  .side .warning { margin: 4px 0 0; font-size: 12px; padding: 8px 10px; }
+  .side .check { font-size: 12px; }
+  .side progress { width: 100%; }
+  .wide { width: 100%; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .pair > * { text-align: center; padding-left: 6px; padding-right: 6px; }
+  #changes { font-size: 12px; }
+  #empty { text-align: left; padding: 48px 0; max-width: 520px; }
+  @media (max-width: 1100px) {
+    .app { grid-template-columns: 1fr; height: auto; }
+    .side { order: -1; height: auto; border-left: none; border-bottom: 1px solid var(--line); }
+    .remote-col, .center { height: auto; border-right: none; }
+    .remote-col { max-width: 360px; margin: 0 auto; }
   }
 
   .tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
@@ -136,7 +146,13 @@
   @keyframes hit { 0% { transform: translateY(2px); box-shadow: 0 0 0 3px var(--glow); } 100% { transform: none; } }
   .rk:disabled { opacity: .3; }
   .r-row { display: grid; gap: 8px; width: 100%; }
-  .r-act { grid-template-columns: 1fr; width: 56%; }
+  .r-act { grid-template-columns: 26px 1fr 26px; gap: 14px; width: 86%; align-items: center; }
+  .r-act::after { content: ""; }
+  .rk.corner-key { width: 26px; height: 26px; border-radius: 50%; font-size: 8px; }
+  .rk.corner-key.off { font-size: 13px; color: #ff7a6e; }
+  .r-lcd canvas { filter: brightness(.72) saturate(.55); transition: filter .4s; }
+  .remote.lit .r-lcd canvas { filter: none; }
+  .remote.lit .r-black .rk:not(.act) { color: #bfe9ff; text-shadow: 0 0 6px #5cc3ee; }
   .rk.act { height: 26px; border-radius: 999px; font-size: 12px; font-weight: 600; color: #dff6ff;
             background: linear-gradient(180deg, #3a9fd6, #1d6fa3); box-shadow: 0 0 10px rgb(80 190 255 / .55), 0 2px 0 #000; }
   .r-two { grid-template-columns: 1fr 1fr; }
@@ -174,7 +190,9 @@
   .rk.rock:hover:not(:disabled) { background: #fff; }
   .r-vol .rk.rock:first-child, .r-ch .rk.rock:first-child { border-radius: 14px 14px 4px 4px; }
   .r-vol .rk.rock:last-child, .r-ch .rk.rock:last-child { border-radius: 4px 4px 14px 14px; }
-  .r-wheelcap { display: flex; justify-content: space-between; padding: 0 22px; font-size: 9px; color: #5d636a; }
+  .r-wheelcap { display: flex; justify-content: space-between; align-items: center; padding: 0 22px;
+                font-size: 9px; color: #5d636a; margin-top: 6px; }
+  .r-silver .rk.glow-key { width: 44px; height: 16px !important; font-size: 9px !important; }
   .r-disc { position: relative; width: 132px; height: 132px; border-radius: 50%;
             background: radial-gradient(circle at 40% 30%, #3b3f45, #101114 70%); box-shadow: 0 2px 6px rgb(0 0 0 / .4); }
   .rk.nav { position: absolute; width: 38px; height: 34px; background: transparent; box-shadow: none; font-size: 12px; }
@@ -200,52 +218,18 @@
 </style>
 </head>
 <body>
-<header>
-  <h1>Harmony 525</h1>
-  <p class="lead">Read a Logitech Harmony 525 over USB, or open a saved <code>.EZHex</code>; see and try its
-    devices, activities and screens; change them; write the result back. Everything happens in this browser.</p>
-  <div class="warning" role="alert">
-    <strong>Experimental. Use entirely at your own risk.</strong>
-    A test version from a reverse engineering project, tried on <strong>one Harmony 525 only</strong>, the
-    author's own. Writing to a remote can leave it not working, and there may be no way back. No warranty, no
-    support; nobody behind this page is responsible for a remote, or anything else, that it damages. Not
-    affiliated with or endorsed by Logitech. Always keep the backup file it saves.
-  </div>
-</header>
-
-<div class="bar">
-  <div class="bar-inner">
-    <div class="row">
-      <button id="connect" class="primary">Read the remote</button>
-      <label class="button" for="file">Open a .EZHex</label>
-      <input id="file" type="file" accept=".EZHex,.ezhex">
-      <button id="save" disabled>Save .EZHex</button>
-      <button id="undo" disabled>Undo</button>
-      <span class="sep"></span>
-      <label class="check"><input type="checkbox" id="write-ok"> I understand this is experimental,
-        tested on one remote only and at my own risk, I keep the backup, and I want to replace my
-        remote's configuration</label>
-      <button id="write" class="danger" disabled>Write to the remote</button>
-      <button id="finish" class="primary" hidden>Reconnect and finish</button>
-      <button id="restore" hidden>Write the backup back</button>
-    </div>
-    <div class="row">
-      <progress id="progress" value="0" max="1" hidden></progress>
-      <div id="status">Loading the reader…</div>
-      <span class="sep"></span>
-      <span id="changes" class="muted"></span>
-    </div>
-  </div>
-</div>
-
-<div id="empty" class="empty">Read the remote, or open a <code>.EZHex</code> file, to start.</div>
-
-<div id="result" class="layout" hidden>
+<div class="app">
   <aside class="remote-col">
     <div id="remote"></div>
   </aside>
 
-  <main>
+  <main class="center">
+    <div id="empty" class="empty">
+      <h2>Harmony 525</h2>
+      <p>Read the remote over USB, or open a saved <code>.EZHex</code>, with the buttons on the right.
+        Then try it on the drawn remote, change it here, and write it back.</p>
+    </div>
+    <div id="result" hidden>
     <nav class="tabs" id="tabs">
       <button data-tab="overview" class="on">Overview</button>
       <button data-tab="add-device">Add a device</button>
@@ -382,7 +366,47 @@
         <table id="devices-raw"></table>
       </div>
     </section>
+    </div>
   </main>
+
+  <aside class="side">
+    <div class="side-block">
+      <h1>Harmony 525</h1>
+      <p class="muted">A Logitech Harmony 525 in this browser: read it, try it, change it, write it back.</p>
+      <div class="warning" role="alert">
+        <strong>Experimental, at your own risk.</strong> Tried on <strong>one Harmony 525 only</strong>, the
+        author's own. Writing can leave a remote not working, maybe for good. No warranty, no support, no
+        responsibility for damage. Not affiliated with or endorsed by Logitech. Keep the backup it saves.
+      </div>
+    </div>
+
+    <div class="side-block">
+      <h3>Configuration</h3>
+      <button id="connect" class="primary wide">Read the remote</button>
+      <div class="pair">
+        <label class="button" for="file">Open .EZHex</label>
+        <button id="save" disabled>Save .EZHex</button>
+      </div>
+      <input id="file" type="file" accept=".EZHex,.ezhex">
+      <button id="undo" class="wide" disabled>Undo the last change</button>
+      <div id="changes" class="muted"></div>
+    </div>
+
+    <div class="side-block">
+      <progress id="progress" value="0" max="1" hidden></progress>
+      <div id="status">Loading the reader…</div>
+    </div>
+
+    <div class="side-block">
+      <h3>Write to the remote</h3>
+      <label class="check"><input type="checkbox" id="write-ok"> I understand this is experimental,
+        tested on one remote only and at my own risk, I keep the backup, and I want to replace my
+        remote's configuration</label>
+      <button id="write" class="danger wide" disabled>Write to the remote</button>
+      <button id="finish" class="primary wide" hidden>Reconnect and finish</button>
+      <button id="restore" class="wide" hidden>Write the backup back</button>
+    </div>
+  </aside>
 </div>
 <script type="module" src="app.js"></script>
 </body>

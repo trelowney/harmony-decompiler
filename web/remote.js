@@ -11,7 +11,7 @@ const CORNERS = ["top left", "top right", "bottom left", "bottom right"];
 // compose525.KEYS plus the remote's own: activities, devices, help,
 // pagePrev, pageNext.
 const LAYOUT = [
-  { cls: "r-act", keys: [["activities", "Activities", "act"]] },
+  { cls: "r-act", keys: [["off", "⏻", "corner-key off"], ["activities", "Activities", "act"]] },
   { cls: "r-two r-small", keys: [["devices", "Devices", "pill"], ["help", "Help", "pill"]] },
   { screen: true },
   { cls: "r-pages", keys: [["pagePrev", "←", "page"], ["pageNext", "→", "page"]] },
@@ -28,7 +28,7 @@ const LAYOUT = [
   { cls: "r-colours", keys: [["Red", "", "c-red"], ["Green", "", "c-green"],
     ["Yellow", "", "c-yellow"], ["Blue", "", "c-blue"]] },
 ];
-const OWN = ["activities", "devices", "help", "pagePrev", "pageNext"];
+const OWN = ["activities", "devices", "help", "off", "glow", "pagePrev", "pageNext"];
 
 const PRETTY = { VolumeUp: "Vol +", VolumeDown: "Vol −", ChannelUp: "Ch +", ChannelDown: "Ch −",
   FastForward: "Fwd", Rewind: "Rew", SkipBack: "Replay", SkipForward: "Skip", Record: "Rec",
@@ -59,6 +59,7 @@ export class RemoteView {
   build(root) {
     root.replaceChildren();
     const body = el("div", "remote");
+    this.body = body;
     const top = el("div", "r-black"), bottom = el("div", "r-silver");
     for (const row of LAYOUT) {
       const into = row.wheel || row.cls === "r-digits" || row.cls === "r-colours" ? bottom : top;
@@ -73,7 +74,15 @@ export class RemoteView {
     body.append(top, bottom);
     this.where = el("div", "r-where");
     this.log = el("div", "r-log", "Press a key.");
-    root.append(body, this.where, this.log);
+    // scaled as one piece so the whole remote fits the height of its column
+    this.fitBox = el("div", "r-fit");
+    this.fitBox.append(body, this.where, this.log);
+    root.append(this.fitBox);
+    // the column it is fitted to: the page's own, or the element it was given
+    this.root = root.closest(".remote-col") ?? root;
+    const watch = new ResizeObserver(() => this.fit());
+    watch.observe(this.root);
+    watch.observe(this.fitBox);
   }
 
   buildScreen() {
@@ -119,8 +128,9 @@ export class RemoteView {
       ["Right", "▶", "n-right"], ["Down", "▼", "n-down"]]) disc.append(this.key(name, label, `nav ${cls}`));
     ring.append(side("r-vol", "VolumeUp", "VolumeDown", "+", "−"), disc,
       side("r-ch", "ChannelUp", "ChannelDown", "+", "−"));
+    // Glow sits under the navigation disc, between the Vol and Ch captions
     const cap = el("div", "r-wheelcap");
-    cap.append(el("span", "", "Vol"), el("span", "", "Ch"));
+    cap.append(el("span", "", "Vol"), this.key("glow", "Glow", "glow-key"), el("span", "", "Ch"));
     const wrap = el("div", "r-wheelwrap");
     wrap.append(ring, cap);
     return wrap;
@@ -143,6 +153,7 @@ export class RemoteView {
   load(model) {
     this.model = model;
     this.go({ mode: model.devices_mode, page: 0 });
+    requestAnimationFrame(() => this.fit());
     this.say("Press a key.");
   }
 
@@ -237,6 +248,17 @@ export class RemoteView {
       this.say("Devices.");
       return;
     }
+    if (key === "glow") {
+      this.light();
+      this.say("Glow: the screen and keys light up for a few seconds.");
+      return;
+    }
+    if (key === "off") {
+      this.go({ mode: m.devices_mode, page: 0 });
+      this.say("Off: the running activity's devices are switched off.");
+      this.onEvent({ type: "none" });
+      return;
+    }
     if (key === "help") {
       this.say("Help asks, device by device, whether things are on; it is not drawn here.");
       return;
@@ -255,6 +277,31 @@ export class RemoteView {
     this.say(what.text.replace(/^./, (c) => c.toUpperCase()) + ".");
     if (what.next) this.go(what.next);
     this.onEvent(what.event);
+  }
+
+  fit() {
+    const box = this.fitBox;
+    if (matchMedia("(max-width: 1100px)").matches) {
+      box.style.transform = "";
+      box.style.marginBottom = "";
+      return;
+    }
+    const cs = getComputedStyle(this.root);
+    const room = this.root.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    const need = box.offsetHeight;
+    // grows and shrinks with the window: as tall as the column, no wider than it
+    const width = this.root.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    const drawn = this.body.offsetWidth;
+    const scale = need && room && drawn ? Math.min(room / need, width / drawn, 1.8) : 1;
+    box.style.transform = `scale(${scale})`;
+    box.style.marginBottom = `${need * (scale - 1)}px`;
+  }
+
+  // the backlight: on for six seconds, then the screen goes dim again
+  light() {
+    this.body.classList.add("lit");
+    clearTimeout(this.lightTimer);
+    this.lightTimer = setTimeout(() => this.body.classList.remove("lit"), 6000);
   }
 
   say(text) {
