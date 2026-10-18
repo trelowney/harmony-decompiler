@@ -28,6 +28,9 @@
   .bar { position: sticky; top: 0; z-index: 10; background: var(--bg); padding: 10px 0;
          border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
   .sep { flex: 1; }
+  .warning { border: 2px solid var(--bad); border-radius: 8px; padding: 12px 14px; margin: 0 0 16px;
+             background: color-mix(in srgb, var(--bad) 10%, transparent); line-height: 1.5; }
+  .warning strong { color: var(--bad); }
   #status.bad { color: var(--bad); }
   progress { width: 260px; }
   table { border-collapse: collapse; width: 100%; }
@@ -67,6 +70,15 @@
     result back the way Concordance does. Nothing is sent anywhere but to the remote, and nothing
     is written to it unless you tick the box and press Write.</p>
 
+  <div class="warning" role="alert">
+    <strong>Experimental. Use entirely at your own risk.</strong>
+    This is a test version from a reverse engineering project. It has been tried on
+    <strong>one Harmony 525 only</strong>, the author's own, and on nothing else. Writing to a remote
+    can leave it not working, and there may be no way back. There is no warranty and no support,
+    and nobody behind this page is responsible for a remote, or anything else, that it damages.
+    Not affiliated with or endorsed by Logitech. Always keep the backup file it saves.
+  </div>
+
   <div class="bar">
     <div class="row">
       <button id="connect" class="primary">Read the remote</button>
@@ -74,7 +86,8 @@
       <input id="file" type="file" accept=".EZHex,.ezhex">
       <button id="save" disabled>Save .EZHex</button>
       <span class="sep"></span>
-      <label class="check"><input type="checkbox" id="write-ok"> I keep the backup and want to
+      <label class="check"><input type="checkbox" id="write-ok"> I understand this is experimental,
+        tested on one remote only and entirely at my own risk, I keep the backup, and I want to
         replace my remote's configuration</label>
       <button id="write" class="danger" disabled>Write to the remote</button>
       <button id="finish" class="primary" hidden>Reconnect and finish</button>

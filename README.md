@@ -61,6 +61,11 @@ python verify_compose525.py                   # add five devices to the sample, 
 
 ## In a browser, with nothing installed
 
+> **Experimental, and entirely at your own risk.** Tried on one Harmony 525
+> only, the author's own. Writing to a remote can leave it not working, with no
+> way back. No warranty, no support, and nobody here is responsible for a
+> remote, or anything else, that it damages. Not affiliated with Logitech.
+
 `web/` reads a Harmony 525 over USB straight from Chrome or Edge (WebHID), or
 opens a saved `.EZHex`, and shows its devices, activities and rendered screens,
 with a backup to save. It runs the same Python as `tools/` in the browser
