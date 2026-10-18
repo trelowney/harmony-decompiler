@@ -188,7 +188,7 @@ const REPEATING_KEYS = new Set(["Up", "Down", "Left", "Right", "VolumeUp", "Volu
 // One row per thing the device answers: a 525 key, or a soft key with its label.
 function learnRow(first, repeat) {
   const tr = document.createElement("tr");
-  tr.innerHTML = `<td class="r-what"></td><td><input class="c-code" size="9" placeholder="—"></td>` +
+  tr.innerHTML = `<td class="r-what"></td><td><input class="c-code" size="18" placeholder="—"></td>` +
     `<td><label class="check"><input type="checkbox" class="c-repeat"> repeats</label></td>` +
     `<td><button type="button" class="c-learn">Learn</button> <button type="button" class="c-del">×</button></td>`;
   tr.querySelector(".r-what").append(first);
