@@ -22,6 +22,16 @@ function fillStepCommands() {
     .map((c) => option(`${c.group}:${c.command}`, c.label)));
 }
 
+function fillPowerCommands() {
+  const sel = $("pw-device");
+  const name = sel.options[sel.selectedIndex]?.textContent;
+  const mine = commandList.filter((c) => c.device === name);
+  const guess = mine.find((c) => /power|on.?off|pwr/i.test(c.label));
+  $("pw-on").replaceChildren(...mine.map((c) => option(c.command, c.label)));
+  $("pw-off").replaceChildren(option("", "the same (a toggle)"), ...mine.map((c) => option(c.command, c.label)));
+  if (guess) $("pw-on").value = guess.command;
+}
+
 function drawSteps() {
   const ol = $("act-steps");
   ol.replaceChildren(...steps.map((s, i) => {
@@ -194,11 +204,13 @@ function show() {
 
   const byPlace = (x, y) => x.page - y.page || x.corner - y.corner;
   const dv = $("devices");
-  dv.replaceChildren(row(["name", "on the remote", "keys"], true));
+  dv.replaceChildren(row(["name", "on the remote", "keys", "power state"], true));
+  const kept = new Set(toJs(webapp.power_devices(bytes)));
   for (const d of [...s.devices].sort(byPlace)) {
     const soft = (model.modes[d.mode]?.soft ?? []).flat().filter(Boolean).length;
     const keys = Object.keys(model.modes[d.mode]?.keys ?? {}).length;
-    const tr = linkedRow([d.name, where(d), `${soft} soft keys, ${keys} keys`], "device", d);
+    const tr = linkedRow([d.name, where(d), `${soft} soft keys, ${keys} keys`,
+      kept.has(d.name) ? "kept" : "not kept"], "device", d);
     tr.children[1].className = "where";
     tr.dataset.mode = d.mode;
     dv.append(tr);
@@ -241,6 +253,13 @@ function show() {
     (x) => x.name, (x) => `${x.name} (${where(x)})`);
   const delA = $("del-activity");
   delA.replaceChildren(...s.activities.map((a) => option(a.name, a.name)));
+  // devices the remote keeps no power state for, with their commands
+  const powered = new Set(toJs(webapp.power_devices(bytes)));
+  const unpowered = s.devices.filter((d) => !powered.has(d.name) && d.group != null);
+  $("pw-device").replaceChildren(...unpowered.map((d) => option(d.mode, d.name)));
+  $("f-power").querySelector("button").disabled = !unpowered.length;
+  fillPowerCommands();
+
   const like = $("act-like");
   like.replaceChildren(...s.activities.map((a) => option(a.name, a.name)));
   const byName = [...s.devices].sort((x, y) => x.name.localeCompare(y.name));
@@ -632,6 +651,16 @@ async function main() {
   });
 
   $("act-step-device").addEventListener("change", fillStepCommands);
+  $("pw-device").addEventListener("change", fillPowerCommands);
+  $("f-power").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const sel = $("pw-device");
+    const name = sel.options[sel.selectedIndex]?.textContent;
+    const off = $("pw-off").value === "" ? null : Number($("pw-off").value);
+    const tenths = Math.round(Number($("pw-delay").value) * 10);
+    change(`keep ${name}'s power state`,
+      (bytes) => webapp.op_add_power(bytes, Number(sel.value), Number($("pw-on").value), off, tenths));
+  });
   $("act-step-add").addEventListener("click", () => {
     const sel = $("act-step-command");
     if (!sel.value) return;

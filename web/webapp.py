@@ -339,3 +339,10 @@ def flipper_device(text: str) -> dict:
     return {"keys": {k: item(i) for k, i in plan["keys"].items()},
             "soft": [item(i) for i in plan["soft"]], "skipped": skipped,
             "repeating": sorted(flipper_ir.REPEATING)}
+
+
+def op_add_power(container: bytes, mode: int, on: int, off=None, delay_tenths: int = 10) -> bytes:
+    """A power state for a device: on and off are its commands' numbers in its
+    infrared group, off None for a toggle."""
+    return compose525.add_power(bytes(container), int(mode), int(on),
+                                None if off is None else int(off), int(delay_tenths))

@@ -263,6 +263,29 @@ def main() -> int:
             return 1
     print("PASS activities read as steps; one ends on the X96, one sends volume to the amplifier; "
           "each deleted gives the file back")
+
+    # a power state for the X96 and the Samsung: Off and every activity switch
+    # them off, a new activity can switch one on, deleting one takes it out
+    label = lambda n: {v[1]: k[1] for k, v in c.device_commands(composed).items() if v[0] == n}
+    out = c.add_power(composed, modes["X96 Box"], label("X96 Box")["Power"])
+    out = c.add_power(out, modes["Samsung T200HD"], label("Samsung T200HD")["Power"])
+    power = c.power_variables(out)
+    if power.get("X96 Box") != 23 or power.get("Samsung T200HD") != 24:
+        print(f"FAIL power variables {power}")
+        return 1
+    for a in c.activities(out):
+        offs = {s["device"] for s in c.describe_activity(out, a.name) if s["kind"] == "power" and not s["on"]}
+        if not {"X96 Box", "Samsung T200HD"} <= offs:
+            print(f"FAIL {a.name} leaves a new power state alone: {offs}")
+            return 1
+    film = c.add_activity(out, "Film", "Watch TV +", ["TV Panason..", "X96 Box"])
+    on = {s["device"] for s in c.describe_activity(film, "Film") if s["kind"] == "power" and s["on"]}
+    gone = c.delete_device(out, modes["X96 Box"])
+    if on != {"TV Panason..", "X96 Box"} or "X96 Box" in c.power_variables(gone):
+        print(f"FAIL Film switches on {on}; after deleting the X96 {c.power_variables(gone)}")
+        return 1
+    print("PASS the X96 and the Samsung get power states: in the all-off list and every activity, "
+          "an activity can switch one on, a deleted device leaves both")
     return 0
 
 

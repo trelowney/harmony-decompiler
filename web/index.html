@@ -292,6 +292,19 @@
           <p class="hint">A device already there swaps places with it.</p>
           <button>Move</button>
         </form>
+        <form id="f-power" class="panel">
+          <h3>Keep a device's power state</h3>
+          <select id="pw-device"></select>
+          <div class="row">
+            <label>On with <select id="pw-on"></select></label>
+            <label>Off with <select id="pw-off"></select></label>
+            <label>Wait after on, s <input id="pw-delay" type="number" min="0.1" max="25.5" step="0.1" value="1" size="4"></label>
+          </div>
+          <p class="hint">The remote then knows whether the device is on: activities can switch it on,
+            Off and the other activities switch it off, and nothing is sent when it already is. A power
+            toggle is both on and off. Only devices without one are listed.</p>
+          <button>Keep it</button>
+        </form>
         <form id="f-del-device" class="panel">
           <h3>Delete a device</h3>
           <select id="del-device"></select>
@@ -414,6 +427,6 @@
     </div>
   </aside>
 </div>
-<script type="module" src="app.js?v=c706d90153"></script>
+<script type="module" src="app.js?v=7037aa92a4"></script>
 </body>
 </html>

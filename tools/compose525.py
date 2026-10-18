@@ -22,6 +22,7 @@ the remote's font cannot draw.
 from __future__ import annotations
 
 import copy
+import re
 from dataclasses import dataclass, field
 from typing import Sequence
 
@@ -2522,6 +2523,203 @@ def _move(layout: list, find, page: int, corner: int) -> list:
     if any(not any(p) for p in layout[1:]):
         raise ComposeError("that would leave an empty page in the middle")
     return layout
+
+
+# ------------------------------------------------------------ power state ---
+
+STATE_BAND_SUBS = {0xF2, 0xF1, 0xF0, 0xEF, 0xEE, 0xED}   # @dannybloe, actions.ts
+
+
+def _state_index(op: int, operand: int) -> int | None:
+    """The state variable an instruction names, or None (@dannybloe, section 277:
+    the write band, 0x70 to 0x72's low byte, six subs of the 0x1F band)."""
+    if op >= 0x80:
+        return op - 0x80
+    if op in (0x70, 0x71, 0x72):
+        return operand & 0xFF
+    if op == 0x1F and (operand >> 8) & 0xFF in STATE_BAND_SUBS:
+        return operand & 0xFF
+    return None
+
+
+def _state_references(d: _Doc) -> set[int]:
+    """Every state variable any instruction in the config names: action lists,
+    mode, page and section 9 binding lists, section 11 streams, and section 13's
+    own transitions."""
+    b, out = d.blob, set()
+    add = lambda o, x: out.add(_state_index(o, x)) if _state_index(o, x) is not None else None
+    for i in range(d.n_actions):
+        for o, x in d.ins(i):
+            add(o, x)
+    lists = [ir.u24(b, d.S[9] + 1 + 3 * k) - BASE for k in range(b[d.S[9]])]
+    for m in range(d.n_modes):
+        f = d.mode(m)
+        lists += [f["start"]] + [p["list"] for p in f["pages"]]
+    for at in lists:
+        for _, o, x in cmp.tagged(b, at):
+            add(o, x)
+    s11 = d.S[11]
+    for k in range(ir.u16(b, s11)):
+        at = ir.u24(b, s11 + 2 + 3 * k) - BASE
+        if b[at] == 0x11:
+            add(b[at + 3], ir.u16(b, at + 1))
+    s13 = d.S[13]
+    for v in range(ir.u16(b, s13)):
+        rec = ir.u24(b, s13 + 8 + 3 * v) - BASE
+        for t in range(ir.u16(b, rec + 4)):
+            at = rec + 7 + 8 * t
+            add(b[at + 7], ir.u16(b, at + 5))
+    return out
+
+
+def _all_off_list(d: _Doc) -> int:
+    """The action list Off runs: zero writes into every power variable and
+    nothing else (@dannybloe, section 280), the longest such list."""
+    s13 = d.S[13]
+    def has_off(v):
+        rec = ir.u24(d.blob, s13 + 8 + 3 * v) - BASE
+        return any(int.from_bytes(d.blob[rec + 8 + 8 * t:rec + 10 + 8 * t], "little", signed=True) == 1 and
+                   int.from_bytes(d.blob[rec + 10 + 8 * t:rec + 12 + 8 * t], "little", signed=True) == 0
+                   for t in range(ir.u16(d.blob, rec + 4)))
+    n_vars = ir.u16(d.blob, s13)
+    best = None
+    for i in range(d.n_actions):
+        ins = d.ins(i)
+        vs = [o - 0x80 for o, x in ins if 0x80 <= o < 0x100 and x == 0]
+        if len(ins) >= 2 and len(vs) == len(ins) and all(v < n_vars and has_off(v) for v in vs):
+            if best is None or len(ins) > len(d.ins(best)):
+                best = i
+    if best is None:
+        raise ComposeError("no all-off list: a configuration with one device has none (section 280)")
+    return best
+
+
+def add_power(raw: bytes, mode: int, on: int, off: int | None = None,
+              delay_tenths: int = 10) -> bytes:
+    """Give a device a power state the remote keeps, as Logitech's compiler
+    does for the TV, the amplifier and the XBOX: a state variable whose 0 -> 1
+    sends command `on` and waits `delay_tenths` for the device to wake, and
+    whose 1 -> 0 sends `off` (the same command for a toggle); Off switches it
+    off, and every activity switches it off unless it is one of theirs.
+
+    @dannybloe's composer, sections 277, 278 and 280: the variable goes in at
+    the state table's `narrow` count, a send is always paired with a 0x7C, and
+    the variable joins the all-off list and every activity's start list right
+    before the activity counter's write. Refuses when a variable at or above
+    `narrow` is named anywhere, since moving one would need renumbering."""
+    d = _Doc(raw)
+    blob, S = d.blob, d.S
+    dev = [x for x in devices(raw) if x.mode == mode]
+    if len(dev) != 1 or dev[0].group is None:
+        raise ComposeError(f"mode {mode} is not a device that sends infrared")
+    dev = dev[0]
+    g = dev.group
+    if dev.name in power_variables(raw):
+        raise ComposeError(f"{dev.name} already has a power state")
+    n_cmds = len(ir.ir_groups(blob, S)[g])
+    off = on if off is None else off
+    for cmd in (on, off):
+        if not 0 <= cmd < n_cmds:
+            raise ComposeError(f"{dev.name} has no command {cmd}")
+    if not 0 < delay_tenths <= 0xFF:
+        raise ComposeError("the power on delay is 0.1 to 25.5 seconds")
+
+    s13 = S[13]
+    count, narrow = ir.u16(blob, s13), ir.u16(blob, s13 + 2)
+    wide, narrow_again = ir.u16(blob, s13 + 4), ir.u16(blob, s13 + 6)
+    if count != narrow + wide or narrow_again != narrow:
+        raise ComposeError(f"state table header {count}, {narrow}, {wide}, {narrow_again} is not the known shape")
+    named = {v for v in _state_references(d) if v >= narrow}
+    if named:
+        raise ComposeError(f"variables {sorted(named)} at or above narrow are named; renumbering is not done here")
+    var = narrow
+    if 0x80 + var > 0xFF - 1 or var + 1 > 0x40:
+        raise ComposeError("no room for another one byte state variable")
+
+    # ---- action lists: each send with its device's usual 0x7C, the power on
+    # list waiting for the device after it, as the amplifier's and the TV's do
+    delays = [x & 0xFF for i in range(d.n_actions) for o, x in d.ins(i) if o == 0x7C and x >> 8 == g]
+    qd = max(set(delays), key=delays.count) if delays else 1
+    first = d.n_actions
+    lists = [[(0x7D, g << 8 | on), (0x7C, g << 8 | qd)]]
+    if off != on:
+        lists.append([(0x7D, g << 8 | off), (0x7C, g << 8 | qd)])
+    send_on, send_off = first, first + len(lists) - 1
+    lists.append([(0x7F, send_on), (0x7C, g << 8 | delay_tenths)])
+    power_on = first + len(lists) - 1
+    action_regions = [fresh_region("action_list", f"power{var}_action_{first + k}",
+                                   instructions=[{"operand": x, "opcode": f"0x{o:02X}"} for o, x in ins])
+                      for k, ins in enumerate(lists)]
+
+    # ---- the state variable: first 0, second 1, two transitions, as var 16's
+    record = (0).to_bytes(2, "little") + (1).to_bytes(2, "little") + (2).to_bytes(2, "little") + b"\x00"
+    for frm, to, target in ((0, 1, power_on), (1, 0, send_off)):
+        record += b"\x00" + frm.to_bytes(2, "little", signed=True) + to.to_bytes(2, "little", signed=True) + \
+            target.to_bytes(2, "little") + b"\x7f"
+    rec_region = opaque(f"power{var}_record", record)
+    table = d.region(s13, "pointer_table")
+    header = bytearray(bytes.fromhex(table["header"]))
+    # count's high byte, narrow, wide, narrow again (@dannybloe, section 276)
+    if len(header) != 7 or int.from_bytes(header[1:3], "little") != narrow:
+        raise ComposeError(f"section 13 header {table['header']} is not the known shape")
+    header[1:3] = (narrow + 1).to_bytes(2, "little")
+    header[5:7] = (narrow + 1).to_bytes(2, "little")
+    table["header"] = header.hex()
+    table["targets"].insert(var, {"to": rec_region["id"]})
+    last = ir.u24(blob, s13 + 8 + 3 * (narrow - 1)) - BASE
+    holder = next(r for r in d.regions if r["offset"] <= last < r["offset"] + r["length"] and "data" in r)
+    d.regions.insert(d.index_of(holder) + 1, rec_region)
+
+    # ---- its name, as Logitech's compiler names a power variable: the remote
+    # never reads slot 0, readers do (@dannybloe, sections 77 and 126)
+    names = d.region(S[0], "name_table")["records"]
+    label = "_".join(re.findall(r"[A-Za-z0-9]+", dev.name.replace("..", ""))) or f"Device{g}"
+    after = max((k for k, r in enumerate(names) if r["parent"] == 1 and r["name"].endswith("_Power_2")),
+                default=max(k for k, r in enumerate(names) if r["parent"] == 1))
+    names.insert(after + 1, {"parent": 1, "index": var, "name": f"{label}_Power_2"})
+
+    # ---- off: the all-off list, and every activity's start before its counter
+    def action_region(i):
+        return d.region(d.actions[i], "action_list")
+    write_off = {"operand": 0, "opcode": f"0x{0x80 + var:02X}"}
+    all_off = _all_off_list(d)
+    action_region(all_off)["instructions"].append(dict(write_off))
+    starts = sorted({a.start for a in activities(raw)})
+    for s in starts:
+        r = action_region(s)
+        at = next(k for k, i in enumerate(r["instructions"]) if int(i["opcode"], 16) == 0x8F)
+        r["instructions"].insert(at, dict(write_off))
+
+    d.region(S[sem.ACTION_SLOT], "pointer_table")["targets"].extend({"to": r["id"]} for r in action_regions)
+    s0 = next(i for i, r in enumerate(d.regions) if r.get("section") == 0)
+    d.regions[s0:s0] = action_regions
+    out = d.compile()
+
+    # ---- checks ----
+    a = _Doc(out)
+    if ir.u16(a.blob, a.S[13]) != count + 1 or ir.u16(a.blob, a.S[13] + 2) != narrow + 1:
+        raise AssertionError("state table header")
+    if power_variables(out).get(dev.name) != var:
+        raise AssertionError(f"{dev.name} does not read back with power variable {var}: {power_variables(out)}")
+    for k, ins in enumerate(lists):
+        if a.ins(first + k) != ins:
+            raise AssertionError(f"new action list {first + k}")
+    for i in range(d.n_actions):
+        want = d.ins(i)
+        if i == all_off:
+            want = want + [(0x80 + var, 0)]
+        elif i in starts:
+            at = next(k for k, (o, _) in enumerate(want) if o == 0x8F)
+            want = want[:at] + [(0x80 + var, 0)] + want[at:]
+        if a.ins(i) != want:
+            raise AssertionError(f"action list {i} changed beyond the power write")
+    for act in activities(out):
+        steps = describe_activity(out, act.name)
+        if {"kind": "power", "device": dev.name, "on": False} not in steps:
+            raise AssertionError(f"{act.name} does not switch {dev.name} off")
+    if render_map(blob) != render_map(a.blob):
+        raise AssertionError("a screen changed")
+    return out
 
 
 def place_device(raw: bytes, mode: int, page: int, corner: int) -> bytes:
