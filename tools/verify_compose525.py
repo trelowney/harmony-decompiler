@@ -130,6 +130,33 @@ def main() -> int:
     if args.out:
         (args.out / "rekey-x96.EZHex").write_bytes(rekeyed)
     print("PASS the X96 re-keyed as on the owner's remote, one page, every key checked")
+
+    # activities: the first takes the menu's free corner, the second opens page 2
+    power = c.power_variables(sample)
+    if sorted(power.values()) != [16, 17, 19]:
+        print(f"FAIL power variables {power}")
+        return 1
+    tv = next(n for n, v in power.items() if v == 17)
+    amp = next(n for n, v in power.items() if v == 16)
+    xbox = next(n for n, v in power.items() if v == 19)
+    watch_tv = next(a.name for a in c.activities(sample) if a.value == 0)
+    xbox_activity = next(a.name for a in c.activities(sample) if a.value == 2)
+    raw = c.add_activity(sample, "Test", like=watch_tv, on=[tv, amp], writes={20: 5})
+    raw = c.add_activity(raw, "Games", like=xbox_activity, on=[tv, xbox], writes={20: 6})
+    got = {a.name: (a.value, a.key_set, a.page, a.corner) for a in c.activities(raw)}
+    if got.get("Test") != (4, 8, 0, 3) or got.get("Games") != (5, 9, 1, 0):
+        print(f"FAIL activities {got}")
+        return 1
+    blob = hconfig.split_container(raw)[2]
+    S = sem.section_offsets(blob)
+    menu = c._menu_mode(c._Doc(raw))
+    texts = [counter_text(blob, p["program"]) for p in mode_fields(blob, S, menu)["pages"]]
+    if texts != ["1 OF 2", "2 OF 2"]:
+        print(f"FAIL menu counters {texts}")
+        return 1
+    if args.out:
+        (args.out / "two-activities.EZHex").write_bytes(raw)
+    print("PASS two activities: Test in the menu's free corner, Games on a new page 2")
     return 0
 
 

@@ -1187,3 +1187,503 @@ def delete_device(raw: bytes, mode: int) -> bytes:
         raise AssertionError(f"device list {after_names} != {before_names}")
     _check_container(out)
     return out
+
+
+# ------------------------------------------------------------- activities ---
+
+@dataclass(frozen=True)
+class Activity:
+    name: str           # as the activity menu draws it
+    value: int          # CurrentActivityState
+    key_set: int        # section 9 list (operand low byte of 0x1F 0xFFnn)
+    start: int          # start list (key set tag 0x01)
+    repick: int | None  # list for picking it while it runs (tag 0x05)
+    start_mode: int     # "Starting ..." screen
+    work_mode: int      # the activity's own screen
+    page: int
+    corner: int
+
+
+def _menu_mode(d: _Doc) -> int:
+    """The activity menu: the mode whose soft keys select key sets."""
+    hits = []
+    for m in range(d.n_modes):
+        for p in d.mode(m)["pages"]:
+            for tag, op, v in cmp.tagged(d.blob, p["list"]):
+                if op == 0x7F and tag in SOFT:
+                    ins = d.ins(v)
+                    if len(ins) == 2 and ins[0][0] == 0x1F and ins[0][1] >> 8 == 0xFF and ins[1] == (0x92, 0):
+                        hits.append(m)
+    if not hits:
+        raise ComposeError("no activity menu found")
+    if len(set(hits)) != 1:
+        raise ComposeError(f"several activity menus: {sorted(set(hits))}")
+    return hits[0]
+
+
+def _chain_end(d: _Doc, index: int) -> tuple[int, ...]:
+    """The modes the last list of a 0x7F chain enters (start chains end with
+    [0x71 .., 0x7E status screen, 0x7E activity screen])."""
+    seen = set()
+    while True:
+        ins = d.ins(index)
+        tail = [v for o, v in ins if o == 0x7F]
+        if ins and ins[-1][0] == 0x7F and ins[-1][1] not in seen:
+            seen.add(index)
+            index = ins[-1][1]
+            continue
+        return tuple(v for o, v in ins if o == 0x7E)
+
+
+def activities(raw: bytes) -> list[Activity]:
+    """The activities as the menu lists them."""
+    d = _Doc(raw)
+    menu = _menu_mode(d)
+    out = []
+    for page_index, page in enumerate(d.mode(menu)["pages"]):
+        drawn = [(it["operands"][0], it["operands"][1], renderer_string(d, it))
+                 for it in sem.screen_program_path(d.blob, page["program"]) if it["opcode"] in (4, 5)]
+        for tag, op, v in cmp.tagged(d.blob, page["list"]):
+            if op != 0x7F or tag not in SOFT:
+                continue
+            ins = d.ins(v)
+            if not (len(ins) == 2 and ins[0][0] == 0x1F and ins[0][1] >> 8 == 0xFF):
+                continue
+            key_set = ins[0][1] & 0xFF
+            at = ir.u24(d.blob, d.S[9] + 1 + 3 * key_set) - BASE
+            entries = {t: (o, x) for t, o, x in cmp.tagged(d.blob, at)}
+            start = entries[1][1]
+            repick = entries[5][1] if 5 in entries and entries[5][0] == 0x7F else None
+            start_ins = d.ins(start)
+            values = [x for o, x in start_ins if o == 0x8F]
+            if len(values) != 1 or start_ins[0][0] != 0x7E:
+                raise ComposeError(f"key set {key_set}'s start list is not the shape this knows")
+            corner = SOFT.index(tag)
+            rows = (13, 24) if corner < 2 else (35, 46)
+            lines = []
+            for y in rows:
+                hits = sorted({c for x, yy, c in drawn if yy == y and (x >= 48) == (corner in (1, 3))})
+                lines += ["".join(d.alphabet.get(ch, "?") for ch in c) for c in hits]
+            out.append(Activity(" ".join(lines), values[0], key_set, start, repick,
+                                start_ins[0][1], _chain_end(d, start)[-1], page_index, corner))
+    return out
+
+
+def power_variables(raw: bytes) -> dict[str, int]:
+    """Device name -> its power variable.
+
+    The power variables are the ones the all-off list sets to 0 (@dannybloe's
+    reading; on the public sample 17, 16 and 19), and a variable belongs to the
+    device its 1 -> 0 transition sends to. A variable whose transitions also
+    send, like a TV's picture toggle, is not taken for power."""
+    d = _Doc(raw)
+    by_group = {x.group: x.name for x in devices(raw)}
+    transitions: dict[int, dict] = {}
+    s13 = d.S[13]
+    for v in range(ir.u16(d.blob, s13)):
+        record = ir.u24(d.blob, s13 + 8 + 3 * v) - BASE
+        for t in range(ir.u16(d.blob, record + 4)):
+            at = record + 7 + 8 * t
+            frm = int.from_bytes(d.blob[at + 1:at + 3], "little", signed=True)
+            to = int.from_bytes(d.blob[at + 3:at + 5], "little", signed=True)
+            transitions.setdefault(v, {})[(frm, to)] = (d.blob[at + 7], ir.u16(d.blob, at + 5))
+
+    def sends(op, operand):
+        stack, groups = [(op, operand)], set()
+        while stack:
+            o, x = stack.pop()
+            if o == 0x7D:
+                groups.add(x >> 8)
+            elif o == 0x7F:
+                stack.extend(d.ins(x))
+        return groups
+
+    candidates = []
+    for i in range(d.n_actions):
+        ins = d.ins(i)
+        vars_ = [o - 0x80 for o, x in ins if 0x80 <= o < 0x100 and x == 0]
+        if len(ins) >= 2 and len(vars_) == len(ins) and all(
+                (1, 0) in transitions.get(v, {}) for v in vars_):
+            candidates.append(vars_)
+    if not candidates:
+        return {}
+    all_off = max(candidates, key=len)
+    out = {}
+    for v in all_off:
+        groups = sends(*transitions[v][(1, 0)]) & set(by_group)
+        if len(groups) == 1:
+            out[by_group[groups.pop()]] = v
+    return out
+
+
+def _clone_program(d: _Doc, root: int, rid: str, replace) -> list[dict]:
+    """Regions copying a screen program. replace(x, y, text) returns None to keep
+    a string, False to drop it, or (x, y, codes) to draw instead."""
+    out = []
+    for seq, item in enumerate(sem.screen_program_path(d.blob, root)):
+        op, ops = item["opcode"], item["operands"]
+        name = f"{rid}_{seq:02d}"
+        if op == 3:
+            out.append(fresh_region("screen_picture", name, coordinates=list(ops[:6]),
+                                    targets=[symbol_for_offset(d.doc, ir.u24(ops, 6) - BASE)]))
+            continue
+        if op in (4, 5):
+            codes = renderer_string(d, item)
+            text = "".join(d.alphabet.get(c, "?") for c in codes)
+            r = replace(ops[0], ops[1], text)
+            if r is False:
+                continue
+            if r is not None:
+                out.append(_draw(r[0], r[1], r[2], name))
+                continue
+            if op == 4:
+                out.append(fresh_region("screen_reference", name, opcode="0x04", x=ops[0], y=ops[1],
+                                        targets=[symbol_for_offset(d.doc, ir.u24(ops, 2) - BASE)]))
+                continue
+        out.append(opaque(name, bytes((op,)) + ops))
+    return out
+
+
+def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
+                 writes: dict | None = None) -> bytes:
+    """Add an activity built like an existing one.
+
+    It copies `like`'s key set (so its keys do what `like`'s do), its Devices
+    screen, its start and status screens with the name changed, and its start
+    chain, but switches on the devices in `on` and every other device with a
+    power variable off, then makes the state writes in `writes` (variable ->
+    value, e.g. a TV input request). The menu gets it in the first free corner,
+    a new page when the menu is full. Value: the variable's highest plus one,
+    idle unchanged (@dannybloe, section 273; FORMAT 5af)."""
+    d = _Doc(raw)
+    blob, S = d.blob, d.S
+    acts = activities(raw)
+    src = [x for x in acts if x.name == like]
+    if len(src) != 1:
+        raise ComposeError(f"no single activity named {like!r}: {[x.name for x in acts]}")
+    src = src[0]
+    if any(x.name == name for x in acts):
+        raise ComposeError(f"there is already an activity named {name!r}")
+    power = power_variables(raw)
+    unknown = [n for n in on if n not in power]
+    if unknown:
+        raise ComposeError(f"no power variable for {unknown}; devices with one: {sorted(power)}")
+    state_writes = [(power[n], 1 if n in on else 0) for n in sorted(power, key=lambda n: power[n])]
+    state_writes += sorted((writes or {}).items())
+    for var, value in state_writes:
+        if not 0 <= var < 0x80 - 0x10 or value > 0xFFFF:
+            raise ComposeError(f"state write {var} := {value}")
+    cas = [o - 0x80 for o, x in d.ins(src.start) if o == 0x8F] or [None]
+    cas_var = 0x8F - 0x80
+    s13 = S[13]
+    cas_record = ir.u24(blob, s13 + 8 + 3 * cas_var) - BASE
+    idle, top = ir.u16(blob, cas_record), ir.u16(blob, cas_record + 2)
+    if sorted(x.value for x in acts) + [idle] != list(range(top + 1)) and len(acts) != top:
+        raise ComposeError("the activity values are not 0..max with one idle value")
+    value = top + 1
+    menu = _menu_mode(d)
+    n_sets = blob[S[9]]
+    new_set = n_sets
+    if new_set > 0xFF:
+        raise ComposeError("key sets are numbered in one byte")
+
+    # ---- new modes: start screen, work screen, and the status screens that return to it ----
+    next_mode = d.n_modes
+    mode_map = {}                       # old mode -> new mode, for the ones copied
+    new_mode_regions, mode_copies, mode_lists_sec8 = [], [], []
+
+    def returns_to(mode_index, target):
+        f = d.mode(mode_index)
+        return any(op == 0x7E and v == target for _, op, v in cmp.tagged(blob, f["start"]))
+
+    title = d.text(name, limit=96)
+    fixed = {"Starting", "Please keep the", "remote pointed at", "your system."}
+
+    def name_replace(kind):
+        state = {"done": False}
+        def replace(x, y, text):
+            if kind == "work":
+                return ((96 - d.width(title)) // 2, y, title) if y == 0 else None
+            if kind == "start":
+                if text in fixed:
+                    return None
+                if y == 0:
+                    return None
+                if not state["done"] or state["y"] == y:
+                    state.update(done=True, y=y)
+                    return ((96 - d.width(title)) // 2, y, title)
+                return False
+            return None
+        return replace
+
+    def copy_mode(old, kind):
+        if old in mode_map:
+            return mode_map[old]
+        nonlocal next_mode
+        new = next_mode
+        next_mode += 1
+        mode_map[old] = new
+        f = d.mode(old)
+        lst = d.region(f["start"], "tagged_list")
+        entries = copy.deepcopy(lst["entries"])
+        ml = fresh_region("tagged_list", f"act{value}_m{new}_list", wide=lst.get("wide", True),
+                          entries=entries, **({"role": lst["role"]} if "role" in lst else {}))
+        pages, programs = [], []
+        for k, p in enumerate(f["pages"]):
+            pl_src = d.region(p["list"], "tagged_list")
+            pl = fresh_region("tagged_list", f"act{value}_m{new}_p{k}_list", section=8,
+                              wide=pl_src.get("wide", False), entries=copy.deepcopy(pl_src["entries"]))
+            prog = _clone_program(d, p["program"], f"act{value}_m{new}_p{k}", name_replace(kind))
+            record = fresh_region("mode_page", f"act{value}_m{new}_p{k}",
+                                  targets=[{"to": pl["id"]}, {"to": prog[0]["id"]}])
+            programs += [*prog, record]
+            pages.append(record)
+            mode_lists_sec8.append(pl)
+            mode_copies.append(fresh_region("tagged_list", f"act{value}_m{new}_p{k}_copy",
+                                            wide=pl_src.get("wide", False), role="page_binding_copy",
+                                            entries=copy.deepcopy(pl_src["entries"])))
+        entry = fresh_region("record_header", f"act{value}_m{new}_entry",
+                             back_reference={"to": ml["id"]}, targets=[{"to": r["id"]} for r in pages])
+        new_mode_regions.extend([ml, *programs, entry])
+        return new
+
+    work = copy_mode(src.work_mode, "work")
+    start_mode = copy_mode(src.start_mode, "start")
+    # status screens a chain shows that come back to the source's screen
+    def chain_modes(index, seen=None):
+        seen = seen or set()
+        out = set()
+        for o, v in d.ins(index):
+            if o == 0x7E:
+                out.add(v)
+            elif o == 0x7F and v not in seen:
+                seen.add(v)
+                out |= chain_modes(v, seen)
+        return out
+    status = {m for m in chain_modes(src.start) | (chain_modes(src.repick) if src.repick is not None else set())
+              if m not in (src.work_mode, src.start_mode) and returns_to(m, src.work_mode)}
+    for m in sorted(status):
+        copy_mode(m, "status")
+    # copied modes' keys that went back to the source's screen go to the new one
+    for region in new_mode_regions:
+        if region["kind"] == "tagged_list":
+            for e in region["entries"]:
+                if e["opcode"] == 0x7E and e["operand"] == src.work_mode:
+                    e["operand"] = work
+
+    # ---- action lists ----
+    next_action = d.n_actions
+    new_actions = []
+    copied = {}
+
+    def needs_copy(index, seen=None):
+        seen = seen or set()
+        for o, v in d.ins(index):
+            if o == 0x7E and v in mode_map:
+                return True
+            if o == 0x7F and v not in seen:
+                seen.add(v)
+                if needs_copy(v, seen):
+                    return True
+        return False
+
+    def copy_list(index):
+        if index in copied:
+            return copied[index]
+        nonlocal next_action
+        new = next_action
+        next_action += 1
+        copied[index] = new
+        ins = []
+        for o, v in d.ins(index):
+            if o == 0x7E and v in mode_map:
+                v = mode_map[v]
+            elif o == 0x7F and needs_copy(v):
+                v = copy_list(v)
+            ins.append((o, v))
+        new_actions.append((new, ins))
+        return new
+
+    def make_list(ins):
+        nonlocal next_action
+        new = next_action
+        next_action += 1
+        new_actions.append((new, ins))
+        return new
+
+    src_start = d.ins(src.start)
+    tail = src_start[-1]
+    if tail[0] != 0x7F:
+        raise ComposeError("the source's start list does not end in its chain")
+    start_ins = [(0x7E, start_mode)] + [(0x80 + var, val) for var, val in state_writes] + \
+        [(0x8F, value), (0x7F, copy_list(tail[1]) if needs_copy(tail[1]) else tail[1])]
+    start_list = make_list(start_ins)
+    repick_list = None
+    if src.repick is not None:
+        src_re = d.ins(src.repick)
+        if src_re[-1][0] != 0x7F:
+            raise ComposeError("the source's re-pick list does not end in its chain")
+        re_ins = [(0x80 + var, val) for var, val in sorted((writes or {}).items())]
+        re_ins.append((0x7F, copy_list(src_re[-1][1]) if needs_copy(src_re[-1][1]) else src_re[-1][1]))
+        repick_list = make_list(re_ins)
+    menu_list_index = make_list([(0x1F, 0xFF00 | new_set), (0x92, 0)])
+
+    def action_region(index, ins):
+        return fresh_region("action_list", f"act{value}_action_{index}",
+                            instructions=[{"operand": v, "opcode": f"0x{o:02X}"} for o, v in ins])
+    # copy_list numbers a list before its children and finishes it after them
+    new_actions.sort()
+    if [i for i, _ in new_actions] != list(range(d.n_actions, next_action)):
+        raise AssertionError("new action lists are not numbered contiguously")
+    action_regions = [action_region(i, ins) for i, ins in new_actions]
+
+    # ---- section 9: the key set ----
+    src_set_at = ir.u24(blob, S[9] + 1 + 3 * src.key_set) - BASE
+    src_set = d.region(src_set_at, "tagged_list")
+    set_entries = copy.deepcopy(src_set["entries"])
+    for e in set_entries:
+        if e["tag"] == 1:
+            e["operand"] = start_list
+        elif e["tag"] == 5 and repick_list is not None:
+            e["operand"] = repick_list
+    set_region = fresh_region("tagged_list", f"act{value}_key_set", wide=src_set.get("wide", False),
+                              role="section_9_binding", entries=set_entries)
+
+    # ---- section 14: every record that knows the source's value gets the new one ----
+    s11_table = d.region(S[11], "pointer_table")
+    new_streams = []
+    def stream(op, operand, tag):
+        a = fresh_region("screen_instruction", f"act{value}_s11_{tag}", opcode="0x11",
+                         operands=(operand.to_bytes(2, "little") + bytes((op,))).hex())
+        z = fresh_region("screen_instruction", f"act{value}_s11_{tag}_end", opcode="0x00", operands="")
+        new_streams.extend([a, z])
+        s11_table["targets"].append({"to": a["id"]})
+        return a["id"]
+    made = {}
+    s14 = S[14]
+    for k in range(blob[s14]):
+        record = ir.u24(blob, s14 + 1 + 3 * k) - BASE
+        n = blob[record + 1]
+        keys = {ir.u16(blob, record + 2 + 5 * j): ir.u24(blob, record + 4 + 5 * j) - BASE for j in range(n)}
+        if src.value not in keys or value in keys:
+            continue
+        target = keys[src.value]
+        op, operand = blob[target + 3], ir.u16(blob, target + 1)
+        if blob[target] != 0x11:
+            raise ComposeError(f"section 14 record {k} points at something that is not a stream")
+        if op == 0x7E and operand in mode_map:
+            sid = made.setdefault(("7e", mode_map[operand]), stream(0x7E, mode_map[operand], f"m{mode_map[operand]}"))
+        elif op == 0x1F and operand == 0xFF00 | src.key_set:
+            sid = made.setdefault(("1f", new_set), stream(0x1F, 0xFF00 | new_set, f"set{new_set}"))
+        elif op == 0x7F and needs_copy(operand):
+            raise ComposeError(f"section 14 record {k} runs a list that would need copying")
+        else:
+            sid = next(r for r in d.at[target] if r["kind"] == "screen_instruction")["id"]
+        head = next(r for r in d.regions if "data" in r and r["offset"] <= record + 1 < r["offset"] + r["length"])
+        data = bytearray(bytes.fromhex("".join(head["data"])))
+        data[record + 1 - head["offset"]] = n + 1
+        head["data"] = hconfig._hex_lines(bytes(data))
+        last_ptr = record + 4 + 5 * (n - 1)
+        i = d.index_of(next(r for r in d.at[last_ptr] if r["kind"] == "raw_pointer"))
+        d.regions[i + 1:i + 1] = [opaque(f"act{value}_s14_{k}_key", value.to_bytes(2, "little")),
+                                  fresh_region("raw_pointer", f"act{value}_s14_{k}_ptr", targets=[{"to": sid}])]
+    if new_streams:
+        last = max(i for i, r in enumerate(d.regions) if r["kind"] == "screen_instruction"
+                   and r.get("opcode") in ("0x11", "0x00") and S[11] > r["offset"] and any(
+                       t["to"] == r["id"] for t in s11_table["targets"][:ir.u16(blob, S[11])]))
+        d.regions[last + 2:last + 2] = new_streams
+
+    # ---- CurrentActivityState's highest value ----
+    _patch_bytes(d, cas_record + 2, value.to_bytes(2, "little"))
+
+    # ---- the menu: first free corner, or a new page ----
+    menu_pages = d.mode(menu)["pages"]
+    corner, page = None, None
+    for k, p in enumerate(menu_pages):
+        used = {t for t, _, _ in cmp.tagged(blob, p["list"])}
+        free = [i for i, tag in enumerate(SOFT) if tag not in used]
+        if free:
+            corner, page = free[0], k
+            break
+    entry_select = {"tag": SOFT[corner if corner is not None else 0], "operand": menu_list_index, "opcode": 0x7F}
+    menu_regions = []
+    if corner is not None:
+        p = menu_pages[page]
+        twin = d.pool_copy(p["list"])
+        d.region(p["list"], "tagged_list")["entries"].append(dict(entry_select))
+        twin["entries"].append(dict(entry_select))
+        ends = d.band_ends(p["program"])
+        draws = _corner_draws(d, corner, name, f"act{value}_menu")
+        for band in sorted(draws, reverse=True):
+            d.insert_before(ends[band], draws[band])
+    else:
+        corner, page = 0, len(menu_pages)
+        if page >= 6:
+            raise ComposeError("the activity menu would get a seventh page")
+        program = _blank_devices_page(d, menu_pages[0]["program"], f"act{value}_menu_screen")
+        _insert_in_program(program, _corner_draws(d, 0, name, f"act{value}_menu"))
+        _insert_in_program(program, {7: [
+            opaque(f"act{value}_menu_cf", b"\x10\x04"),
+            _draw(35, 56, bytes((COUNTER_DIGIT[page + 1],)), f"act{value}_menu_cc"),
+            _draw(47, 56, COUNTER_OF, f"act{value}_menu_co"),
+            _draw(65, 56, bytes((COUNTER_DIGIT[page + 1],)), f"act{value}_menu_ct")]})
+        mlist = fresh_region("tagged_list", f"act{value}_menu_list", section=8, wide=False,
+                             entries=[entry_select])
+        record = fresh_region("mode_page", f"act{value}_menu_page",
+                              targets=[{"to": mlist["id"]}, {"to": program[0]["id"]}])
+        menu_regions = [*program, record]
+        mode_lists_sec8.append(mlist)
+        d.region(d.mode(menu)["entry"], "record_header")["targets"].append({"to": record["id"]})
+        after = d.pool_copy(menu_pages[-1]["list"])
+        d.regions.insert(d.index_of(after) + 1,
+                         fresh_region("tagged_list", f"act{value}_menu_copy", wide=False,
+                                      role="page_binding_copy", entries=[dict(entry_select)]))
+        _set_counters(d, {p["program"]: (k + 1, page + 1) for k, p in enumerate(menu_pages)},
+                      f"act{value}_menu_counter")
+
+    # ---- tables and placement ----
+    d.region(S[sem.MODE_SLOT], "pointer_table")["targets"].extend(
+        {"to": r["id"]} for r in new_mode_regions if r["kind"] == "record_header")
+    d.region(S[sem.ACTION_SLOT], "pointer_table")["targets"].extend({"to": r["id"]} for r in action_regions)
+    d.region(S[9], "pointer_table")["targets"].append({"to": set_region["id"]})
+    last_set = ir.u24(blob, S[9] + 1 + 3 * (n_sets - 1)) - BASE
+    d.regions.insert(d.index_of(d.region(last_set, "tagged_list")) + 1, set_region)
+    first_set = ir.u24(blob, S[9] + 1 + 3 * 4) - BASE
+    i4 = d.index_of(d.region(first_set, "tagged_list"))
+    d.regions[i4:i4] = mode_copies
+    s9 = next(i for i, r in enumerate(d.regions) if r.get("section") == 9)
+    d.regions[s9:s9] = mode_lists_sec8
+    s0 = next(i for i, r in enumerate(d.regions) if r.get("section") == 0)
+    d.regions[s0:s0] = [*action_regions, *new_mode_regions, *menu_regions]
+    out = d.compile()
+
+    # ---- checks ----
+    after_doc = _Doc(out)
+    a = after_doc.blob
+    if not all(d.ins(i) == after_doc.ins(i) for i in range(d.n_actions)):
+        raise AssertionError("an existing action list changed")
+    for i, ins in new_actions:
+        if after_doc.ins(i) != ins:
+            raise AssertionError(f"new action list {i}")
+    got = [x for x in activities(out) if x.name == name]
+    if len(got) != 1:
+        raise AssertionError(f"the menu does not list {name!r}: {[x.name for x in activities(out)]}")
+    got = got[0]
+    if (got.value, got.key_set, got.start, got.start_mode, got.work_mode) != \
+            (value, new_set, start_list, start_mode, work):
+        raise AssertionError(f"activity reads back as {got}")
+    for k in range(a[after_doc.S[14]]):
+        record = ir.u24(a, after_doc.S[14] + 1 + 3 * k) - BASE
+        keys = {ir.u16(a, record + 2 + 5 * j) for j in range(a[record + 1])}
+        if (src.value in keys) != (value in keys):
+            raise AssertionError(f"section 14 record {k} knows one value and not the other")
+    old = {x.name: x for x in acts}
+    for x in activities(out):
+        if x.name != name and x != old[x.name]:
+            raise AssertionError(f"activity {x.name} changed")
+    r0, r1 = render_map(blob), render_map(a)
+    changed = [k for k in r0 if k[0] != menu and r0[k][0] != r1[k][0]]
+    if changed:
+        raise AssertionError(f"screens changed that should not have: {changed}")
+    _check_container(out)
+    return out
