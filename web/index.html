@@ -125,6 +125,29 @@
         <button>Delete</button>
       </form>
 
+      <form id="f-move-device" class="panel">
+        <h3>Move a device</h3>
+        <select id="mv-device"></select>
+        <div class="row">
+          <label>to page <select id="mv-device-page"></select></label>
+          <label>corner <select id="mv-device-corner"></select></label>
+        </div>
+        <p class="hint">A device already there swaps places with it. Every Devices screen, each
+          activity's too, gets the same order.</p>
+        <button>Move</button>
+      </form>
+
+      <form id="f-move-activity" class="panel">
+        <h3>Move an activity</h3>
+        <select id="mv-activity"></select>
+        <div class="row">
+          <label>to page <select id="mv-activity-page"></select></label>
+          <label>corner <select id="mv-activity-corner"></select></label>
+        </div>
+        <p class="hint">An activity already there swaps places with it.</p>
+        <button>Move</button>
+      </form>
+
       <form id="f-del-activity" class="panel">
         <h3>Delete an activity</h3>
         <select id="del-activity"></select>

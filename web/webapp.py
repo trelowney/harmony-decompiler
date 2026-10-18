@@ -96,6 +96,14 @@ def op_delete_device(container: bytes, mode: int) -> bytes:
     return compose525.delete_device(bytes(container), int(mode))
 
 
+def op_place_device(container: bytes, mode: int, page: int, corner: int) -> bytes:
+    return compose525.place_device(bytes(container), int(mode), int(page), int(corner))
+
+
+def op_place_activity(container: bytes, name: str, page: int, corner: int) -> bytes:
+    return compose525.place_activity(bytes(container), str(name), int(page), int(corner))
+
+
 def op_delete_activity(container: bytes, name: str) -> bytes:
     return compose525.delete_activity(bytes(container), str(name))
 

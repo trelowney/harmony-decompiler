@@ -104,6 +104,18 @@ function show() {
   del.replaceChildren();
   for (const d of s.devices) del.append(option(d.mode, d.name));
   $("f-del-device").querySelector("button").disabled = !del.options.length;
+  const pagesOf = (items) => Math.max(...items.map((x) => x.page)) + 1;
+  const fillMove = (itemSelect, pageSelect, cornerSelect, items, value, label) => {
+    itemSelect.replaceChildren(...items.map((x) => option(value(x), label(x))));
+    const n = items.length ? pagesOf(items) : 1;
+    pageSelect.replaceChildren(...[...Array(Math.min(n + 1, 6)).keys()].map((k) =>
+      option(k, k < n ? `${k + 1}` : `${k + 1} (new)`)));
+    cornerSelect.replaceChildren(...CORNERS.map((c, i) => option(i, c)));
+  };
+  fillMove($("mv-device"), $("mv-device-page"), $("mv-device-corner"), s.devices,
+    (x) => x.mode, (x) => `${x.name} (page ${x.page + 1}, ${CORNERS[x.corner]})`);
+  fillMove($("mv-activity"), $("mv-activity-page"), $("mv-activity-corner"), s.activities,
+    (x) => x.name, (x) => `${x.name} (page ${x.page + 1}, ${CORNERS[x.corner]})`);
   const delA = $("del-activity");
   delA.replaceChildren(...s.activities.map((a) => option(a.name, a.name)));
   const like = $("act-like");
@@ -310,6 +322,23 @@ async function main() {
     const select = $("del-device");
     const name = select.options[select.selectedIndex]?.textContent;
     change(`delete ${name}`, (bytes) => webapp.op_delete_device(bytes, Number(select.value)));
+  });
+
+  $("f-move-device").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const sel = $("mv-device");
+    const name = sel.options[sel.selectedIndex]?.textContent.replace(/ \(page.*$/, "");
+    const page = Number($("mv-device-page").value), corner = Number($("mv-device-corner").value);
+    change(`move ${name} to page ${page + 1}, ${CORNERS[corner]}`,
+      (bytes) => webapp.op_place_device(bytes, Number(sel.value), page, corner));
+  });
+
+  $("f-move-activity").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const name = $("mv-activity").value;
+    const page = Number($("mv-activity-page").value), corner = Number($("mv-activity-corner").value);
+    change(`move ${name} to page ${page + 1}, ${CORNERS[corner]}`,
+      (bytes) => webapp.op_place_activity(bytes, name, page, corner));
   });
 
   $("f-del-activity").addEventListener("submit", (event) => {

@@ -212,6 +212,25 @@ def main() -> int:
             return 1
     print(f"PASS each of the sample's {len(before)} devices deleted, activities kept, "
           "the device gone from every Devices screen and the all-off list")
+
+    # moving: a swap across pages, a move into an empty corner, a new menu page
+    pos = lambda r: {x.name: (x.page, x.corner) for x in c.devices(r)}
+    pc = next(x for x in c.devices(composed) if x.name == "PC")
+    moved = c.place_device(composed, pc.mode, 0, 3)
+    p = pos(moved)
+    if p["PC"] != (0, 3) or p["XBOX 360"] != (1, 1):
+        print(f"FAIL swapping PC onto page 1: {p}")
+        return 1
+    amp = next(x for x in c.devices(moved) if x.name == "Amplifier Genius")
+    moved = c.place_device(moved, amp.mode, 1, 2)
+    if pos(moved)["Amplifier Genius"] != (1, 2):
+        print(f"FAIL moving into an empty corner: {pos(moved)}")
+        return 1
+    moved = c.place_activity(moved, "Play on XBOX", 1, 0)
+    if {a.name: (a.page, a.corner) for a in c.activities(moved)}["Play on XBOX"] != (1, 0):
+        print("FAIL moving an activity to a new menu page")
+        return 1
+    print("PASS devices swapped across pages and moved, an activity moved to a new menu page")
     return 0
 
 

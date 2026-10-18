@@ -335,10 +335,12 @@ def _set_counters(d: _Doc, programs: dict[int, tuple[int, int]], prefix: str) ->
 
 
 def _name_lines(d: _Doc, name: str) -> list[bytes]:
+    # a line already cut short ("Panason..", as Logitech drew it) is kept as it is
+    fit = lambda s: d.text(s, limit=None if s.endswith("..") else HALF_WIDTH)
     words = name.split(" ", 1)
     if len(words) == 2 and d.width(d.text(name, limit=None)) > HALF_WIDTH:
-        return [d.text(words[0]), d.text(words[1])]
-    return [d.text(name)]
+        return [fit(words[0]), fit(words[1])]
+    return [fit(name)]
 
 
 def _corner_draws(d: _Doc, corner: int, name: str, rid: str) -> dict[int, list[dict]]:
@@ -378,6 +380,8 @@ def _blank_devices_page(d: _Doc, template_root: int, rid: str,
                                         targets=[symbol_for_offset(d.doc, ir.u24(ops, 2) - BASE)]))
             else:
                 out.append(opaque(name, bytes((op,)) + ops))
+        elif op == 0x10 and bytes(ops) == b"\x04":
+            continue              # the page counter's font; a counter added brings its own
         elif op == 0x10 and bytes(ops) == b"\x03" and title is not None:
             # font 3 has its own glyph numbering; a new title is drawn in font 0,
             # as the August device pages were and the remote showed them
@@ -2192,5 +2196,212 @@ def delete_activity(raw: bytes, name: str) -> bytes:
             continue
         if r1.get((modes.get(m, m), p), (None,))[0] != value[0]:
             raise AssertionError(f"screen of mode {m} page {p} changed")
+    _check_container(out)
+    return out
+
+
+# --------------------------------------------------------- moving and swapping ---
+# A Devices screen and the activity menu are pages of four corners, each corner a
+# soft key bound to a list that opens a device or starts an activity, and a name
+# drawn beside it. A layout is that as data: pages of four, each None or
+# (list, name). Moving an item rewrites the pages it touches from the layout.
+
+def _apply_corner_layout(d: _Doc, modes: list, layout: list, prefix: str) -> set:
+    """Make every page of `modes` follow `layout`. A page record shared by the
+    modes is rewritten once; each mode's own first page (the Devices screen of
+    each activity) gets the first page of the layout, so they all agree. Pages
+    past the layout go, missing ones are added and shared. Returns `gone`."""
+    gone: set = set()
+    n = len(layout)
+    if not 1 <= n <= 6:
+        raise ComposeError("one to six pages")
+    first_mode = d.mode(modes[0])
+    template = first_mode["pages"][0]["program"]
+    records: dict = {}
+    for m in modes:
+        for k, p in enumerate(d.mode(m)["pages"]):
+            records.setdefault(p["address"], (k, p))
+
+    def program_for(k, rid):
+        program = _blank_devices_page(d, template, rid)
+        draws: dict = {}
+        for c, item in enumerate(layout[k]):
+            if item is not None:
+                for band, regs in _corner_draws(d, c, item[1], f"{rid}_c{c}").items():
+                    draws.setdefault(band, []).extend(regs)
+        if n > 1:
+            draws.setdefault(7, []).extend([
+                opaque(f"{rid}_cf", b"\x10\x04"),
+                _draw(38 if k == 0 else 35, 56, bytes((COUNTER_DIGIT[k + 1],)), f"{rid}_cc"),
+                _draw(47, 56, COUNTER_OF, f"{rid}_co"),
+                _draw(65, 56, bytes((COUNTER_DIGIT[n],)), f"{rid}_ct")])
+        _insert_in_program(program, draws)
+        return program
+
+    def entries_for(k):
+        return [{"tag": SOFT[c], "operand": item[0], "opcode": 0x7F}
+                for c, item in enumerate(layout[k]) if item is not None]
+
+    for address, (k, p) in records.items():
+        record = d.region(address, "mode_page")
+        plist = d.region(p["list"], "tagged_list")
+        twin = d.pool_copy(p["list"])
+        if k >= n:
+            gone.update((record["id"], plist["id"], twin["id"]))
+            _drop_program(d, p["program"], gone)
+            for m in modes:
+                e = d.region(d.mode(m)["entry"], "record_header")
+                e["targets"] = [t for t in e["targets"] if t["to"] != record["id"]]
+            continue
+        entries = entries_for(k)
+        if not entries and k > 0:
+            raise ComposeError(f"page {k + 1} would be empty but is not the last")
+        plist["entries"] = entries
+        plist["wide"] = not entries
+        twin["entries"] = copy.deepcopy(entries)
+        twin["wide"] = not entries
+        program = program_for(k, f"{prefix}_p{k}_{address:x}")
+        first_item = sem.screen_program_path(d.blob, p["program"])[0]
+        anchor = next(r for r in d.at[first_item["offset"]] if r["kind"] != "section")
+        i = d.index_of(anchor)
+        d.regions[i:i] = program
+        _drop_program(d, p["program"], gone)
+        record["targets"][1] = {"to": program[0]["id"]}
+
+    have = len(first_mode["pages"])
+    last_list = first_mode["pages"][-1]["list"]
+    after = d.pool_copy(last_list)
+    insert_copy_at = d.index_of(after) + 1
+    new_regions = []
+    for k in range(have, n):
+        entries = entries_for(k)
+        program = program_for(k, f"{prefix}_new{k}")
+        plist = fresh_region("tagged_list", f"{prefix}_new{k}_list", section=8, wide=False, entries=entries)
+        record = fresh_region("mode_page", f"{prefix}_new{k}",
+                              targets=[{"to": plist["id"]}, {"to": program[0]["id"]}])
+        d.regions.insert(insert_copy_at, fresh_region(
+            "tagged_list", f"{prefix}_new{k}_copy", wide=False, role="page_binding_copy",
+            entries=copy.deepcopy(entries)))
+        insert_copy_at += 1
+        s9 = next(i for i, r in enumerate(d.regions) if r.get("section") == 9)
+        d.regions.insert(s9, plist)
+        new_regions += [*program, record]
+        for m in modes:
+            d.region(d.mode(m)["entry"], "record_header")["targets"].append({"to": record["id"]})
+    if new_regions:
+        s0 = next(i for i, r in enumerate(d.regions) if r.get("section") == 0)
+        d.regions[s0:s0] = new_regions
+
+    _keep_shared_strings(d, gone)
+    d.regions[:] = [r for r in d.regions if r["id"] not in gone]
+    dangling = [(r["id"], t["to"]) for r in d.regions for t in (r.get("targets") or []) if t and t["to"] in gone]
+    if dangling:
+        raise ComposeError(f"still referenced after the move: {dangling[:3]}")
+    return gone
+
+
+def _devices_layout(d: _Doc, raw: bytes) -> list:
+    idle = d.idle_devices_mode()
+    pages = d.mode(idle)["pages"]
+    layout = [[None] * 4 for _ in pages]
+    by_mode = {x.mode: x for x in devices(raw)}
+    for k, p in enumerate(pages):
+        for tag, op, v in cmp.tagged(d.blob, p["list"]):
+            if op == 0x7F and tag in SOFT:
+                target = d.selection_target(v)
+                if target in by_mode:
+                    layout[k][SOFT.index(tag)] = (v, by_mode[target].name)
+    return layout
+
+
+def _activities_layout(d: _Doc, raw: bytes) -> list:
+    menu = _menu_mode(d)
+    pages = d.mode(menu)["pages"]
+    layout = [[None] * 4 for _ in pages]
+    for a in activities(raw):
+        p = pages[a.page]
+        sel = {t: v for t, o, v in cmp.tagged(d.blob, p["list"])}[SOFT[a.corner]]
+        layout[a.page][a.corner] = (sel, a.name)
+    return layout
+
+
+def _move(layout: list, find, page: int, corner: int) -> list:
+    layout = [list(p) for p in layout]
+    here = [(k, c) for k, p in enumerate(layout) for c, item in enumerate(p) if item and find(item)]
+    if len(here) != 1:
+        raise ComposeError("no single item to move")
+    (pk, pc), = here
+    if not (0 <= corner < 4) or not (0 <= page <= len(layout)):
+        raise ComposeError(f"page {page + 1}, corner {corner} does not exist")
+    if page == len(layout):
+        layout.append([None] * 4)
+    layout[pk][pc], layout[page][corner] = layout[page][corner], layout[pk][pc]
+    while len(layout) > 1 and not any(layout[-1]):
+        layout.pop()
+    if any(not any(p) for p in layout[1:]):
+        raise ComposeError("that would leave an empty page in the middle")
+    return layout
+
+
+def place_device(raw: bytes, mode: int, page: int, corner: int) -> bytes:
+    """Put a device on Devices page `page` (0 based) in `corner` (index into
+    SOFT). A device already there takes the moved one's place; `page` one past
+    the last opens a new page. Every Devices screen, each activity's included,
+    gets the same layout, the one the remote shows with nothing running."""
+    d = _Doc(raw)
+    before = devices(raw)
+    target = [x for x in before if x.mode == mode]
+    if len(target) != 1:
+        raise ComposeError(f"mode {mode} is not on the Devices screens")
+    layout = _move(_devices_layout(d, raw), lambda item: d.selection_target(item[0]) == mode, page, corner)
+    _apply_corner_layout(d, d.devices_modes(), layout, f"place{mode}")
+    out = d.compile()
+    after = _Doc(out)
+    want = sorted((item[1], k, c) for k, p in enumerate(layout) for c, item in enumerate(p) if item)
+    got = sorted((x.name, x.page, x.corner) for x in devices(out))
+    if got != want:
+        raise AssertionError(f"layout {got} != {want}")
+    for m in after.devices_modes():
+        pages = after.mode(m)["pages"]
+        for k, p in enumerate(pages):
+            tags = {t: after.selection_target(v) for t, o, v in cmp.tagged(after.blob, p["list"]) if o == 0x7F}
+            exp = {SOFT[c]: d.selection_target(item[0]) for c, item in enumerate(layout[k]) if item}
+            if tags != exp:
+                raise AssertionError(f"Devices mode {m} page {k + 1} binds {tags}, not {exp}")
+    r0, r1 = render_map(d.blob), render_map(after.blob)
+    changed = [k for k in r0 if k[0] not in set(d.devices_modes()) and r0[k][0] != r1.get(k, (None,))[0]]
+    if changed:
+        raise AssertionError(f"screens changed that should not have: {changed}")
+    if [a.name for a in activities(out)] != [a.name for a in activities(raw)]:
+        raise AssertionError("the activities changed")
+    _check_container(out)
+    return out
+
+
+def place_activity(raw: bytes, name: str, page: int, corner: int) -> bytes:
+    """Put an activity on menu page `page` in `corner`; one already there takes
+    its place, `page` one past the last opens a new page."""
+    d = _Doc(raw)
+    acts = activities(raw)
+    if sum(a.name == name for a in acts) != 1:
+        raise ComposeError(f"no single activity named {name!r}")
+    layout = _move(_activities_layout(d, raw), lambda item: item[1] == name, page, corner)
+    menu = _menu_mode(d)
+    _apply_corner_layout(d, [menu], layout, f"placeact{len(name)}")
+    out = d.compile()
+    want = sorted((item[1], k, c) for k, p in enumerate(layout) for c, item in enumerate(p) if item)
+    got = sorted((a.name, a.page, a.corner) for a in activities(out))
+    if got != want:
+        raise AssertionError(f"menu {got} != {want}")
+    old = {a.name: (a.value, a.key_set) for a in acts}
+    if {a.name: (a.value, a.key_set) for a in activities(out)} != old:
+        raise AssertionError("an activity changed")
+    after = _Doc(out)
+    r0, r1 = render_map(d.blob), render_map(after.blob)
+    changed = [k for k in r0 if k[0] != menu and r0[k][0] != r1.get(k, (None,))[0]]
+    if changed:
+        raise AssertionError(f"screens changed that should not have: {changed}")
+    if [(x.name, x.page, x.corner) for x in devices(out)] != [(x.name, x.page, x.corner) for x in devices(raw)]:
+        raise AssertionError("the device list changed")
     _check_container(out)
     return out
