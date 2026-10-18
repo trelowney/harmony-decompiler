@@ -159,8 +159,17 @@
         <label>Name <input id="act-name" required maxlength="20"></label>
         <label>Built like <select id="act-like"></select></label>
         <fieldset><legend>Switch on</legend><div id="act-on"></div></fieldset>
-        <p class="hint">Its keys, Devices screen and inputs are the ones of the activity it is built
-          like; everything not switched on is switched off.</p>
+        <fieldset><legend>Then send, in this order</legend>
+          <div class="row">
+            <select id="act-step-device"></select>
+            <select id="act-step-command"></select>
+            <button type="button" id="act-step-add">Add</button>
+          </div>
+          <ol id="act-steps"></ol>
+        </fieldset>
+        <p class="hint">Its keys and Devices screen are the ones of the activity it is built like;
+          everything not switched on is switched off. With no commands to send it also takes that
+          activity's inputs (its TV input, say); with commands, those are what it sends.</p>
         <button>Add</button>
       </form>
 

@@ -12,6 +12,27 @@ let identity = null;
 let history = [];          // [{bytes, label}], the last one is on show
 
 const current = () => history[history.length - 1];
+let commandList = [];      // [{device, label, group, command}]
+let steps = [];            // the activity being built: [{group, command, text}]
+
+function fillStepCommands() {
+  const dev = $("act-step-device").value;
+  $("act-step-command").replaceChildren(...commandList.filter((c) => c.device === dev)
+    .map((c) => option(`${c.group}:${c.command}`, c.label)));
+}
+
+function drawSteps() {
+  const ol = $("act-steps");
+  ol.replaceChildren(...steps.map((s, i) => {
+    const li = document.createElement("li");
+    const x = document.createElement("button");
+    x.type = "button";
+    x.textContent = "×";
+    x.addEventListener("click", () => { steps.splice(i, 1); drawSteps(); });
+    li.append(`${s.text} `, x);
+    return li;
+  }));
+}
 
 function status(text, bad = false) {
   $("status").textContent = text;
@@ -96,8 +117,14 @@ function show() {
   dv.replaceChildren(row(["name", "mode", "IR group", "Devices page", "corner"], true));
   for (const d of s.devices) dv.append(row([d.name, d.mode, d.group ?? "-", d.page + 1, CORNERS[d.corner]]));
   const ac = $("activities");
-  ac.replaceChildren(row(["name", "value", "key set", "menu page", "corner"], true));
-  for (const a of s.activities) ac.append(row([a.name, a.value, a.key_set, a.page + 1, CORNERS[a.corner]]));
+  ac.replaceChildren(row(["name", "what it does", "menu page", "corner"], true));
+  for (const a of s.activities) ac.append(row([a.name, a.does, a.page + 1, CORNERS[a.corner]]));
+
+  // the commands an activity can send, by device
+  commandList = toJs(webapp.commands(bytes));
+  const devs = [...new Set(commandList.map((c) => c.device))];
+  $("act-step-device").replaceChildren(...devs.map((n) => option(n, n)));
+  fillStepCommands();
 
   // the change forms follow what is on show
   const del = $("del-device");
@@ -352,7 +379,19 @@ async function main() {
     const name = $("act-name").value.trim();
     const like = $("act-like").value;
     const on = [...$("act-on").querySelectorAll("input:checked")].map((b) => b.value);
-    change(`add activity ${name}`, (bytes) => webapp.op_add_activity(bytes, name, like, on));
+    const sendSteps = steps.map((s) => [s.group, s.command]);
+    change(`add activity ${name}`, (bytes) => webapp.op_add_activity(bytes, name, like, on, sendSteps));
+    steps = [];
+    drawSteps();
+  });
+
+  $("act-step-device").addEventListener("change", fillStepCommands);
+  $("act-step-add").addEventListener("click", () => {
+    const sel = $("act-step-command");
+    if (!sel.value) return;
+    const [group, command] = sel.value.split(":").map(Number);
+    steps.push({ group, command, text: `${$("act-step-device").value}: ${sel.options[sel.selectedIndex].textContent}` });
+    drawSteps();
   });
 
   $("f-add-device").addEventListener("submit", (event) => {

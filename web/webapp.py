@@ -55,7 +55,9 @@ def summary(container: bytes) -> dict:
     roundtrip_ok = hconfig.compile_config(hconfig.decompile(raw, "page")) == raw
     devices = [d.__dict__ for d in compose525.devices(raw)]
     try:
-        activities = [a.__dict__ for a in compose525.activities(raw)]
+        activities = [dict(a.__dict__) for a in compose525.activities(raw)]
+        for a in activities:
+            a["does"] = " · ".join(_step_text(s) for s in compose525.describe_activity(raw, a["name"]))
     except compose525.ComposeError:
         activities = []
     return {
@@ -113,8 +115,29 @@ def _py(value):
     return value.to_py() if hasattr(value, "to_py") else value
 
 
-def op_add_activity(container: bytes, name: str, like: str, on) -> bytes:
-    return compose525.add_activity(bytes(container), str(name), str(like), [str(x) for x in _py(on)])
+def op_add_activity(container: bytes, name: str, like: str, on, steps=None) -> bytes:
+    """steps: [[group, command], ...] sent after the switching, in order. With
+    steps the source activity's own inputs are not copied: the steps say it."""
+    steps = [tuple(int(v) for v in s) for s in (_py(steps) or [])]
+    return compose525.add_activity(bytes(container), str(name), str(like),
+                                   [str(x) for x in _py(on)],
+                                   writes={} if steps else None, steps=steps)
+
+
+def commands(container: bytes) -> list:
+    """Every named command: [{device, label, group, command}], for the page's
+    activity steps."""
+    out = [{"device": dev, "label": label, "group": g, "command": cmd}
+           for (g, cmd), (dev, label) in compose525.device_commands(bytes(container)).items()]
+    return sorted(out, key=lambda c: (c["device"], c["label"]))
+
+
+def _step_text(s: dict) -> str:
+    if s["kind"] == "power":
+        return f"{s['device']} {'on' if s['on'] else 'off'}"
+    if s["kind"] == "send":
+        return f"{s['device']}: {s['label']}"
+    return f"variable {s['variable']} = {s['value']}"
 
 
 def decode_capture(durations) -> dict:

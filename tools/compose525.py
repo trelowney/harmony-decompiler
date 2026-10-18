@@ -334,13 +334,39 @@ def _set_counters(d: _Doc, programs: dict[int, tuple[int, int]], prefix: str) ->
         ])
 
 
+def _fonts_at_band_ends(d: _Doc, root: int) -> dict[int, int]:
+    """The font in force at each band's closing 0x17."""
+    font, band, out = 0, -1, {}
+    for item in sem.screen_program_path(d.blob, root):
+        if item["opcode"] == 0x10:
+            font = item["operands"][0]
+        elif item["opcode"] == 0x16:
+            band = item["operands"][0]
+        elif item["opcode"] == 0x17:
+            out[band] = font
+    return out
+
+
+def _in_font_0(draws: list, font: int, rid: str) -> list:
+    """Draws spelt for font 0, put where another font is in force (a page
+    counter's, say): switch to font 0 and back around them."""
+    if font == 0 or not draws:
+        return draws
+    return [opaque(f"{rid}_f0", b"\x10\x00"), *draws, opaque(f"{rid}_fb", bytes((0x10, font)))]
+
+
 def _name_lines(d: _Doc, name: str) -> list[bytes]:
     # a line already cut short ("Panason..", as Logitech drew it) is kept as it is
     fit = lambda s: d.text(s, limit=None if s.endswith("..") else HALF_WIDTH)
-    words = name.split(" ", 1)
-    if len(words) == 2 and d.width(d.text(name, limit=None)) > HALF_WIDTH:
-        return [fit(words[0]), fit(words[1])]
-    return [fit(name)]
+    if " " not in name or d.width(d.text(name, limit=None)) <= HALF_WIDTH:
+        return [fit(name)]
+    # as many words as fit on the first line, the rest on the second
+    words = name.split(" ")
+    cut = 1
+    for k in range(1, len(words)):
+        if d.width(d.text(" ".join(words[:k]), limit=None)) <= HALF_WIDTH:
+            cut = k
+    return [fit(" ".join(words[:cut])), fit(" ".join(words[cut:]))]
 
 
 def _corner_draws(d: _Doc, corner: int, name: str, rid: str) -> dict[int, list[dict]]:
@@ -592,8 +618,9 @@ def add_device(raw: bytes, name: str, commands: Sequence[Command],
         d.region(target_page["list"], "tagged_list")["entries"].append(dict(select_entry))
         twin["entries"].append(dict(select_entry))
         ends = d.band_ends(target_page["program"])
+        fonts_at = _fonts_at_band_ends(d, target_page["program"])
         for band in sorted(draws, reverse=True):
-            d.insert_before(ends[band], draws[band])
+            d.insert_before(ends[band], _in_font_0(draws[band], fonts_at[band], f"dev{group}_b{band}"))
 
     # ---- counters on every Devices page ----
     counters = {}
@@ -1577,9 +1604,12 @@ def _clone_program(d: _Doc, root: int, rid: str, replace) -> list[dict]:
     """Regions copying a screen program. replace(x, y, text) returns None to keep
     a string, False to drop it, or (x, y, codes) to draw instead."""
     out = []
+    font = 0
     for seq, item in enumerate(sem.screen_program_path(d.blob, root)):
         op, ops = item["opcode"], item["operands"]
         name = f"{rid}_{seq:02d}"
+        if op == 0x10:
+            font = ops[0]
         if op == 3:
             out.append(fresh_region("screen_picture", name, coordinates=list(ops[:6]),
                                     targets=[symbol_for_offset(d.doc, ir.u24(ops, 6) - BASE)]))
@@ -1591,7 +1621,12 @@ def _clone_program(d: _Doc, root: int, rid: str, replace) -> list[dict]:
             if r is False:
                 continue
             if r is not None:
+                # new text is spelt for font 0; another font may lack its glyphs
+                if font != 0:
+                    out.append(opaque(f"{name}_f0", b"\x10\x00"))
                 out.append(_draw(r[0], r[1], r[2], name))
+                if font != 0:
+                    out.append(opaque(f"{name}_fb", bytes((0x10, font))))
                 continue
             if op == 4:
                 out.append(fresh_region("screen_reference", name, opcode="0x04", x=ops[0], y=ops[1],
@@ -1601,8 +1636,100 @@ def _clone_program(d: _Doc, root: int, rid: str, replace) -> list[dict]:
     return out
 
 
+def device_commands(raw: bytes) -> dict:
+    """(group, command) -> (device name, label), for every command a device's
+    keys or soft keys send: the soft key's label as the screen draws it, or the
+    525 key's name. What a person would call the command."""
+    d = _Doc(raw)
+    keys = {v: k for k, v in KEYS.items()}
+    out: dict = {}
+    for dev in devices(raw):
+        f = d.mode(dev.mode)
+        soft = []
+        for p in f["pages"]:
+            drawn = [(it["operands"][0], it["operands"][1], renderer_string(d, it))
+                     for it in sem.screen_program_path(d.blob, p["program"]) if it["opcode"] in (4, 5)]
+            for tag, op, v in cmp.tagged(d.blob, p["list"]):
+                if op != 0x7F or tag not in SOFT:
+                    continue
+                c = SOFT.index(tag)
+                rows = (13, 16, 24) if c < 2 else (35, 46)
+                # one line per y: Logitech draws a line again in every band it crosses
+                lines = {}
+                for x, y, codes in sorted(drawn, key=lambda t: t[1]):
+                    if y in rows and (x >= 48) == (c in (1, 3)):
+                        lines.setdefault(y, "".join(d.alphabet.get(ch, "?") for ch in codes))
+                words = list(lines.values())
+                soft.append((v, " ".join(words) or f"soft key {c}"))
+        phys = [(v, keys.get(tag, f"key 0x{tag:X}")) for tag, op, v in cmp.tagged(d.blob, f["start"])
+                if op == 0x7F]
+        for v, label in soft + phys:
+            sends = [(o, x) for o, x in d.ins(v) if o == 0x7D]
+            if len(sends) == 1:
+                g, cmd = sends[0][1] >> 8, sends[0][1] & 0xFF
+                out.setdefault((g, cmd), (dev.name, label))
+    return out
+
+
+def describe_activity(raw: bytes, name: str) -> list:
+    """What an activity's start does, as steps a person can read: devices
+    switched on and off, commands sent, with their names. Follows the state
+    variables it writes through their transitions to the commands they send,
+    which is how a TV gets to "Input Hdmi1" (FORMAT 5af)."""
+    d = _Doc(raw)
+    act = [a for a in activities(raw) if a.name == name]
+    if len(act) != 1:
+        raise ComposeError(f"no single activity named {name!r}")
+    act = act[0]
+    power = {v: n for n, v in power_variables(raw).items()}
+    labels = device_commands(raw)
+    by_group = {x.group: x.name for x in devices(raw)}
+    transitions: dict = {}
+    s13 = d.S[13]
+    for v in range(ir.u16(d.blob, s13)):
+        record = ir.u24(d.blob, s13 + 8 + 3 * v) - BASE
+        for t in range(ir.u16(d.blob, record + 4)):
+            at = record + 7 + 8 * t
+            frm = int.from_bytes(d.blob[at + 1:at + 3], "little", signed=True)
+            to = int.from_bytes(d.blob[at + 3:at + 5], "little", signed=True)
+            transitions.setdefault(v, []).append((frm, to, d.blob[at + 7], ir.u16(d.blob, at + 5)))
+    steps: list = []
+
+    def send(operand):
+        g, cmd = operand >> 8, operand & 0xFF
+        dev, label = labels.get((g, cmd), (by_group.get(g, f"group {g}"), f"command {cmd}"))
+        steps.append({"kind": "send", "device": dev, "label": label, "group": g, "command": cmd})
+
+    def run(op, operand, depth=0, seen=None):
+        seen = seen if seen is not None else set()
+        if depth > 8:
+            return
+        if op == 0x7D:
+            send(operand)
+        elif op == 0x7F and operand not in seen:
+            seen.add(operand)
+            ins = d.ins(operand)
+            if any(o in (0x3F, 0x71) for o, _ in ins):
+                return            # the chain to the activity's screen
+            for o, x in ins:
+                run(o, x, depth + 1, seen)
+        elif 0x80 <= op < 0x100 and op != 0x8F:
+            v = op - 0x80
+            if v in power:
+                steps.append({"kind": "power", "device": power[v], "on": bool(operand)})
+                return
+            matched = [(o, x) for frm, to, o, x in transitions.get(v, []) if to == operand]
+            if not matched:
+                steps.append({"kind": "set", "variable": v, "value": operand})
+            for o, x in matched:
+                run(o, x, depth + 1, seen)
+    for op, operand in d.ins(act.start):
+        run(op, operand)
+    return steps
+
+
 def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
-                 writes: dict | None = None) -> bytes:
+                 writes: dict | None = None, steps: Sequence = ()) -> bytes:
     """Add an activity built like an existing one.
 
     It copies `like`'s key set (so its keys do what `like`'s do), its Devices
@@ -1778,8 +1905,25 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
     tail = src_start[-1]
     if tail[0] != 0x7F:
         raise ComposeError("the source's start list does not end in its chain")
+    # commands sent after the switching, in order: each its own list, a send
+    # paired with that device's usual 0x7C as every Logitech send is (Danny,
+    # section 278), called from the start the way Watch DVD calls its XBOX one
+    n_groups = len(ir.ir_groups(blob, S))
+    queue_delay = {}
+    for i in range(d.n_actions):
+        for o, x in d.ins(i):
+            if o == 0x7C:
+                queue_delay.setdefault(x >> 8, []).append(x & 0xFF)
+    step_calls = []
+    for g, cmd in steps:
+        g, cmd = int(g), int(cmd)
+        if not 0 <= g < n_groups or not 0 <= cmd < len(ir.ir_groups(blob, S)[g]):
+            raise ComposeError(f"no command {cmd} in group {g}")
+        delays = queue_delay.get(g, [1])
+        qd = max(set(delays), key=delays.count)
+        step_calls.append((0x7F, make_list([(0x7D, g << 8 | cmd), (0x7C, g << 8 | qd)])))
     start_ins = [(0x7E, start_mode)] + [(0x80 + var, val) for var, val in state_writes] + \
-        [(0x8F, value), (0x7F, copy_list(tail[1]) if needs_copy(tail[1]) else tail[1])]
+        step_calls + [(0x8F, value), (0x7F, copy_list(tail[1]) if needs_copy(tail[1]) else tail[1])]
     start_list = make_list(start_ins)
     repick_list = None
     if src.repick is not None:
@@ -1876,9 +2020,10 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
         d.region(p["list"], "tagged_list")["entries"].append(dict(entry_select))
         twin["entries"].append(dict(entry_select))
         ends = d.band_ends(p["program"])
+        fonts_at = _fonts_at_band_ends(d, p["program"])
         draws = _corner_draws(d, corner, name, f"act{value}_menu")
         for band in sorted(draws, reverse=True):
-            d.insert_before(ends[band], draws[band])
+            d.insert_before(ends[band], _in_font_0(draws[band], fonts_at[band], f"act{value}_b{band}"))
     else:
         corner, page = 0, len(menu_pages)
         if page >= 6:
@@ -1928,7 +2073,8 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
     for i, ins in new_actions:
         if after_doc.ins(i) != ins:
             raise AssertionError(f"new action list {i}")
-    got = [x for x in activities(out) if x.name == name]
+    # found by its value: a long name is drawn cut short ("A very lon..")
+    got = [x for x in activities(out) if x.value == value]
     if len(got) != 1:
         raise AssertionError(f"the menu does not list {name!r}: {[x.name for x in activities(out)]}")
     got = got[0]
@@ -1940,9 +2086,9 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
         keys = {ir.u16(a, record + 2 + 5 * j) for j in range(a[record + 1])}
         if (src.value in keys) != (value in keys):
             raise AssertionError(f"section 14 record {k} knows one value and not the other")
-    old = {x.name: x for x in acts}
+    old = {x.value: x for x in acts}
     for x in activities(out):
-        if x.name != name and x != old[x.name]:
+        if x.value != value and x != old[x.value]:
             raise AssertionError(f"activity {x.name} changed")
     r0, r1 = render_map(blob), render_map(a)
     changed = [k for k in r0 if k[0] != menu and r0[k][0] != r1[k][0]]

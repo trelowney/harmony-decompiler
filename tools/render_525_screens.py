@@ -150,12 +150,16 @@ def draw_picture(canvas, source, source_x, source_y, dest_x, dest_y, width, heig
 
 
 def draw_string(canvas, font: Font, codes: bytes, x: int, y: int) -> int:
+    # Ink only: the remote draws text over what is there, so the dotted divider
+    # between the corners stays visible under a name on the LCD (the owner, on
+    # 2026-10-18). Writing the glyph's paper pixels too used to cut it.
     start = x
     for code in codes:
         glyph = font.glyph(code)
         for gy, row in enumerate(glyph):
             for gx, value in enumerate(row):
-                put(canvas, x + gx, y + gy, value)
+                if value == INK:
+                    put(canvas, x + gx, y + gy, value)
         x += len(glyph[0])
     return x - start
 
