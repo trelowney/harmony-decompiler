@@ -33,6 +33,32 @@ def device(n: int):
     return commands, keys, lcd
 
 
+def rekey_x96(raw: bytes) -> bytes:
+    """The X96 Box re-keyed the way the owner's remote has it since 2026-10-18
+    (FORMAT 5af): its own records where they are right, three new ones on the
+    address the box's handset sends, one soft-key page."""
+    x96 = [d for d in c.devices(raw) if d.name == "X96 Box"]
+    if len(x96) != 1:
+        raise SystemExit("FAIL no X96 Box on the Devices screen")
+    records = {"0": 4, "1": 21, "2": 58, "3": 31, "4": 25, "5": 42, "6": 18, "7": 26,
+               "8": 20, "9": 59, "BACK": 30, "DOWN": 43, "LEFT": 62, "RIGHT": 15, "UP": 46,
+               "FORWARD": 14, "HOME": 44, "OK": 6, "PLAY/PAUSE": 0, "POWER": 50,
+               "REWIND": 27, "SETTINGS": 13, "VOLUME +": 33, "VOLUME -": 38}
+    commands = dict(records)
+    commands.update({n: c.nec_command(n, 0x01, code) for n, code in
+                     (("MENU", 0x4C), ("AT", 0x47), ("BACKSPACE", 0x42))})
+    keys = {"Up": "UP", "Down": "DOWN", "Left": "LEFT", "Right": "RIGHT", "OK": "OK",
+            "Exit": "BACK", "Menu": "MENU", "VolumeUp": "VOLUME +", "VolumeDown": "VOLUME -",
+            "Play": "PLAY/PAUSE", "Pause": "PLAY/PAUSE", "FastForward": "FORWARD",
+            "Rewind": "REWIND", "Guide": "HOME", "Info": "SETTINGS", "Star": "BACKSPACE",
+            "Hash": "AT", **{str(n): str(n) for n in range(10)},
+            **{k: None for k in ("ChannelUp", "ChannelDown", "Stop", "Record", "Prev",
+                                 "Red", "Green", "Yellow", "Blue", "Mute",
+                                 "SkipForward", "SkipBack")}}
+    lcd = [(("Power", "POWER"), ("Home", "HOME"), ("Settings", "SETTINGS"), ("Bksp", "BACKSPACE"))]
+    return c.rekey_device(raw, x96[0].mode, commands, keys, lcd)
+
+
 def counter_text(blob, root) -> str:
     out = []
     for item in sem.screen_program_path(blob, root):
@@ -70,6 +96,18 @@ def main() -> int:
             print(f"FAIL Devices mode {m} counters {texts}")
             return 1
     print("PASS five devices composed onto the public sample, pages and counters as expected")
+
+    sample = Path(Path(__file__).resolve().parents[1] / "samples" / "harmony525" / "config.EZHex").read_bytes()
+    rekeyed = rekey_x96(sample)
+    x96 = [d for d in c.devices(rekeyed) if d.name == "X96 Box"][0]
+    blob = hconfig.split_container(rekeyed)[2]
+    pages = mode_fields(blob, sem.section_offsets(blob), x96.mode)["pages"]
+    if len(pages) != 1:
+        print(f"FAIL X96 has {len(pages)} pages")
+        return 1
+    if args.out:
+        (args.out / "rekey-x96.EZHex").write_bytes(rekeyed)
+    print("PASS the X96 re-keyed as on the owner's remote, one page, every key checked")
     return 0
 
 

@@ -365,6 +365,43 @@ def _insert_in_program(program: list[dict], per_band: dict[int, list[dict]]) -> 
     program[:] = out
 
 
+def _device_pages(d: _Doc, prefix: str, name: str, lcd, act: dict, donor_root: int):
+    """A device's soft-key pages: (records, programs+records in layout order,
+    section 8 lists, pool copies). `act` maps a command name to its action list."""
+    title = d.text(name, limit=96)
+    records, programs, lists, copies = [], [], [], []
+    for k, page in enumerate(lcd):
+        program = _blank_devices_page(d, donor_root, f"{prefix}_p{k}_screen", title=title)
+        per_band: dict[int, list[dict]] = {}
+        for c, item in enumerate(page):
+            if item is None:
+                continue
+            codes = d.text(item[0])
+            y = 16 if c < 2 else 35
+            x = 0 if c in (0, 2) else 96 - d.width(codes)
+            for band in _bands(y):
+                per_band.setdefault(band, []).append(_draw(x, y, codes, f"{prefix}_p{k}_k{c}_b{band}"))
+        if len(lcd) > 1:
+            per_band.setdefault(7, []).extend([
+                opaque(f"{prefix}_p{k}_cf", b"\x10\x04"),
+                _draw(38 if k == 0 else 35, 56, bytes((COUNTER_DIGIT[k + 1],)), f"{prefix}_p{k}_cc"),
+                _draw(47, 56, COUNTER_OF, f"{prefix}_p{k}_co"),
+                _draw(65, 56, bytes((COUNTER_DIGIT[len(lcd)],)), f"{prefix}_p{k}_ct")])
+        _insert_in_program(program, per_band)
+        entries = [{"tag": SOFT[c], "operand": act[item[1]], "opcode": 0x7F}
+                   for c, item in enumerate(page) if item is not None]
+        plist = fresh_region("tagged_list", f"{prefix}_p{k}_list", section=8,
+                             wide=not entries, entries=entries)
+        record = fresh_region("mode_page", f"{prefix}_p{k}",
+                              targets=[{"to": plist["id"]}, {"to": program[0]["id"]}])
+        programs += [*program, record]
+        lists.append(plist)
+        copies.append(fresh_region("tagged_list", f"{prefix}_p{k}_copy", wide=not entries,
+                                   role="page_binding_copy", entries=copy.deepcopy(entries)))
+        records.append(record)
+    return records, programs, lists, copies
+
+
 # --------------------------------------------------------------- add_device ---
 
 @dataclass
@@ -482,38 +519,8 @@ def add_device(raw: bytes, name: str, commands: Sequence[Command],
                             entries=entries)
 
     # ---- the device's own pages, from a blanked device page ----
-    donor = d.mode(template)["pages"][0]["program"]
-    title = d.text(name, limit=96)
-    mode_pages, mode_programs, page_lists, copies = [], [], [], []
-    for k, page in enumerate(lcd):
-        program = _blank_devices_page(d, donor, f"dev{group}_p{k}_screen", title=title)
-        per_band: dict[int, list[dict]] = {}
-        for c, item in enumerate(page):
-            if item is None:
-                continue
-            codes = d.text(item[0])
-            y = 16 if c < 2 else 35
-            x = 0 if c in (0, 2) else 96 - d.width(codes)
-            for band in _bands(y):
-                per_band.setdefault(band, []).append(_draw(x, y, codes, f"dev{group}_p{k}_k{c}_b{band}"))
-        if len(lcd) > 1:
-            per_band.setdefault(7, []).extend([
-                opaque(f"dev{group}_p{k}_cf", b"\x10\x04"),
-                _draw(38 if k == 0 else 35, 56, bytes((COUNTER_DIGIT[k + 1],)), f"dev{group}_p{k}_cc"),
-                _draw(47, 56, COUNTER_OF, f"dev{group}_p{k}_co"),
-                _draw(65, 56, bytes((COUNTER_DIGIT[len(lcd)],)), f"dev{group}_p{k}_ct")])
-        _insert_in_program(program, per_band)
-        page_entries = [{"tag": SOFT[c], "operand": act[item[1]], "opcode": 0x7F}
-                        for c, item in enumerate(page) if item is not None]
-        plist = fresh_region("tagged_list", f"dev{group}_p{k}_list", section=8,
-                             wide=not page_entries, entries=page_entries)
-        record = fresh_region("mode_page", f"dev{group}_p{k}",
-                              targets=[{"to": plist["id"]}, {"to": program[0]["id"]}])
-        mode_programs += [*program, record]
-        page_lists.append(plist)
-        copies.append(fresh_region("tagged_list", f"dev{group}_p{k}_copy", wide=not page_entries,
-                                   role="page_binding_copy", entries=copy.deepcopy(page_entries)))
-        mode_pages.append(record)
+    mode_pages, mode_programs, page_lists, copies = _device_pages(
+        d, f"dev{group}", name, lcd, act, d.mode(template)["pages"][0]["program"])
     entry = fresh_region("record_header", f"dev{group}_mode_entry",
                          back_reference={"to": physical["id"]},
                          targets=[{"to": p["id"]} for p in mode_pages])
@@ -637,6 +644,12 @@ def _check_add_device(raw, out, name, commands, key_tags, lcd, placement, device
     changed = [k for k in r0 if r0[k][0] != r1[k][0] and k not in devices_keys]
     if changed:
         raise AssertionError(f"screens changed that should not have: {changed}")
+    _check_container(out)
+
+
+def _check_container(out: bytes) -> None:
+    """What every result must pass whatever the operation was."""
+    a = hconfig.split_container(out)[2]
     pointers = [None if p is None else p + BASE for p in cmp.section_offsets(a)]
     pooled = hconfig.arch9_record_body_regions(a, pointers)
     page_regions = hconfig.arch9_mode_page_regions(a, pointers)
@@ -647,3 +660,209 @@ def _check_add_device(raw, out, name, commands, key_tags, lcd, placement, device
         raise AssertionError("round trip")
     if int.from_bytes(a[-6:-4], "little") != hconfig.trailer_checksum(a):
         raise AssertionError("trailer checksum")
+
+
+# ------------------------------------------------------------ the inventory ---
+
+@dataclass(frozen=True)
+class Device:
+    name: str           # as the Devices screen draws it
+    mode: int
+    group: int | None   # infrared group its keys send from, None if they send none
+    page: int           # Devices page, 0 based
+    corner: int         # index into SOFT
+
+
+def devices(raw: bytes) -> list[Device]:
+    """The devices as the remote lists them, read off the Devices screens."""
+    d = _Doc(raw)
+    names = d.alphabet             # glyph code -> character
+    first = d.devices_modes()[0]
+    out = []
+    for page_index, page in enumerate(d.mode(first)["pages"]):
+        drawn = []
+        for item in sem.screen_program_path(d.blob, page["program"]):
+            if item["opcode"] in (4, 5):
+                codes = renderer_string(d, item)
+                drawn.append((item["operands"][0], item["operands"][1], codes))
+        for tag, op, value in cmp.tagged(d.blob, page["list"]):
+            if op != 0x7F or tag not in SOFT:
+                continue
+            mode = d.selection_target(value)
+            if mode is None:
+                continue
+            corner = SOFT.index(tag)
+            rows = (13, 24) if corner < 2 else (35, 46)
+            right = corner in (1, 3)
+            lines = []
+            for y in rows:
+                hits = {codes for x, yy, codes in drawn if yy == y and (x >= 48) == right}
+                lines += ["".join(names.get(c, "?") for c in codes) for codes in sorted(hits)]
+            groups = [b["group"] for b in ir.mode_bindings(d.blob, d.S, mode)]
+            group = max(set(groups), key=groups.count) if groups else None
+            out.append(Device(" ".join(lines), mode, group, page_index, corner))
+    return out
+
+
+def renderer_string(d: _Doc, item: dict) -> bytes:
+    ops = item["operands"]
+    if item["opcode"] == 4:
+        at = ir.u24(ops, 2) - BASE
+        return bytes(d.blob[at:d.blob.index(0, at)])
+    return bytes(ops[2:-1])
+
+
+# ------------------------------------------------------------ rekey_device ---
+
+def rekey_device(raw: bytes, mode: int, commands: dict, keys: dict,
+                 lcd: Sequence[Sequence] | None = None) -> bytes:
+    """Change what a device's keys send, add commands to it, and optionally
+    replace its soft-key pages.
+
+    `commands`: name -> Command (added to the device's infrared group) or int
+    (a record the group already has). `keys`: 525 key name or tag -> command
+    name, or None for a key that sends nothing; keys not named keep their
+    binding. `lcd`: new soft-key pages as in add_device, or None to keep them.
+    """
+    d = _Doc(raw)
+    blob, S = d.blob, d.S
+    found = [x for x in devices(raw) if x.mode == mode]
+    if len(found) != 1 or found[0].group is None:
+        raise ComposeError(f"mode {mode} is not a device on the Devices screens")
+    device = found[0]
+    group = device.group
+    records = ir.ir_groups(blob, S)[group]
+    new = [n for n, v in commands.items() if isinstance(v, Command)]
+    index = {}
+    for n, v in commands.items():
+        if isinstance(v, Command):
+            index[n] = len(records) + new.index(n)
+        elif isinstance(v, int) and 0 <= v < len(records):
+            index[n] = v
+        else:
+            raise ComposeError(f"{n!r}: not a Command and not a record of group {group}")
+    for n in new:
+        for stream in commands[n].streams:
+            if stream is not None and any(len(c) > SYMBOL_LIMIT for c in enc._chunks(tuple(stream))):
+                raise ComposeError(f"{n}: a symbol above {SYMBOL_LIMIT} words")
+    key_tags = {}
+    for key, n in keys.items():
+        tag = KEYS[key] if isinstance(key, str) else key
+        if n is not None and n not in index:
+            raise ComposeError(f"key {key} names no command {n!r}")
+        key_tags[tag] = n
+    if index and len(records) + len(new) > 0xFF:
+        raise ComposeError("a group holds at most 255 commands")
+
+    used = sorted({n for n in key_tags.values() if n} |
+                  {i[1] for p in (lcd or []) for i in p if i}, key=lambda n: index[n])
+    act = {n: d.n_actions + i for i, n in enumerate(used)}
+    actions = [fresh_region("action_list", f"rekey{mode}_action_{act[n]}",
+                            instructions=[{"operand": group << 8 | index[n], "opcode": "0x7D"},
+                                          {"operand": group << 8 | 1, "opcode": "0x7C"}])
+               for n in used]
+    seeds = []
+    for n in new:
+        seed, delta = _encode(commands[n], 0x060000)
+        seeds.append((commands[n], seed, delta, opaque(f"rekey{mode}_class5_{index[n]}", seed)))
+    if seeds:
+        group_region = d.region(ir.u24(blob, S[5] + 1 + 3 * group) - BASE, "ir_group")
+        group_region["targets"] += [{"to": r["id"], "delta": dl} for _, _, dl, r in seeds]
+
+    f = d.mode(mode)
+    mode_list = d.region(f["start"], "tagged_list")
+    have = {e["tag"] for e in mode_list["entries"]}
+    for tag in key_tags:
+        if tag not in have:
+            mode_list["entries"].append({"tag": tag, "operand": 0, "opcode": 0})
+    for e in mode_list["entries"]:
+        if e["tag"] in key_tags:
+            n = key_tags[e["tag"]]
+            e["operand"], e["opcode"] = (act[n], 0x7F) if n else (0, 0)
+
+    if lcd is not None:
+        if not lcd or len(lcd) > 6 or any(len(p) != 4 for p in lcd):
+            raise ComposeError("lcd is one to six pages of four soft keys")
+        donor = f["pages"][0]["program"]
+        records_, programs, lists, copies = _device_pages(d, f"rekey{mode}", device.name, lcd, act, donor)
+        gone = set()
+        for p in f["pages"]:
+            gone.add(d.region(p["address"], "mode_page")["id"])
+            plist = d.region(p["list"], "tagged_list")
+            twin = d.pool_copy(p["list"])
+            gone.update((plist["id"], twin["id"]))
+            for item in sem.screen_program_path(blob, p["program"]):
+                gone.update(r["id"] for r in d.at[item["offset"]] if r["kind"] != "section")
+                if item["opcode"] == 5:
+                    gone.update(r["id"] for r in d.at.get(item["offset"] + 3, [])
+                                if r["kind"] == "glyph_string")
+        first_copy = min(i for i, r in enumerate(d.regions) if r["id"] in gone
+                         and r.get("role") == "page_binding_copy")
+        d.regions[first_copy:first_copy] = copies
+        d.region(f["entry"], "record_header")["targets"] = [{"to": r["id"]} for r in records_]
+        d.regions[:] = [r for r in d.regions if r["id"] not in gone]
+        dangling = [r["id"] for r in d.regions for t in (r.get("targets") or [])
+                    if t and t["to"] in gone]
+        if dangling:
+            raise ComposeError(f"the old pages are still referenced from {dangling[:3]}")
+        # the compiler's layout, which the pool reader checks: a mode's key list
+        # right before its first page's screen program
+        at_list = d.index_of(mode_list)
+        d.regions[at_list + 1:at_list + 1] = programs
+        s9 = next(i for i, r in enumerate(d.regions) if r.get("section") == 9)
+        d.regions[s9:s9] = lists
+
+    d.region(S[sem.ACTION_SLOT], "pointer_table")["targets"].extend({"to": a["id"]} for a in actions)
+    s0 = next(i for i, r in enumerate(d.regions) if r.get("section") == 0)
+    d.regions[s0:s0] = [*(r for *_, r in seeds), *actions]
+    resolve, _ = hconfig._resolver(d.regions)
+    for c, seed, delta, region in seeds:
+        base = BASE + resolve({"to": region["id"]})
+        data, delta2 = _encode(c, base)
+        if len(data) != len(seed) or delta2 != delta:
+            raise AssertionError("record changed length on relocation")
+        region["data"] = hconfig._hex_lines(data)
+    out = d.compile()
+
+    # ---- checks ----
+    after = _Doc(out)
+    a = after.blob
+    g0, g1 = ir.ir_groups(blob, S), ir.ir_groups(a, after.S)
+    if [len(g) for g in g1] != [len(g) + (len(new) if i == group else 0) for i, g in enumerate(g0)]:
+        raise AssertionError("group population")
+    for i, g in enumerate(g0):
+        if [class5_source(blob, x) for x in g] != [class5_source(a, x) for x in g1[i][:len(g)]]:
+            raise AssertionError(f"an existing record of group {i} changed")
+    for n in new:
+        decoded = enc.decode_class5_record(bytes(a), base_address=BASE,
+                                           record_address=g1[group][index[n]])
+        if decoded.pointer_streams != tuple(None if s is None else tuple(s) for s in commands[n].streams):
+            raise AssertionError(f"{n} does not decode to what was asked")
+    if not all(d.ins(i) == after.ins(i) for i in range(d.n_actions)):
+        raise AssertionError("an existing action list changed")
+    before_binds = {b["tag"]: b for b in ir.mode_bindings(blob, S, mode) if b["source"] == "physical"}
+    after_binds = {b["tag"]: b for b in ir.mode_bindings(a, after.S, mode) if b["source"] == "physical"}
+    for tag in set(before_binds) | set(after_binds):
+        if tag in key_tags:
+            n = key_tags[tag]
+            got = after_binds.get(tag)
+            if n is None and got is not None or n is not None and (
+                    got is None or got["group"] != group or got["command"] != index[n]):
+                raise AssertionError(f"key 0x{tag:X}")
+        elif (before_binds.get(tag) or {}).get("command") != (after_binds.get(tag) or {}).get("command"):
+            raise AssertionError(f"key 0x{tag:X} changed without being asked")
+    if lcd is not None:
+        pages = after.mode(mode)["pages"]
+        if len(pages) != len(lcd):
+            raise AssertionError("page count")
+        for page, rec in zip(lcd, pages):
+            got = {t: v for t, op, v in cmp.tagged(a, rec["list"])}
+            for c, item in enumerate(page):
+                if item is not None and after.ins(got[SOFT[c]])[0] != (0x7D, group << 8 | index[item[1]]):
+                    raise AssertionError(f"soft key {item[0]!r}")
+    r0, r1 = render_map(blob), render_map(a)
+    changed = [k for k in set(r0) | set(r1) if k[0] != mode and r0.get(k, (None,))[0] != r1.get(k, (None,))[0]]
+    if changed:
+        raise AssertionError(f"screens changed that should not have: {changed}")
+    _check_container(out)
+    return out
