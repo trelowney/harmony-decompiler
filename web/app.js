@@ -2,7 +2,7 @@ import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodi
 import { Harmony525 } from "./hid525.js?v=e4361e7e64";
 import { RemoteView } from "./remote.js?v=96312a460e";
 
-const MODULES = ["_paths", "flipper_ir", "pic18dis", "hconfig", "analyze_525_ir", "check_525_mode_pages",
+const MODULES = ["_paths", "flipper_ir", "pronto", "pic18dis", "hconfig", "analyze_525_ir", "check_525_mode_pages",
   "class5_ir_encoder", "verify_525_semantics", "render_525_screens", "h525_lcd_author",
   "clone_525_device", "compose525"];
 const CORNERS = ["top left", "top right", "bottom left", "bottom right"];
@@ -573,6 +573,8 @@ function rowCommand(tr, name) {
   }
   const typed = tr.querySelector(".c-code").value.trim();
   if (!typed) return null;
+  // a Pronto code pasted from a forum or an old database: groups of four hex digits
+  if (/^([0-9a-f]{4}\s+){3,}[0-9a-f]{4}$/i.test(typed)) return { name, repeat, pronto: typed };
   return { name, repeat, code: parseNumber(typed, `the code for ${name}`) };
 }
 
@@ -740,7 +742,7 @@ async function main() {
       for (const tr of $("dev-keys").querySelectorAll("tbody tr")) {
         const c = rowCommand(tr, `key:${tr.dataset.key}`);
         if (!c) continue;
-        typed ||= !tr.dataset.learned && c.existing === undefined;
+        typed ||= !tr.dataset.learned && c.existing === undefined && c.pronto === undefined;
         commands.push(c);
         keys[tr.dataset.key] = c.name;
       }
@@ -752,7 +754,7 @@ async function main() {
         if (!c || !label) {
           throw new Error(`soft key ${CORNERS[corner]} on page ${page + 1} needs both a label and a command`);
         }
-        typed ||= !tr.dataset.learned && c.existing === undefined;
+        typed ||= !tr.dataset.learned && c.existing === undefined && c.pronto === undefined;
         commands.push(c);
         while (lcd.length <= page) lcd.push([null, null, null, null]);
         lcd[page][corner] = [label, c.name];
@@ -791,6 +793,7 @@ async function main() {
     const newCommands = commands.filter((c) => c.existing !== undefined || !c.name.startsWith("key:") ||
       Object.prototype.hasOwnProperty.call(editKeys, c.name.slice(4)));
     for (const c of newCommands) if (c.existing === undefined && c.code !== undefined) c.address = address;
+    for (const c of commands) if (c.code !== undefined && c.address === undefined) c.address = address;
     const softChanged = softState() !== softSnapshot;
     change(`edit ${name}`, (bytes) => webapp.op_rekey_device(bytes, Number(editing), newCommands, editKeys,
       softChanged ? lcd : null));

@@ -7,6 +7,7 @@ import hashlib
 
 import compose525
 import flipper_ir
+import pronto
 import hconfig
 import render_525_screens as renderer
 import verify_525_semantics as sem
@@ -190,7 +191,9 @@ def op_add_device(container: bytes, name: str, address: int, commands, keys, lcd
     commands, keys, lcd = _py(commands), _py(keys), _py(lcd)
     cmds = []
     for c in commands:
-        if c.get("flipper"):
+        if c.get("pronto"):
+            cmds.append(pronto.command(str(c["name"]), str(c["pronto"]), bool(c.get("repeat"))))
+        elif c.get("flipper"):
             cmds.append(flipper_ir.command(str(c["name"]), dict(c["flipper"]), bool(c.get("repeat"))))
         elif c.get("durations"):
             cmds.append(_raw_command(str(c["name"]), int(c.get("carrier") or 0), c["durations"],
@@ -403,6 +406,8 @@ def _command_of(c: dict):
     """A form row's command: an existing record (int), or a new one."""
     if c.get("existing") is not None:
         return int(c["existing"])
+    if c.get("pronto"):
+        return pronto.command(str(c["name"]), str(c["pronto"]), bool(c.get("repeat")))
     if c.get("flipper"):
         return flipper_ir.command(str(c["name"]), dict(c["flipper"]), bool(c.get("repeat")))
     if c.get("durations"):
@@ -419,7 +424,7 @@ def op_rekey_device(container: bytes, mode: int, commands, keys, lcd) -> bytes:
     commands, keys, lcd = _py(commands), _py(keys), _py(lcd)
     cmds = {}
     for c in commands:
-        if c.get("existing") is None and not c.get("flipper") and not c.get("durations") and c.get("address") is None:
+        if c.get("existing") is None and not c.get("flipper") and not c.get("durations") and                 not c.get("pronto") and c.get("address") is None:
             raise compose525.ComposeError(f"{c.get('name')}: a typed code needs an NEC address")
         cmds[str(c["name"])] = _command_of(c)
     key_map = {str(k): (None if v is None else str(v)) for k, v in dict(keys).items()}
