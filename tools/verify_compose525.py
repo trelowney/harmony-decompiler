@@ -195,6 +195,23 @@ def main() -> int:
         print("FAIL adding and deleting a device does not give the same file back")
         return 1
     print("PASS a device added to composed-2026-10-18 and deleted is the same file byte for byte")
+
+    # every one of the sample's own devices can go, the ones activities use too
+    before = c.devices(sample)
+    acts = [a.name for a in c.activities(sample)]
+    for victim in before:
+        out = c.delete_device(sample, victim.mode)
+        left = sorted((x.name, x.page, x.corner) for x in c.devices(out))
+        want = sorted((x.name, x.page, x.corner) for x in before if x.name != victim.name)
+        if left != want or [a.name for a in c.activities(out)] != acts:
+            print(f"FAIL deleting {victim.name}: devices {left}, activities {c.activities(out)}")
+            return 1
+        power = c.power_variables(out)
+        if victim.name in power:
+            print(f"FAIL {victim.name} still has a power variable in use")
+            return 1
+    print(f"PASS each of the sample's {len(before)} devices deleted, activities kept, "
+          "the device gone from every Devices screen and the all-off list")
     return 0
 
 

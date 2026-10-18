@@ -102,7 +102,7 @@ function show() {
   // the change forms follow what is on show
   const del = $("del-device");
   del.replaceChildren();
-  for (const d of s.devices.filter((x) => x.page > 0)) del.append(option(d.mode, d.name));
+  for (const d of s.devices) del.append(option(d.mode, d.name));
   $("f-del-device").querySelector("button").disabled = !del.options.length;
   const delA = $("del-activity");
   delA.replaceChildren(...s.activities.map((a) => option(a.name, a.name)));

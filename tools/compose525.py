@@ -991,13 +991,205 @@ def _apply_maps(d: _Doc, actions: dict, modes: dict, groups: dict, keep,
 
 # ------------------------------------------------------------ delete_device ---
 
-def delete_device(raw: bytes, mode: int) -> bytes:
-    """Delete a device: its Devices entry and name, its mode and pages, its
-    action lists and its infrared group, renumbering everything after them.
+def _keep_shared_strings(d: _Doc, gone: set) -> None:
+    """A screen often draws a string another screen stores: opcode 0x04 points
+    at the text of some program's inline 0x05 draw. Deleting that draw would
+    leave the others pointing at nothing. So a string something that stays still
+    points at survives: its draw stays where it is, moved below the 64 rows of
+    the screen so it draws nothing, or, when its whole program goes, the string
+    is kept by itself among the regions that stay."""
+    referenced = {t["to"] for r in d.regions if r["id"] not in gone
+                  for t in (r.get("targets") or []) if t}
+    by_id = {r["id"]: r for r in d.regions}
+    programs_gone = {r["id"] for r in d.regions if r["id"] in gone and r["kind"] == "mode_page"}
+    for r in list(d.regions):
+        if r["kind"] != "glyph_string" or r["id"] not in gone or r["id"] not in referenced:
+            continue
+        draw = next((x for x in d.at.get(r["offset"] - 3, []) if x["kind"] == "screen_instruction"
+                     and x.get("opcode") == "0x05"), None)
+        gone.discard(r["id"])
+        if draw is None:
+            continue
+        # is the program this draw sits in staying? its band markers tell: a
+        # program that goes has every one of its regions in `gone`
+        neighbours = [x for x in d.regions if x["kind"] == "screen_instruction"
+                      and abs(x["offset"] - r["offset"]) < 8 and x["id"] != draw["id"]]
+        program_stays = any(x["id"] not in gone for x in neighbours)
+        if program_stays:
+            gone.discard(draw["id"])
+            ops = bytearray(bytes.fromhex(draw["operands"]))
+            ops[1] = 0x60          # y 96: below the screen, so the draw shows nothing
+            draw["operands"] = ops.hex()
+        else:
+            # the string alone, moved to the regions that stay, before section 0
+            d.regions.remove(r)
+            s0 = next(i for i, x in enumerate(d.regions) if x.get("section") == 0)
+            d.regions.insert(s0, r)
 
-    Refuses when anything that stays still uses the device: an activity's keys,
-    a power or input transition, another device's list. Those have to go first.
-    A Devices page left empty is removed when it is the last one."""
+
+def _detach_device(raw: bytes, mode: int) -> tuple[bytes, dict]:
+    """Take a device out of everything outside its own mode, so delete_device
+    can remove it: activities, key sets, the all-off list, power and input
+    transitions.
+
+    The device's state variables (its power, its inputs, whatever ends up
+    sending to its group) stay in the table, because renumbering variables is
+    a change this project has not made on a remote; instead nothing writes them
+    any more, so their transitions never run, and those transitions are pointed
+    at nothing. Every instruction that sends to the device is removed, an action
+    list left with nothing is removed with its callers' references to it, and a
+    key or soft key whose list went is set to the null binding Logitech uses
+    for a key that does nothing. Screens are not touched: a soft key label for
+    the device stays drawn and does nothing.
+    """
+    d = _Doc(raw)
+    blob, S = d.blob, d.S
+    found = [x for x in devices(raw) if x.mode == mode]
+    if len(found) != 1 or found[0].group is None:
+        raise ComposeError(f"mode {mode} is not a device on the Devices screens")
+    group = found[0].group
+    n = d.n_actions
+    ins = {i: list(d.ins(i)) for i in range(n)}
+    transitions: dict[int, list] = {}
+    s13 = S[13]
+    for v in range(ir.u16(blob, s13)):
+        record = ir.u24(blob, s13 + 8 + 3 * v) - BASE
+        for t in range(ir.u16(blob, record + 4)):
+            at = record + 7 + 8 * t
+            transitions.setdefault(v, []).append((at, blob[at + 7], ir.u16(blob, at + 5)))
+
+    # the device's variables: whose transitions end up sending to it, or
+    # writing a variable that does (a TV's input request writes its input)
+    def reaches(op, operand, dvars, seen):
+        if op in (0x7C, 0x7D):
+            return operand >> 8 == group
+        if 0x80 <= op < 0x100:
+            return op - 0x80 in dvars
+        if op == 0x7F and operand not in seen:
+            seen.add(operand)
+            return any(reaches(o, x, dvars, seen) for o, x in ins[operand])
+        return False
+    dvars: set[int] = set()
+    grew = True
+    while grew:
+        grew = False
+        for v, ts in transitions.items():
+            if v not in dvars and any(reaches(op, x, dvars, set()) for _, op, x in ts):
+                dvars.add(v)
+                grew = True
+
+    # what the device's own mode, pages and Devices entries use is delete_device's
+    f = d.mode(mode)
+    own = {f["start"]} | {p["list"] for p in f["pages"]}
+    own_twins = {d.pool_copy(p["list"])["offset"] for p in f["pages"]}
+    own_targets = {v for off in own for _, op, v in cmp.tagged(blob, off) if op == 0x7F}
+    selections = {i for i in range(n) if d.selection_target(i) == mode}
+    keep_whole = own_targets | selections
+
+    # strip, then let emptiness propagate
+    removed = {}
+    for i in range(n):
+        if i in keep_whole:
+            continue
+        before = ins[i]
+        after = [(o, x) for o, x in before
+                 if not (o in (0x7C, 0x7D) and x >> 8 == group) and not (0x80 <= o < 0x100 and o - 0x80 in dvars)]
+        if after != before:
+            removed[i] = len(before) - len(after)
+            ins[i] = after
+    emptied = {i for i in range(n) if not ins[i] and i not in keep_whole}
+    # a list the device's own keys use may be used by an activity's key too
+    # (Logitech shares one list for the same command): it stays whole for the
+    # device, and every reference to it from outside goes like an emptied one's
+    shared_own = {i for i in keep_whole if reaches(0x7F, i, dvars, set())}
+    dead = emptied | shared_own
+    grew = True
+    while grew:
+        grew = False
+        for i in range(n):
+            if i in keep_whole or i in emptied:
+                continue
+            after = [(o, x) for o, x in ins[i] if not (o == 0x7F and x in dead)]
+            if after != ins[i]:
+                ins[i] = after
+                if not after:
+                    emptied.add(i)
+                    dead.add(i)
+                grew = True
+
+    # write it into the document
+    for r in d.regions:
+        if r["kind"] == "action_list" and r.get("section") != 8:
+            i = next((k for k, a in enumerate(d.actions) if a == r["offset"]), None)
+            if i is None or ins[i] == d.ins(i):
+                continue
+            if not ins[i]:
+                r["instructions"] = [{"operand": x, "opcode": f"0x{o:02X}"} for o, x in d.ins(i)]
+                continue          # left as it was: nothing references it, delete_device removes it
+            r["instructions"] = [{"operand": x, "opcode": f"0x{o:02X}"} for o, x in ins[i]]
+        elif r["kind"] == "action_list" and r.get("section") == 8:
+            kept = [i for i in r["instructions"] if not (
+                int(i["opcode"], 16) == 0x7F and i["operand"] in dead) and not (
+                0x80 <= int(i["opcode"], 16) < 0x100 and int(i["opcode"], 16) - 0x80 in dvars)]
+            if len(kept) != len(r["instructions"]):
+                if not kept:
+                    raise ComposeError("section 8's leading list would be left empty")
+                r["instructions"] = kept
+        elif r["kind"] == "tagged_list" and r["offset"] not in own | own_twins:
+            for e in r["entries"]:
+                if e["opcode"] == 0x7F and e["operand"] in dead:
+                    e["opcode"], e["operand"] = 0, 0
+        elif r["kind"] == "screen_instruction" and r.get("opcode") == "0x11":
+            raw3 = bytes.fromhex(r["operands"])
+            if len(raw3) == 3 and raw3[2] == 0x7F and (raw3[0] | raw3[1] << 8) in dead:
+                raise ComposeError("a section 14 stream runs a list that would be left empty")
+    neutralised = 0
+    for v in dvars:
+        for at, op, x in transitions[v]:
+            if op != 0 or x != 0:
+                _patch_bytes(d, at + 5, b"\x00\x00\x00")
+                neutralised += 1
+    for v, ts in transitions.items():
+        if v in dvars:
+            continue
+        for at, op, x in ts:
+            if op == 0x7F and x in dead:
+                raise ComposeError(f"variable {v}'s transition runs a list that would be left empty")
+            if (op in (0x7C, 0x7D) and x >> 8 == group) or (0x80 <= op < 0x100 and op - 0x80 in dvars):
+                raise ComposeError(f"variable {v}'s transition sends to the device directly")
+    out = d.compile()
+
+    # checks: nothing outside the device's own lists sends to it or writes its
+    # variables, and no screen moved
+    after = _Doc(out)
+    for i in range(after.n_actions):
+        if i in keep_whole or i in emptied:
+            continue
+        for o, x in after.ins(i):
+            if o in (0x7C, 0x7D) and x >> 8 == group or 0x80 <= o < 0x100 and o - 0x80 in dvars:
+                raise AssertionError(f"action list {i} still reaches the device")
+        if after.ins(i) != ins[i]:
+            raise AssertionError(f"action list {i} is not what was meant")
+    r0, r1 = render_map(blob), render_map(after.blob)
+    if {k: v[0] for k, v in r0.items()} != {k: v[0] for k, v in r1.items()}:
+        raise AssertionError("detaching changed a screen")
+    _check_container(out)
+    return out, {"variables": sorted(dvars), "lists_changed": len(removed),
+                 "emptied": sorted(emptied), "transitions_neutralised": neutralised}
+
+
+def delete_device(raw: bytes, mode: int) -> bytes:
+    """Delete a device: its entry and name on every Devices screen (each
+    activity's first page too), its mode and pages, its action lists and its
+    infrared group, renumbering everything after them.
+
+    A device activities use is first taken out of them by _detach_device: what
+    sent to it sends nothing, its state variables are no longer written. A
+    Devices page left empty is removed when it is the last one."""
+    if mode <= 40:
+        raise ComposeError("modes up to 40 are the firmware's status screens")
+    original = raw
+    raw, detached = _detach_device(raw, mode)
     d = _Doc(raw)
     blob, S = d.blob, d.S
     found = [x for x in devices(raw) if x.mode == mode]
@@ -1005,8 +1197,6 @@ def delete_device(raw: bytes, mode: int) -> bytes:
         raise ComposeError(f"mode {mode} is not a device on the Devices screens")
     device = found[0]
     group = device.group
-    if mode <= 40:
-        raise ComposeError("modes up to 40 are the firmware's status screens")
     devices_modes = d.devices_modes()
     f = d.mode(mode)
 
@@ -1037,13 +1227,12 @@ def delete_device(raw: bytes, mode: int) -> bytes:
     seeds = set()
     for off in own_lists:
         seeds |= {v for _, op, v in cmp.tagged(blob, off) if op == 0x7F}
-    selections = set()
-    for m in devices_modes:
-        for p in d.mode(m)["pages"]:
-            for tag, op, v in cmp.tagged(blob, p["list"]):
-                if op == 0x7F and d.selection_target(v) == mode:
-                    selections.add(v)
-    doomed = set(seeds | selections)
+    # every list that opens the device, wherever it is listed: each Devices
+    # screen's own first page, the shared later pages, their pool copies' twins
+    selections = {i for i in range(d.n_actions) if d.selection_target(i) == mode}
+    # what _detach_device left empty and nothing references any more
+    emptied = set(detached["emptied"])
+    doomed = set(seeds | selections | emptied)
     changed = True
     while changed:
         changed = False
@@ -1058,23 +1247,14 @@ def delete_device(raw: bytes, mode: int) -> bytes:
         if kind == "list":
             return where not in doomed
         if kind == "tagged":
-            devices_lists = {p["list"] for m in devices_modes for p in d.mode(m)["pages"]}
-            twins = set()
-            for off in devices_lists:
-                try:
-                    twins.add(d.pool_copy(off)["offset"])
-                except ComposeError:
-                    pass
-            if where in own_lists or where in pool_twins:
-                return False
-            if where in devices_lists or where in twins:
-                return False      # the Devices entries for this device are removed below
-            return True
+            return where not in own_lists and where not in pool_twins
         return True
     changed = True
     while changed:
         changed = False
         for i in list(doomed):
+            if i in selections:
+                continue          # every entry naming one is removed below
             if any(staying_source(s) for s in referrers.get(i, ())):
                 doomed.discard(i)
                 changed = True
@@ -1121,30 +1301,49 @@ def delete_device(raw: bytes, mode: int) -> bytes:
     group_region = d.region(ir.u24(blob, S[5] + 1 + 3 * group) - BASE, "ir_group")
     gone.add(group_region["id"])
 
-    # ---- the Devices screens: the entry, the drawn name, maybe the page ----
+    # ---- every page that lists the device: the entry, its pool copy's, the name ----
+    touched_modes = set()
+    done = set()
+    for m in range(d.n_modes):
+        if m == mode:
+            continue
+        for p in d.mode(m)["pages"]:
+            tags = [t for t, op, v in cmp.tagged(blob, p["list"]) if op == 0x7F and v in selections]
+            if not tags:
+                continue
+            touched_modes.add(m)
+            if p["list"] in done:
+                continue          # a shared page, already done for another mode
+            done.add(p["list"])
+            plist = d.region(p["list"], "tagged_list")
+            twin = d.pool_copy(p["list"])
+            plist["entries"] = [e for e in plist["entries"] if e["tag"] not in tags]
+            twin["entries"] = [e for e in twin["entries"] if e["tag"] not in tags]
+            for tag in tags:
+                corner = SOFT.index(tag)
+                rows = (13, 24) if corner < 2 else (35, 46)
+                right = corner in (1, 3)
+                for item in sem.screen_program_path(blob, p["program"]):
+                    if item["opcode"] in (4, 5) and item["operands"][1] in rows and \
+                            (item["operands"][0] >= 48) == right:
+                        gone.update(r["id"] for r in d.at[item["offset"]])
+                        if item["opcode"] == 5:
+                            gone.update(r["id"] for r in d.at.get(item["offset"] + 3, [])
+                                        if r["kind"] == "glyph_string")
+    for r in d.regions:                 # any other list naming one, a stray copy
+        if r["kind"] == "tagged_list":
+            r["entries"] = [e for e in r["entries"] if not (e["opcode"] == 0x7F and e["operand"] in selections)]
+
+    # ---- a last shared Devices page it leaves empty goes ----
     first = d.idle_devices_mode()
     pages0 = d.mode(first)["pages"]
-    page = pages0[device.page]
-    shared = all(d.mode(m)["pages"][device.page]["address"] == page["address"] for m in devices_modes) \
-        if device.page > 0 else False
-    if not shared:
-        raise ComposeError("deleting a device from a Devices page 1, which differs per "
-                           "activity, is not written yet")
-    tag = SOFT[device.corner]
+    page = pages0[-1]
     plist = d.region(page["list"], "tagged_list")
     twin = d.pool_copy(page["list"])
-    plist["entries"] = [e for e in plist["entries"] if e["tag"] != tag]
-    twin["entries"] = [e for e in twin["entries"] if e["tag"] != tag]
-    rows = (13, 24) if device.corner < 2 else (35, 46)
-    right = device.corner in (1, 3)
-    for item in sem.screen_program_path(blob, page["program"]):
-        if item["opcode"] in (4, 5) and item["operands"][1] in rows and \
-                (item["operands"][0] >= 48) == right:
-            gone.update(r["id"] for r in d.at[item["offset"]])
-            if item["opcode"] == 5:
-                gone.update(r["id"] for r in d.at.get(item["offset"] + 3, []) if r["kind"] == "glyph_string")
+    shared_last = len(pages0) > 1 and all(
+        d.mode(m)["pages"][-1]["address"] == page["address"] for m in devices_modes)
     n_pages = len(pages0)
-    page_removed = not plist["entries"] and device.page == n_pages - 1
+    page_removed = shared_last and not plist["entries"]
     if page_removed:
         gone.update((plist["id"], twin["id"], d.region(page["address"], "mode_page")["id"]))
         drop_program(page["program"])
@@ -1167,6 +1366,8 @@ def delete_device(raw: bytes, mode: int) -> bytes:
                                     if r["kind"] == "glyph_string")
         else:
             _set_counters(d, totals, f"del{mode}_counter")
+
+    _keep_shared_strings(d, gone)
 
     # ---- tables ----
     mt = d.region(S[sem.MODE_SLOT], "pointer_table")
@@ -1227,7 +1428,7 @@ def delete_device(raw: bytes, mode: int) -> bytes:
         if t0 != cmp.tagged(a, f1["start"]):
             raise AssertionError(f"mode {old} -> {new}: key list changed")
     r0, r1 = render_map(blob), render_map(a)
-    devices_set = set(devices_modes)
+    devices_set = set(devices_modes) | touched_modes
     for (m, k), value in r0.items():
         if m == mode or m in devices_set:
             continue
