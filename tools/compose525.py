@@ -1729,7 +1729,8 @@ def describe_activity(raw: bytes, name: str) -> list:
 
 
 def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
-                 writes: dict | None = None, steps: Sequence = ()) -> bytes:
+                 writes: dict | None = None, steps: Sequence = (),
+                 show: int | None = None, volume: int | None = None) -> bytes:
     """Add an activity built like an existing one.
 
     It copies `like`'s key set (so its keys do what `like`'s do), its Devices
@@ -1737,7 +1738,12 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
     chain, but switches on the devices in `on` and every other device with a
     power variable off, then makes the state writes in `writes` (variable ->
     value, e.g. a TV input request); None takes `like`'s own, so the input
-    stays what it was. The menu gets it in the first free corner,
+    stays what it was. `show`, a device's mode, makes the activity end on that
+    device's own screen, its keys then the device's (as KontroLIR does), instead
+    of a copy of `like`'s screen. `volume`, a device's mode, sends Vol +, Vol -
+    and Mute to that device while the activity's screen is up; with `show` the
+    activity then ends on its own copy of the device's screen, so the device
+    itself is left as it was. The menu gets it in the first free corner,
     a new page when the menu is full. Value: the variable's highest plus one,
     idle unchanged (@dannybloe, section 273; FORMAT 5af)."""
     d = _Doc(raw)
@@ -1837,7 +1843,36 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
         new_mode_regions.extend([ml, *programs, entry])
         return new
 
-    work = copy_mode(src.work_mode, "work")
+    device_modes = {x.mode for x in devices(raw)}
+    for m in (show, volume):
+        if m is not None and m not in device_modes:
+            raise ComposeError(f"mode {m} is not a device on the Devices screens")
+    if volume is not None and volume == show:
+        volume = None                   # the device's own volume already
+    if show is None:
+        work = copy_mode(src.work_mode, "work")
+    elif volume is None:
+        # every way back to the source's screen now leads to the device's
+        mode_map[src.work_mode] = show
+        work = show
+    else:
+        work = copy_mode(show, "device")
+        mode_map[src.work_mode] = work
+    if volume is not None:
+        # the activity's screen sends its volume keys where the activity says
+        vol_tags = (KEYS["VolumeUp"], KEYS["VolumeDown"], KEYS["Mute"])
+        theirs = {e["tag"]: e for e in d.region(d.mode(volume)["start"], "tagged_list")["entries"]
+                  if e["tag"] in vol_tags}
+        if not theirs:
+            raise ComposeError(f"mode {volume} binds no volume keys")
+        ml = next(r for r in new_mode_regions if r["id"] == f"act{value}_m{work}_list")
+        mine = {e["tag"]: e for e in ml["entries"]}
+        for tag, e in theirs.items():
+            if tag in mine:
+                mine[tag].update(operand=e["operand"], opcode=e["opcode"])
+            else:
+                ml["entries"].append({**({"flags": 0} if ml.get("wide") else {}),
+                                      "tag": tag, "operand": e["operand"], "opcode": e["opcode"]})
     start_mode = copy_mode(src.start_mode, "start")
     # status screens a chain shows that come back to the source's screen
     def chain_modes(index, seen=None):

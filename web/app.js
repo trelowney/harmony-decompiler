@@ -243,6 +243,11 @@ function show() {
   delA.replaceChildren(...s.activities.map((a) => option(a.name, a.name)));
   const like = $("act-like");
   like.replaceChildren(...s.activities.map((a) => option(a.name, a.name)));
+  const byName = [...s.devices].sort((x, y) => x.name.localeCompare(y.name));
+  $("act-show").replaceChildren(option("", "its own screen"),
+    ...byName.map((d) => option(d.mode, `${d.name}'s screen`)));
+  $("act-volume").replaceChildren(option("", "as on that screen"),
+    ...byName.map((d) => option(d.mode, d.name)));
   const on = $("act-on");
   on.replaceChildren();
   for (const name of toJs(webapp.power_devices(bytes))) {
@@ -618,7 +623,10 @@ async function main() {
     const like = $("act-like").value;
     const on = [...$("act-on").querySelectorAll("input:checked")].map((b) => b.value);
     const sendSteps = steps.map((s) => [s.group, s.command]);
-    change(`add activity ${name}`, (bytes) => webapp.op_add_activity(bytes, name, like, on, sendSteps));
+    const show = $("act-show").value === "" ? null : Number($("act-show").value);
+    const volume = $("act-volume").value === "" ? null : Number($("act-volume").value);
+    change(`add activity ${name}`,
+      (bytes) => webapp.op_add_activity(bytes, name, like, on, sendSteps, show, volume));
     steps = [];
     drawSteps();
   });

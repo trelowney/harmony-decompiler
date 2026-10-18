@@ -116,13 +116,17 @@ def _py(value):
     return value.to_py() if hasattr(value, "to_py") else value
 
 
-def op_add_activity(container: bytes, name: str, like: str, on, steps=None) -> bytes:
+def op_add_activity(container: bytes, name: str, like: str, on, steps=None,
+                    show=None, volume=None) -> bytes:
     """steps: [[group, command], ...] sent after the switching, in order. With
-    steps the source activity's own inputs are not copied: the steps say it."""
+    steps the source activity's own inputs are not copied: the steps say it.
+    show: a device's mode to end on; volume: a device's mode for Vol and Mute."""
     steps = [tuple(int(v) for v in s) for s in (_py(steps) or [])]
     return compose525.add_activity(bytes(container), str(name), str(like),
                                    [str(x) for x in _py(on)],
-                                   writes={} if steps else None, steps=steps)
+                                   writes={} if steps else None, steps=steps,
+                                   show=None if show is None else int(show),
+                                   volume=None if volume is None else int(volume))
 
 
 def commands(container: bytes) -> list:
@@ -300,7 +304,8 @@ def remote_model(container: bytes) -> dict:
             m = a.work_mode
             if m not in modes:
                 modes[m] = {"pages": pages_of(m), "soft": soft_of(m),
-                            "keys": keys_of([at, d.mode(m)["start"]])}
+                            # the screen's own list is searched before the key set (5ad)
+                            "keys": keys_of([d.mode(m)["start"], at])}
             does = [_step_text(s) for s in compose525.describe_activity(raw, a.name)]
             acts.append({"name": a.name, "page": a.page, "corner": a.corner, "mode": m, "does": does})
         menu_pages = pages_of(menu)

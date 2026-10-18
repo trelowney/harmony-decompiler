@@ -231,6 +231,38 @@ def main() -> int:
         print("FAIL moving an activity to a new menu page")
         return 1
     print("PASS devices swapped across pages and moved, an activity moved to a new menu page")
+
+    # an activity read back as steps, one ending on a device, one with its
+    # volume elsewhere; each deleted again gives the same file back
+    steps = c.describe_activity(composed, "Watch TV +")
+    sent = [(s["device"], s.get("label")) for s in steps if s["kind"] == "send"]
+    if sent != [("TV Panason..", "Input Hdmi1")]:
+        print(f"FAIL Watch TV reads as {steps}")
+        return 1
+    modes = {x.name: x.mode for x in c.devices(composed)}
+    hdmi2 = next(k for k, v in c.device_commands(composed).items() if v == ("TV Panason..", "Input Hdmi2"))
+    for show, volume in ((modes["X96 Box"], None), (modes["X96 Box"], modes["Amplifier Genius"]),
+                         (None, modes["Amplifier Genius"])):
+        out = c.add_activity(composed, "Film", "Watch TV +", ["TV Panason.."], writes={},
+                             steps=[hdmi2], show=show, volume=volume)
+        film = next(a for a in c.activities(out) if a.name == "Film")
+        if show is not None and volume is None and film.work_mode != show:
+            print(f"FAIL Film ends on mode {film.work_mode}, not the X96's {show}")
+            return 1
+        if volume is not None:
+            vol = c._Doc(out).mode(film.work_mode)["start"]
+            amp = c._Doc(out).mode(volume)["start"]
+            pick = lambda at: {t: (o, v) for t, o, v in c.cmp.tagged(c._Doc(out).blob, at)
+                               if t in (c.KEYS["VolumeUp"], c.KEYS["Mute"])}
+            if pick(vol) != pick(amp) or not pick(vol):
+                print(f"FAIL Film's volume keys {pick(vol)} are not the amplifier's {pick(amp)}")
+                return 1
+        sent = [s.get("label") for s in c.describe_activity(out, "Film") if s["kind"] == "send"]
+        if sent != ["Input Hdmi2"] or c.delete_activity(out, "Film") != composed:
+            print(f"FAIL Film (show {show}, volume {volume}): sends {sent}, or deleting it differs")
+            return 1
+    print("PASS activities read as steps; one ends on the X96, one sends volume to the amplifier; "
+          "each deleted gives the file back")
     return 0
 
 

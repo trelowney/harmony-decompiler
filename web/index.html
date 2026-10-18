@@ -310,6 +310,10 @@
             <label>Built like <select id="act-like"></select></label>
           </div>
           <fieldset><legend>Switch on</legend><div id="act-on" class="row"></div></fieldset>
+          <div class="row">
+            <label>Then show <select id="act-show"></select></label>
+            <label>Volume and Mute go to <select id="act-volume"></select></label>
+          </div>
           <fieldset><legend>Then send, in this order</legend>
             <div class="row">
               <select id="act-step-device"></select>
@@ -318,9 +322,12 @@
             </div>
             <ol id="act-steps"></ol>
           </fieldset>
-          <p class="hint">Its keys and Devices screen are the ones of the activity it is built like;
-            everything not switched on is switched off. With no commands to send it also takes that
-            activity's inputs (its TV input, say); with commands, those are what it sends.</p>
+          <p class="hint">Everything not switched on is switched off. With no commands to send it also
+            takes the inputs of the activity it is built like (its TV input, say); with commands, those
+            are what it sends. <strong>Then show</strong> picks where the remote ends: the activity's
+            own screen, whose keys are those of the activity it is built like, or a device's screen, so
+            the remote then simply works that device. <strong>Volume and Mute</strong> can go to another
+            device while the activity runs, the amplifier, say, with the X96 on screen.</p>
           <button>Add</button>
         </form>
         <form id="f-move-activity" class="panel">
@@ -407,6 +414,6 @@
     </div>
   </aside>
 </div>
-<script type="module" src="app.js?v=a97b4f6c96"></script>
+<script type="module" src="app.js?v=c706d90153"></script>
 </body>
 </html>
