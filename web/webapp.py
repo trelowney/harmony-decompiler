@@ -64,6 +64,48 @@ def screens(container: bytes, modes) -> list:
     return out
 
 
+def key_names() -> list:
+    """The 525's keys by name, for the page's key map."""
+    return list(compose525.KEYS)
+
+
+def power_devices(container: bytes) -> list:
+    """Devices an activity can switch on: the ones with a power variable."""
+    return sorted(compose525.power_variables(bytes(container)))
+
+
+def op_delete_device(container: bytes, mode: int) -> bytes:
+    return compose525.delete_device(bytes(container), int(mode))
+
+
+def op_delete_activity(container: bytes, name: str) -> bytes:
+    return compose525.delete_activity(bytes(container), str(name))
+
+
+def _py(value):
+    """A JavaScript object handed in by the page, as plain Python."""
+    return value.to_py() if hasattr(value, "to_py") else value
+
+
+def op_add_activity(container: bytes, name: str, like: str, on) -> bytes:
+    return compose525.add_activity(bytes(container), str(name), str(like), [str(x) for x in _py(on)])
+
+
+def op_add_device(container: bytes, name: str, address: int, commands, keys, lcd) -> bytes:
+    """commands: [{name, code, repeat}], NEC on `address`; keys: {key name: command
+    name}; lcd: four [label, command name] or null, in reading order."""
+    commands, keys, lcd = _py(commands), _py(keys), _py(lcd)
+    cmds = [compose525.nec_command(str(c["name"]), int(address), int(c["code"]),
+                                   repeat=bool(c.get("repeat")))
+            for c in commands]
+    key_map = {str(k): str(v) for k, v in dict(keys).items() if v}
+    page = [None if item is None or not item[0] else (str(item[0]), str(item[1])) for item in lcd]
+    if not any(page):
+        raise compose525.ComposeError("give the device at least one soft key")
+    out, _ = compose525.add_device(bytes(container), str(name), cmds, key_map, [page])
+    return out
+
+
 def screen_modes(container: bytes) -> list:
     """The modes worth showing: the Devices screen, each device, the activity menu."""
     raw = bytes(container)

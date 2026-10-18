@@ -1182,8 +1182,11 @@ def delete_device(raw: bytes, mode: int) -> bytes:
     # become unreferenced now (ones nothing referenced before are left alone)
     ir_kinds = {"ir_record_header", "ir_class5_body", "ir_symbol_table", "ir_symbol_block"}
     def referenced_ids(regions):
-        ids = {t["to"] for r in regions for t in (r.get("targets") or []) if t}
-        return ids | {r["back_reference"]["to"] for r in regions if r.get("back_reference")}
+        # an infrared record header points back at itself (4h), which is no
+        # reason to keep it
+        ids = {t["to"] for r in regions for t in (r.get("targets") or []) if t and t["to"] != r["id"]}
+        return ids | {r["back_reference"]["to"] for r in regions
+                      if r.get("back_reference") and r["back_reference"]["to"] != r["id"]}
     loose_before = {r["id"] for r in d.regions if r["kind"] in ir_kinds} - referenced_ids(d.regions)
     d.regions[:] = [r for r in d.regions if r["id"] not in gone]
     while True:
@@ -1401,7 +1404,8 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
     screen, its start and status screens with the name changed, and its start
     chain, but switches on the devices in `on` and every other device with a
     power variable off, then makes the state writes in `writes` (variable ->
-    value, e.g. a TV input request). The menu gets it in the first free corner,
+    value, e.g. a TV input request); None takes `like`'s own, so the input
+    stays what it was. The menu gets it in the first free corner,
     a new page when the menu is full. Value: the variable's highest plus one,
     idle unchanged (@dannybloe, section 273; FORMAT 5af)."""
     d = _Doc(raw)
@@ -1417,8 +1421,13 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
     unknown = [n for n in on if n not in power]
     if unknown:
         raise ComposeError(f"no power variable for {unknown}; devices with one: {sorted(power)}")
+    if writes is None:
+        # the source's own settings, an input most of all: every state write its
+        # start list makes that is not a power switch or the activity number
+        writes = {o - 0x80: x for o, x in d.ins(src.start)
+                  if 0x80 <= o < 0x100 and o != 0x8F and o - 0x80 not in power.values()}
     state_writes = [(power[n], 1 if n in on else 0) for n in sorted(power, key=lambda n: power[n])]
-    state_writes += sorted((writes or {}).items())
+    state_writes += sorted(writes.items())
     for var, value in state_writes:
         if not 0 <= var < 0x80 - 0x10 or value > 0xFFFF:
             raise ComposeError(f"state write {var} := {value}")
@@ -1572,7 +1581,7 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
         src_re = d.ins(src.repick)
         if src_re[-1][0] != 0x7F:
             raise ComposeError("the source's re-pick list does not end in its chain")
-        re_ins = [(0x80 + var, val) for var, val in sorted((writes or {}).items())]
+        re_ins = [(0x80 + var, val) for var, val in sorted(writes.items())]
         re_ins.append((0x7F, copy_list(src_re[-1][1]) if needs_copy(src_re[-1][1]) else src_re[-1][1]))
         repick_list = make_list(re_ins)
     menu_list_index = make_list([(0x1F, 0xFF00 | new_set), (0x92, 0)])

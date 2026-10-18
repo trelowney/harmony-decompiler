@@ -36,6 +36,22 @@
   figcaption { font-size: 12px; color: var(--muted); }
   canvas { image-rendering: pixelated; border-radius: 4px; display: block; }
   code { font-size: 13px; }
+  h3 { font-size: 15px; margin: 0 0 8px; }
+  h4 { font-size: 13px; margin: 12px 0 4px; color: var(--muted); font-weight: 500; }
+  .muted, .hint { color: var(--muted); font-size: 13px; }
+  .panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px;
+            margin-top: 12px; }
+  .panel { border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: flex;
+           flex-direction: column; gap: 8px; align-items: flex-start; }
+  .panel.wide { grid-column: 1 / -1; }
+  .panel label { display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--muted); }
+  input, select { font: inherit; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line);
+                  background: var(--bg); color: var(--fg); }
+  fieldset { border: 1px solid var(--line); border-radius: 6px; }
+  .keys { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; width: 100%; }
+  .keys label { flex-direction: row; align-items: center; justify-content: space-between; }
+  .soft { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; width: 100%; }
+  #dev-commands td { padding: 2px 4px; }
 </style>
 </head>
 <body>
@@ -61,6 +77,58 @@
     <table id="devices"></table>
     <h2>Activities</h2>
     <table id="activities"></table>
+    <h2>Change</h2>
+    <p class="lead">Each change is built and checked in this page; nothing reaches the remote.
+      Save the result and write it with Concordance:
+      <code>concordance --no-web --write-config file.EZHex</code>.</p>
+    <div class="row">
+      <button id="undo" disabled>Undo</button>
+      <span id="changes" class="muted">No changes yet.</span>
+    </div>
+
+    <div class="panels">
+      <form id="f-del-device" class="panel">
+        <h3>Delete a device</h3>
+        <select id="del-device"></select>
+        <p class="hint">Devices on the first Devices page cannot be deleted yet.</p>
+        <button>Delete</button>
+      </form>
+
+      <form id="f-del-activity" class="panel">
+        <h3>Delete an activity</h3>
+        <select id="del-activity"></select>
+        <button>Delete</button>
+      </form>
+
+      <form id="f-add-activity" class="panel">
+        <h3>Add an activity</h3>
+        <label>Name <input id="act-name" required maxlength="20"></label>
+        <label>Built like <select id="act-like"></select></label>
+        <fieldset><legend>Switch on</legend><div id="act-on"></div></fieldset>
+        <p class="hint">Its keys, Devices screen and inputs are the ones of the activity it is built
+          like; everything not switched on is switched off.</p>
+        <button>Add</button>
+      </form>
+
+      <form id="f-add-device" class="panel wide">
+        <h3>Add a device (NEC infrared)</h3>
+        <div class="row">
+          <label>Name <input id="dev-name" required maxlength="20"></label>
+          <label>NEC address <input id="dev-address" required placeholder="0xD5" size="6"></label>
+        </div>
+        <table id="dev-commands">
+          <thead><tr><th>command</th><th>code</th><th>repeats when held</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <button type="button" id="dev-add-command">Add a command</button>
+        <h4>Which 525 key sends it</h4>
+        <div id="dev-keys" class="keys"></div>
+        <h4>Soft keys beside the screen</h4>
+        <div id="dev-soft" class="soft"></div>
+        <button>Add the device</button>
+      </form>
+    </div>
+
     <h2>Screens</h2>
     <div id="screens" class="screens"></div>
   </section>

@@ -183,6 +183,18 @@ def main() -> int:
         print("FAIL the action lists differ from the original sample")
         return 1
     print("PASS both deleted again: every action list, screen, activity and device as in the sample")
+
+    # on the config the owner's remote runs: a device added and deleted again is
+    # the same file, byte for byte (a record header's pointer to itself once
+    # kept its records alive after the device was gone)
+    composed = (Path(__file__).resolve().parents[1] / "samples" / "harmony525" /
+                "composed-2026-10-18.EZHex").read_bytes()
+    commands, keys, lcd = device(9)
+    added, placed = c.add_device(composed, "Box", commands, keys, lcd)
+    if c.delete_device(added, placed.mode) != composed:
+        print("FAIL adding and deleting a device does not give the same file back")
+        return 1
+    print("PASS a device added to composed-2026-10-18 and deleted is the same file byte for byte")
     return 0
 
 
