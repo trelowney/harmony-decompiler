@@ -56,6 +56,7 @@ python compile.py out.json new.EZHex --against config.EZHex
 python verify_525_semantics.py                # re-check the 525 evidence
 python verify_arch9_relocation.py             # census, relocation and negative check
 python render_525_screens.py --out rendered   # draw all 135 menus as BMPs
+python verify_compose525.py                   # add five devices to the sample, check every step
 ```
 
 ## Scope
