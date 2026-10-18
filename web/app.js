@@ -241,7 +241,10 @@ function addSoftPage() {
   if (page >= 6) return;
   const head = document.createElement("tr");
   head.className = "soft-head";
-  head.innerHTML = `<td colspan="4"><strong>page ${page + 1}</strong></td>`;
+  head.dataset.page = page;
+  head.innerHTML = `<td colspan="4"><strong>page ${page + 1}</strong> ` +
+    (page ? `<button type="button" class="soft-remove">remove this page</button>` : "") + `</td>`;
+  head.querySelector(".soft-remove")?.addEventListener("click", () => removeSoftPage(Number(head.dataset.page)));
   soft.append(head);
   CORNERS.forEach((corner, i) => {
     const label = document.createElement("input");
@@ -254,6 +257,23 @@ function addSoftPage() {
     soft.append(tr);
   });
   $("dev-soft-page").disabled = page + 1 >= 6;
+}
+
+// Take a page of soft keys out of the form; the pages after it move up one.
+function removeSoftPage(page) {
+  const soft = $("dev-soft").querySelector("tbody");
+  for (const tr of [...soft.querySelectorAll("tr")]) {
+    if (Number(tr.dataset.page) === page) tr.remove();
+  }
+  for (const tr of soft.querySelectorAll("tr")) {
+    const p = Number(tr.dataset.page);
+    if (p > page) {
+      tr.dataset.page = p - 1;
+      const title = tr.querySelector("strong");
+      if (title) title.textContent = `page ${p}`;
+    }
+  }
+  $("dev-soft-page").disabled = soft.querySelectorAll("tr.soft-head").length >= 6;
 }
 
 function buildDeviceForm() {
