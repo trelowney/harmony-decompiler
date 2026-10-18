@@ -160,14 +160,47 @@ function refreshCommandChoices() {
 function addCommandRow(name = "", code = "", repeat = false) {
   const tr = document.createElement("tr");
   tr.innerHTML = `<td><input class="c-name" size="12"></td><td><input class="c-code" size="6" placeholder="0x0A"></td>` +
-    `<td><input type="checkbox" class="c-repeat"></td><td><button type="button" class="c-del">×</button></td>`;
+    `<td><input type="checkbox" class="c-repeat"></td>` +
+    `<td><button type="button" class="c-learn">Learn</button> <button type="button" class="c-del">×</button></td>`;
   tr.querySelector(".c-name").value = name;
   tr.querySelector(".c-code").value = code;
   tr.querySelector(".c-repeat").checked = repeat;
   tr.querySelector(".c-name").addEventListener("input", refreshCommandChoices);
   tr.querySelector(".c-del").addEventListener("click", () => { tr.remove(); refreshCommandChoices(); });
+  tr.querySelector(".c-code").addEventListener("input", () => { delete tr.dataset.learned; });
+  tr.querySelector(".c-learn").addEventListener("click", () => learnInto(tr));
   $("dev-commands").querySelector("tbody").append(tr);
   refreshCommandChoices();
+}
+
+// The 525 as a receiver: point the device's own remote at the bottom end of
+// the 525, below the keypad, press Learn and then the key, a short tap.
+async function learnInto(tr) {
+  const name = tr.querySelector(".c-name").value.trim() || "this command";
+  let remote;
+  try {
+    remote = await Harmony525.connect();
+    status(`Learning ${name}: point the original remote at the bottom end of the 525 and tap the key…`);
+    const capture = await remote.learnIR();
+    if (!capture) throw new Error("nothing was received within five seconds");
+    const decoded = toJs(webapp.decode_capture(capture.durations));
+    if (decoded.nec) {
+      const [a, a2, cmd] = decoded.nec;
+      tr.dataset.learned = JSON.stringify({ address: a, address2: a2 });
+      tr.querySelector(".c-code").value = `0x${cmd.toString(16).padStart(2, "0").toUpperCase()}`;
+      if (!$("dev-address").value.trim()) $("dev-address").value = `0x${a.toString(16).toUpperCase()}`;
+      status(`Learned ${name}: NEC, address 0x${a.toString(16)} ${a2.toString(16)}, command 0x${cmd.toString(16)}.`);
+    } else {
+      tr.dataset.learned = JSON.stringify({ carrier: capture.carrier, durations: capture.durations });
+      tr.querySelector(".c-code").value = "learned";
+      status(`Learned ${name}: not NEC, kept as it was received (${capture.durations.length} ` +
+        `durations at ${capture.carrier} Hz).`);
+    }
+  } catch (error) {
+    status(`Learning ${name} failed: ${error.message ?? error}`, true);
+  } finally {
+    if (remote) { try { await remote.close(); } catch { /* gone */ } }
+  }
 }
 
 function buildDeviceForm() {
@@ -297,12 +330,20 @@ async function main() {
     event.preventDefault();
     let address, commands;
     try {
-      address = parseNumber($("dev-address").value, "the NEC address");
-      commands = [...$("dev-commands").querySelectorAll("tbody tr")].map((tr) => ({
-        name: tr.querySelector(".c-name").value.trim(),
-        code: parseNumber(tr.querySelector(".c-code").value, `the code of ${tr.querySelector(".c-name").value}`),
-        repeat: tr.querySelector(".c-repeat").checked,
-      })).filter((c) => c.name);
+      const rows = [...$("dev-commands").querySelectorAll("tbody tr")]
+        .filter((tr) => tr.querySelector(".c-name").value.trim());
+      const allLearned = rows.every((tr) => tr.dataset.learned);
+      address = allLearned && !$("dev-address").value.trim() ? 0
+        : parseNumber($("dev-address").value, "the NEC address");
+      commands = rows.map((tr) => {
+        const learned = tr.dataset.learned ? JSON.parse(tr.dataset.learned) : {};
+        const command = { name: tr.querySelector(".c-name").value.trim(),
+                          repeat: tr.querySelector(".c-repeat").checked, ...learned };
+        if (!learned.durations) {
+          command.code = parseNumber(tr.querySelector(".c-code").value, `the code of ${command.name}`);
+        }
+        return command;
+      });
     } catch (error) {
       status(error.message, true);
       return;

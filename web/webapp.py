@@ -109,13 +109,59 @@ def op_add_activity(container: bytes, name: str, like: str, on) -> bytes:
     return compose525.add_activity(bytes(container), str(name), str(like), [str(x) for x in _py(on)])
 
 
+def decode_capture(durations) -> dict:
+    """A capture learned through the remote, read as NEC if it is NEC.
+    durations: microseconds, mark first. Returns {nec: [a, a2, cmd]} or {}."""
+    d = [int(x) for x in _py(durations)]
+    for start in range(0, max(0, len(d) - 66), 2):
+        if 8000 < d[start] < 10000 and 4000 < d[start + 1] < 5000:
+            bits = []
+            for k in range(32):
+                mark, space = d[start + 2 + 2 * k], d[start + 3 + 2 * k]
+                if not (300 < mark < 900):
+                    break
+                bits.append(1 if space > 1100 else 0)
+            if len(bits) == 32:
+                b = [sum(bits[8 * n + i] << i for i in range(8)) for n in range(4)]
+                if b[2] ^ b[3] == 0xFF:
+                    return {"nec": [b[0], b[1], b[2]]}
+    return {}
+
+
+def _raw_command(name: str, carrier: int, durations, repeat: bool):
+    """A learned capture played back as it was heard, Logitech's 500 ms (or,
+    repeating, 50 ms) lead in front, the capture's own last gap after it."""
+    words = []
+    for i, us in enumerate(int(x) for x in durations):
+        us = max(1, us)
+        if i % 2 == 0:
+            words.append(0x8000 | min(us, 0x7FFF))
+        else:
+            words.extend(compose525._spaces(us))
+    words = tuple(words) + (1,)
+    lead = compose525._spaces(50_000 if repeat else 500_000)
+    first = lead + words
+    held = words if repeat else None
+    period = round(1e9 / carrier) if carrier else 26_315
+    return compose525.Command(name, (first, held, None), period_ns=period)
+
+
 def op_add_device(container: bytes, name: str, address: int, commands, keys, lcd) -> bytes:
-    """commands: [{name, code, repeat}], NEC on `address`; keys: {key name: command
-    name}; lcd: four [label, command name] or null, in reading order."""
+    """commands: [{name, code, repeat}] (NEC on `address`), or with `address`
+    and `address2` of their own (learned NEC), or {name, carrier, durations,
+    repeat} (a learned capture that is not NEC); keys: {key name: command name};
+    lcd: four [label, command name] or null, in reading order."""
     commands, keys, lcd = _py(commands), _py(keys), _py(lcd)
-    cmds = [compose525.nec_command(str(c["name"]), int(address), int(c["code"]),
-                                   repeat=bool(c.get("repeat")))
-            for c in commands]
+    cmds = []
+    for c in commands:
+        if c.get("durations"):
+            cmds.append(_raw_command(str(c["name"]), int(c.get("carrier") or 0), c["durations"],
+                                     bool(c.get("repeat"))))
+        else:
+            a = int(c["address"]) if c.get("address") is not None else int(address)
+            a2 = int(c["address2"]) if c.get("address2") is not None else None
+            cmds.append(compose525.nec_command(str(c["name"]), a, int(c["code"]),
+                                               repeat=bool(c.get("repeat")), address_high=a2))
     key_map = {str(k): str(v) for k, v in dict(keys).items() if v}
     page = [None if item is None or not item[0] else (str(item[0]), str(item[1])) for item in lcd]
     if not any(page):

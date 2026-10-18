@@ -15,7 +15,9 @@
 // into 0x820000..0x880000 (0x35, data 0x41..0x4A, done 0xF1 0x30), reset (0xE1
 // 0x02) and the clock (0xA5 0x01). Every report is checked in send(), the one
 // place a report leaves the page: the firmware's own block at 0x810000 cannot be
-// erased or written from here, and nothing else can be sent at all.
+// erased or written from here, and nothing else can be sent at all. learnIR()
+// alone may send 0x70 and 0x80, start and stop an infrared capture, as
+// libconcord's learn_from_remote does; they change nothing stored.
 
 export const VENDOR_ID = 0x046d;
 export const PRODUCT_ID_525 = 0xc111;
@@ -101,7 +103,8 @@ export class Harmony525 {
   async send(bytes) {
     const report = new Uint8Array(REPORT_SIZE);
     report.set(bytes);
-    const ok = readOnly(report) || (this.session && updateReport(report, this.session));
+    const ok = readOnly(report) || (this.session && updateReport(report, this.session)) ||
+      (this.learning && (report[0] === 0x70 || report[0] === 0x80));   // a capture, learnIR()
     if (!ok) {
       throw new Error(`refusing to send 0x${report[0].toString(16)}` +
         (this.session ? ": not part of a configuration update" : ": this page only reads"));
@@ -276,6 +279,64 @@ export class Harmony525 {
     // The remote has left the bus. Chrome forgets a device without a USB serial
     // number when it goes, so getting it back needs the user's click and a new
     // prompt: the caller connects again and calls setClock().
+  }
+
+  // Infrared learning, libconcord's CRemote::LearnIR and LearnIRInnerLoop: the
+  // remote is the receiver. 0x70 starts a capture, 0x9x reports carry 16 bit
+  // words (an on time, then the whole on + off time of each burst; the first
+  // three give the carrier), 0.5 s without a burst ends it, 0x80 stops, and the
+  // pipe is read until 0xF0. Returns { carrier, durations } in microseconds,
+  // mark first, or undefined when nothing was pressed within five seconds.
+  async learnIR() {
+    await this.drain();
+    this.learning = true;
+    let carrier = 0;
+    const out = [];
+    try {
+      await this.send([0x70]);
+      let word = 0, tOn = 0, tOff = 0, seq = 0;
+      while (tOff < 500000) {
+        const report = await this.read(word ? 500 : 5000);
+        if (report === undefined) break;
+        const code = report[0] & 0xf0;
+        if (code === 0xf0) break;
+        if (code !== 0x90) throw new Error(`a capture answered with 0x${report[0].toString(16)}`);
+        if (report[1] !== seq) throw new Error("capture reports out of sequence");
+        seq = (seq + 0x10) & 0xff;
+        const len = report[63];
+        if (len & 1) throw new Error("a capture report with an odd length");
+        for (let u = 2; u < len; u += 2) {
+          const t = (report[u] << 8) | report[u + 1];
+          if (word > 2) {
+            if (word & 1) {
+              tOff = tOn ? t - tOn : tOff + t;
+            } else {
+              tOn = t;
+              if (tOn) out.push(tOff, tOn);
+            }
+          } else if (word === 1) {
+            tOn = t;
+          } else if (word === 2 && tOn) {
+            carrier = Math.round((t * 1000000) / tOn);
+            out.push(tOn);
+          }
+          word += 1;
+        }
+        if (out.length > 1000) throw new Error("the capture is too long; tap the key, do not hold it");
+      }
+      if (out.length) out.push(tOff);
+    } finally {
+      try {
+        await this.send([0x80]);
+        for (let i = 0; i < 20; i += 1) {
+          const r = await this.read(500);
+          if (r === undefined || (r[0] & 0xf0) === 0xf0) break;
+        }
+      } finally {
+        this.learning = false;
+      }
+    }
+    return out.length ? { carrier, durations: out } : undefined;
   }
 
   // libconcord's SetTime for arch 8 and up: seven STATE words, then the seconds.

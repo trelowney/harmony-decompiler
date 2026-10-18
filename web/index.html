@@ -140,10 +140,13 @@
       </form>
 
       <form id="f-add-device" class="panel wide">
-        <h3>Add a device (NEC infrared)</h3>
+        <h3>Add a device</h3>
+        <p class="hint">Learn each command from the device's own remote: press Learn, point that
+          remote at the bottom end of the 525 (below the keypad, a hand's width away) and tap the key.
+          NEC codes are recognised; anything else is kept as it was received. Or type NEC codes.</p>
         <div class="row">
           <label>Name <input id="dev-name" required maxlength="20"></label>
-          <label>NEC address <input id="dev-address" required placeholder="0xD5" size="6"></label>
+          <label>NEC address <input id="dev-address" placeholder="learned" size="8"></label>
         </div>
         <table id="dev-commands">
           <thead><tr><th>command</th><th>code</th><th>repeats when held</th><th></th></tr></thead>
