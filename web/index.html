@@ -231,7 +231,7 @@
     <div id="result" hidden>
     <nav class="tabs" id="tabs">
       <button data-tab="overview" class="on">Overview</button>
-      <button data-tab="add-device">Add a device</button>
+      <button data-tab="add-device">Add or edit a device</button>
       <button data-tab="change">Change</button>
       <button data-tab="screens">All screens</button>
       <button data-tab="details">Details</button>
@@ -253,7 +253,11 @@
 
     <section class="tab" id="tab-add-device" hidden>
       <form id="f-add-device" class="panel wide">
-        <h3>Add a device</h3>
+        <h3>Add or edit a device</h3>
+        <label>Device <select id="dev-which"></select></label>
+        <p class="hint">Pick a device to change what its keys send: each key shows what it sends now;
+          Learn, type or pick from the database to change one, × to make it send nothing. Keys left as
+          they are keep what they send.</p>
         <div class="db">
           <label>Find it in the Flipper-IRDB database (some 8,900 remotes, CC0)
             <input id="db-search" placeholder="brand and type, e.g. philips tv" autocomplete="off"></label>
@@ -427,6 +431,6 @@
     </div>
   </aside>
 </div>
-<script type="module" src="app.js?v=7037aa92a4"></script>
+<script type="module" src="app.js?v=3f9b102e00"></script>
 </body>
 </html>

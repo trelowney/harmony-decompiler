@@ -346,3 +346,94 @@ def op_add_power(container: bytes, mode: int, on: int, off=None, delay_tenths: i
     infrared group, off None for a toggle."""
     return compose525.add_power(bytes(container), int(mode), int(on),
                                 None if off is None else int(off), int(delay_tenths))
+
+
+def device_layout(container: bytes, mode: int) -> dict:
+    """What a device's keys and soft keys send now, for the edit form:
+    {name, keys: {key: {command, label}}, soft: [[{label, command} | None] * 4]}
+    with command a record number in the device's infrared group."""
+    raw = bytes(container)
+    d = compose525._Doc(raw)
+    cmp = compose525.cmp
+    dev = next(x for x in compose525.devices(raw) if x.mode == int(mode))
+    labels = compose525.device_commands(raw)
+    key_name = {v: k for k, v in compose525.KEYS.items()}
+
+    def command(op, v, depth=0):
+        """The one record of the device's group an action sends, or None."""
+        if op == 0x7D:
+            return v & 0xFF if v >> 8 == dev.group else None
+        if op != 0x7F or depth > 3:
+            return None
+        hits = [command(o, x, depth + 1) for o, x in d.ins(v)]
+        hits = [h for h in hits if h is not None]
+        return hits[0] if len(set(hits)) == 1 else None
+
+    f = d.mode(dev.mode)
+    keys = {}
+    for tag, op, v in cmp.tagged(d.blob, f["start"]):
+        if tag in key_name:
+            c = command(op, v)
+            if c is not None:
+                keys[key_name[tag]] = {"command": c, "label": labels.get((dev.group, c), ("", f"command {c}"))[1]}
+    soft = []
+    for p in f["pages"]:
+        drawn = [(it["operands"][0], it["operands"][1], compose525.renderer_string(d, it))
+                 for it in compose525.sem.screen_program_path(d.blob, p["program"]) if it["opcode"] in (4, 5)]
+
+        def drawn_label(corner):
+            rows = (13, 16, 24) if corner < 2 else (35, 46)
+            lines = {}
+            for x, y, codes in sorted(drawn, key=lambda t: t[1]):
+                if y in rows and (x >= 48) == (corner in (1, 3)):
+                    lines.setdefault(y, "".join(d.alphabet.get(ch, "?") for ch in codes))
+            return " ".join(lines.values())
+        row = [None] * 4
+        for tag, op, v in cmp.tagged(d.blob, p["list"]):
+            if tag in compose525.SOFT:
+                c = command(op, v)
+                if c is not None:
+                    corner = compose525.SOFT.index(tag)
+                    row[corner] = {"command": c, "label": drawn_label(corner) or f"command {c}"}
+        soft.append(row)
+    return {"name": dev.name, "group": dev.group, "keys": keys, "soft": soft}
+
+
+def _command_of(c: dict):
+    """A form row's command: an existing record (int), or a new one."""
+    if c.get("existing") is not None:
+        return int(c["existing"])
+    if c.get("flipper"):
+        return flipper_ir.command(str(c["name"]), dict(c["flipper"]), bool(c.get("repeat")))
+    if c.get("durations"):
+        return _raw_command(str(c["name"]), int(c.get("carrier") or 0), c["durations"], bool(c.get("repeat")))
+    return compose525.nec_command(str(c["name"]), int(c["address"]), int(c["code"]),
+                                  repeat=bool(c.get("repeat")),
+                                  address_high=None if c.get("address2") is None else int(c["address2"]))
+
+
+def op_rekey_device(container: bytes, mode: int, commands, keys, lcd) -> bytes:
+    """commands: [{name, existing} | a new command as op_add_device takes];
+    keys: {key: command name, or None to make it send nothing}, keys left
+    out keep what they send; lcd: the soft key pages, [[[label, name] | None] * 4]."""
+    commands, keys, lcd = _py(commands), _py(keys), _py(lcd)
+    cmds = {}
+    for c in commands:
+        if c.get("existing") is None and not c.get("flipper") and not c.get("durations") and c.get("address") is None:
+            raise compose525.ComposeError(f"{c.get('name')}: a typed code needs an NEC address")
+        cmds[str(c["name"])] = _command_of(c)
+    key_map = {str(k): (None if v is None else str(v)) for k, v in dict(keys).items()}
+    pages = None                        # None: the soft key pages stay as they are
+    if lcd is not None:
+        pages = [[None if i is None or not i[0] else (str(i[0]), str(i[1])) for i in page] for page in lcd]
+        pages = [p for p in pages if any(p)]
+        if not pages:
+            raise compose525.ComposeError("give the device at least one soft key")
+    try:
+        return compose525.rekey_device(bytes(container), int(mode), cmds, key_map, pages)
+    except compose525.ComposeError as e:
+        if "still referenced" in str(e):
+            raise compose525.ComposeError(
+                "this device's soft key pages are also an activity's screen, so they cannot be "
+                "replaced; change its keys, or leave its soft keys as they are") from e
+        raise

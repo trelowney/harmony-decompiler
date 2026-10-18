@@ -260,6 +260,13 @@ function show() {
   $("f-power").querySelector("button").disabled = !unpowered.length;
   fillPowerCommands();
 
+  const which = $("dev-which");
+  const editingNow = which.value;
+  which.replaceChildren(option("", "a new device"),
+    ...s.devices.filter((d) => d.group != null).map((d) => option(d.mode, d.name)));
+  which.value = [...which.options].some((o) => o.value === editingNow) ? editingNow : "";
+  loadDeviceIntoForm();
+
   const like = $("act-like");
   like.replaceChildren(...s.activities.map((a) => option(a.name, a.name)));
   const byName = [...s.devices].sort((x, y) => x.name.localeCompare(y.name));
@@ -316,9 +323,14 @@ function learnRow(first, repeat) {
     `<td><button type="button" class="c-learn">Learn</button> <button type="button" class="c-del">×</button></td>`;
   tr.querySelector(".r-what").append(first);
   tr.querySelector(".c-repeat").checked = repeat;
-  tr.querySelector(".c-code").addEventListener("input", () => { delete tr.dataset.learned; });
-  tr.querySelector(".c-del").addEventListener("click", () => {
+  tr.querySelector(".c-code").addEventListener("input", () => {
     delete tr.dataset.learned;
+    delete tr.dataset.current;
+  });
+  tr.querySelector(".c-del").addEventListener("click", () => {
+    if (tr.dataset.current !== undefined) tr.dataset.cleared = "1";
+    delete tr.dataset.learned;
+    delete tr.dataset.current;
     tr.querySelector(".c-code").value = "";
   });
   tr.querySelector(".c-learn").addEventListener("click", () => learnInto(tr));
@@ -435,6 +447,8 @@ function clearDeviceRows() {
   }
   for (const tr of document.querySelectorAll("#dev-keys tbody tr, #dev-soft tbody tr:not(.soft-head)")) {
     delete tr.dataset.learned;
+    delete tr.dataset.current;
+    delete tr.dataset.cleared;
     tr.querySelector(".c-code").value = "";
     tr.querySelector(".c-code").title = "";
     const label = tr.querySelector(".soft-label");
@@ -488,7 +502,53 @@ async function useDatabaseFile(path) {
   status(`Loaded ${path}. Check the keys below, then Add the device.`);
 }
 
+// ---- editing a device the configuration already has ----
+let softSnapshot = null;               // the soft keys as loaded, to tell whether they changed
+
+function softState() {
+  return JSON.stringify([...$("dev-soft").querySelectorAll("tbody tr:not(.soft-head)")].map((tr) => [
+    tr.dataset.page, tr.dataset.corner, tr.querySelector(".soft-label").value.trim(),
+    tr.dataset.current ?? null, tr.dataset.learned ?? null, tr.querySelector(".c-code").value.trim()]));
+}
+
+function setCurrent(tr, item) {
+  tr.dataset.current = item.command;
+  const code = tr.querySelector(".c-code");
+  code.value = `now: ${item.label}`;
+  code.title = `sends command ${item.command} of this device now; Learn or type to change it, × to clear`;
+}
+
+function loadDeviceIntoForm() {
+  clearDeviceRows();
+  const mode = $("dev-which").value;
+  const editing = mode !== "";
+  $("dev-name").disabled = editing;
+  $("f-add-device").querySelector("button.primary").textContent = editing ? "Save the changes" : "Add the device";
+  softSnapshot = null;
+  if (!editing) {
+    $("dev-name").value = "";
+    return;
+  }
+  const layout = toJs(webapp.device_layout(current().bytes, Number(mode)));
+  $("dev-name").value = layout.name;
+  for (const tr of $("dev-keys").querySelectorAll("tbody tr")) {
+    const item = layout.keys[tr.dataset.key];
+    if (item) setCurrent(tr, item);
+  }
+  layout.soft.forEach((row, page) => {
+    while ($("dev-soft").querySelectorAll("tr.soft-head").length <= page) addSoftPage();
+    row.forEach((item, corner) => {
+      if (!item) return;
+      const tr = $("dev-soft").querySelector(`tr[data-page="${page}"][data-corner="${corner}"]`);
+      tr.querySelector(".soft-label").value = item.label.slice(0, 10);
+      setCurrent(tr, item);
+    });
+  });
+  softSnapshot = softState();
+}
+
 function buildDeviceForm() {
+  $("dev-which").addEventListener("change", loadDeviceIntoForm);
   let timer;
   $("db-search").addEventListener("input", () => {
     clearTimeout(timer);
@@ -508,6 +568,9 @@ function buildDeviceForm() {
 function rowCommand(tr, name) {
   const repeat = tr.querySelector(".c-repeat").checked;
   if (tr.dataset.learned) return { name, repeat, ...JSON.parse(tr.dataset.learned) };
+  if (tr.dataset.current !== undefined) {
+    return { name: `cur:${tr.dataset.current}`, existing: Number(tr.dataset.current) };
+  }
   const typed = tr.querySelector(".c-code").value.trim();
   if (!typed) return null;
   return { name, repeat, code: parseNumber(typed, `the code for ${name}`) };
@@ -677,7 +740,7 @@ async function main() {
       for (const tr of $("dev-keys").querySelectorAll("tbody tr")) {
         const c = rowCommand(tr, `key:${tr.dataset.key}`);
         if (!c) continue;
-        typed ||= !tr.dataset.learned;
+        typed ||= !tr.dataset.learned && c.existing === undefined;
         commands.push(c);
         keys[tr.dataset.key] = c.name;
       }
@@ -689,12 +752,12 @@ async function main() {
         if (!c || !label) {
           throw new Error(`soft key ${CORNERS[corner]} on page ${page + 1} needs both a label and a command`);
         }
-        typed ||= !tr.dataset.learned;
+        typed ||= !tr.dataset.learned && c.existing === undefined;
         commands.push(c);
         while (lcd.length <= page) lcd.push([null, null, null, null]);
         lcd[page][corner] = [label, c.name];
       }
-      if (!commands.length) throw new Error("learn or type at least one command");
+      if (!commands.length && $("dev-which").value === "") throw new Error("learn or type at least one command");
       if (!lcd.some((p) => p.some(Boolean))) throw new Error("give the device at least one soft key");
     } catch (error) {
       status(error.message, true);
@@ -710,7 +773,27 @@ async function main() {
       }
     }
     const name = $("dev-name").value.trim();
-    change(`add ${name}`, (bytes) => webapp.op_add_device(bytes, name, address, commands, keys, lcd));
+    const editing = $("dev-which").value;
+    if (editing === "") {
+      change(`add ${name}`, (bytes) => webapp.op_add_device(bytes, name, address, commands, keys, lcd));
+      return;
+    }
+    // keys: a new command where one was learned or typed, nothing where one was
+    // cleared, the rest left as they are; soft keys only when they changed
+    const editKeys = {};
+    for (const tr of $("dev-keys").querySelectorAll("tbody tr")) {
+      if (tr.dataset.learned || (tr.dataset.current === undefined && tr.querySelector(".c-code").value.trim())) {
+        editKeys[tr.dataset.key] = `key:${tr.dataset.key}`;
+      } else if (tr.dataset.cleared) {
+        editKeys[tr.dataset.key] = null;
+      }
+    }
+    const newCommands = commands.filter((c) => c.existing !== undefined || !c.name.startsWith("key:") ||
+      Object.prototype.hasOwnProperty.call(editKeys, c.name.slice(4)));
+    for (const c of newCommands) if (c.existing === undefined && c.code !== undefined) c.address = address;
+    const softChanged = softState() !== softSnapshot;
+    change(`edit ${name}`, (bytes) => webapp.op_rekey_device(bytes, Number(editing), newCommands, editKeys,
+      softChanged ? lcd : null));
   });
 
   // ---- writing ----
