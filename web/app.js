@@ -1,5 +1,6 @@
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.mjs";
 import { Harmony525 } from "./hid525.js";
+import { RemoteView } from "./remote.js";
 
 const MODULES = ["_paths", "flipper_ir", "pic18dis", "hconfig", "analyze_525_ir", "check_525_mode_pages",
   "class5_ir_encoder", "verify_525_semantics", "render_525_screens", "h525_lcd_author",
@@ -76,32 +77,106 @@ function option(value, text) {
   return o;
 }
 
-function drawScreens(bytes) {
+// ---- screens and the drawn remote ----
+let screenCache = new Map();   // "mode:page" -> pixels
+let model = null;              // webapp.remote_model of what is on show
+let remote = null;
+
+function screenOf(mode, page) {
+  const key = `${mode}:${page}`;
+  if (!screenCache.has(key)) {
+    try {
+      for (const [m, p, pixels] of toJs(webapp.screens(current().bytes, [mode]))) {
+        screenCache.set(`${m}:${p}`, pixels);
+      }
+    } catch { screenCache.set(key, null); }
+  }
+  return screenCache.get(key) ?? null;
+}
+
+function paint(canvas, pixels) {
+  const css = getComputedStyle(document.documentElement);
+  const g = canvas.getContext("2d");
+  g.fillStyle = css.getPropertyValue("--lcd");
+  g.fillRect(0, 0, 96, 64);
+  g.fillStyle = css.getPropertyValue("--ink");
+  if (pixels) for (let i = 0; i < pixels.length; i += 1) if (pixels[i]) g.fillRect(i % 96, Math.floor(i / 96), 1, 1);
+}
+
+const pagesOfMode = (mode) => mode === model.devices_mode ? model.devices_pages
+  : mode === model.menu_mode ? model.menu_pages : model.modes[mode]?.pages ?? 1;
+
+// the gallery, grouped the way the remote is: Devices, Activities, each device, each activity
+function drawScreens() {
   const holder = $("screens");
   holder.replaceChildren();
-  const modes = toJs(webapp.screen_modes(bytes));
-  const css = getComputedStyle(document.documentElement);
-  for (const [mode, page, pixels] of toJs(webapp.screens(bytes, modes))) {
-    const scale = 3;
-    const canvas = document.createElement("canvas");
-    canvas.width = 96 * scale;
-    canvas.height = 64 * scale;
-    const g = canvas.getContext("2d");
-    g.fillStyle = css.getPropertyValue("--lcd");
-    g.fillRect(0, 0, canvas.width, canvas.height);
-    g.fillStyle = css.getPropertyValue("--ink");
-    for (let i = 0; i < pixels.length; i += 1) {
-      if (pixels[i]) g.fillRect((i % 96) * scale, Math.floor(i / 96) * scale, scale, scale);
+  const groups = [["Devices", model.devices_mode]];
+  if (model.menu_mode != null) groups.push(["Activities menu", model.menu_mode]);
+  const byPlace = (x, y) => x.page - y.page || x.corner - y.corner;
+  for (const d of [...model.devices].sort(byPlace)) groups.push([d.name, d.mode]);
+  for (const a of [...model.activities].sort(byPlace)) groups.push([`${a.name} (activity)`, a.mode]);
+  for (const [title, mode] of groups) {
+    const box = document.createElement("div");
+    box.append(cell("h3", title));
+    const strip = document.createElement("div");
+    strip.className = "screens";
+    const n = pagesOfMode(mode);
+    for (let page = 0; page < n; page += 1) {
+      const canvas = document.createElement("canvas");
+      canvas.width = 96;
+      canvas.height = 64;
+      paint(canvas, screenOf(mode, page));
+      const fig = document.createElement("figure");
+      fig.append(canvas, cell("figcaption", `page ${page + 1} of ${n} · mode ${mode}`));
+      fig.addEventListener("click", () => remote.show(mode, page));
+      strip.append(fig);
     }
-    const fig = document.createElement("figure");
-    fig.append(canvas, cell("figcaption", `mode ${mode}, page ${page + 1}`));
-    holder.append(fig);
+    box.append(strip);
+    holder.append(box);
   }
 }
 
+function flashRow(selector) {
+  const tr = document.querySelector(selector);
+  if (!tr) return;
+  tr.classList.remove("flash");
+  void tr.offsetWidth;
+  tr.classList.add("flash");
+}
+
+// a press on the drawn remote lights the row it belongs to
+function onRemote(event) {
+  if (event.type === "device") flashRow(`#devices tr[data-mode="${event.mode}"]`);
+  else if (event.type === "activity") flashRow(`#activities tr[data-name="${CSS.escape(event.name)}"]`);
+  else if (event.type === "send") {
+    for (const s of event.sends) {
+      const d = model.devices.find((x) => x.name === s.device);
+      if (d) flashRow(`#devices tr[data-mode="${d.mode}"]`);
+    }
+    if (event.kind === "activity") flashRow(`#activities tr[data-name="${CSS.escape(event.name)}"]`);
+  }
+}
+
+const where = (x) => `page ${x.page + 1}, ${CORNERS[x.corner]}`;
+
+function linkedRow(cells, kind, item) {
+  const tr = document.createElement("tr");
+  tr.className = "linked";
+  for (const c of cells) {
+    const td = document.createElement("td");
+    if (c instanceof Node) td.append(c); else td.textContent = c;
+    tr.append(td);
+  }
+  tr.addEventListener("mouseenter", () => remote.point(kind, item.page, item.corner));
+  tr.addEventListener("mouseleave", () => remote.unpoint());
+  return tr;
+}
+
 function show() {
-  const { bytes, label } = current();
+  const { bytes } = current();
   const s = toJs(webapp.summary(bytes));
+  screenCache = new Map();
+  model = toJs(webapp.remote_model(bytes));
   const id = $("identity");
   id.replaceChildren();
   if (identity) {
@@ -113,12 +188,33 @@ function show() {
     row(["checksum", s.trailer_ok ? "valid" : "INVALID"]),
     row(["decompiles and recompiles byte for byte", s.roundtrip_ok ? "yes" : "NO"]));
 
+  const raw = $("devices-raw");
+  raw.replaceChildren(row(["name", "mode", "IR group", "Devices page", "corner"], true));
+  for (const d of s.devices) raw.append(row([d.name, d.mode, d.group ?? "-", d.page + 1, CORNERS[d.corner]]));
+
+  const byPlace = (x, y) => x.page - y.page || x.corner - y.corner;
   const dv = $("devices");
-  dv.replaceChildren(row(["name", "mode", "IR group", "Devices page", "corner"], true));
-  for (const d of s.devices) dv.append(row([d.name, d.mode, d.group ?? "-", d.page + 1, CORNERS[d.corner]]));
+  dv.replaceChildren(row(["name", "on the remote", "keys"], true));
+  for (const d of [...s.devices].sort(byPlace)) {
+    const soft = (model.modes[d.mode]?.soft ?? []).flat().filter(Boolean).length;
+    const keys = Object.keys(model.modes[d.mode]?.keys ?? {}).length;
+    const tr = linkedRow([d.name, where(d), `${soft} soft keys, ${keys} keys`], "device", d);
+    tr.children[1].className = "where";
+    tr.dataset.mode = d.mode;
+    dv.append(tr);
+  }
   const ac = $("activities");
-  ac.replaceChildren(row(["name", "what it does", "menu page", "corner"], true));
-  for (const a of s.activities) ac.append(row([a.name, a.does, a.page + 1, CORNERS[a.corner]]));
+  ac.replaceChildren(row(["name", "what it does", "on the remote"], true));
+  for (const a of [...model.activities].sort(byPlace)) {
+    const does = document.createElement("div");
+    does.className = "does";
+    for (const step of a.does) does.append(cell("span", step));
+    const tr = linkedRow([a.name, does, where(a)], "activity", a);
+    tr.children[2].className = "where";
+    tr.dataset.name = a.name;
+    ac.append(tr);
+  }
+  if (!model.activities.length) ac.append(row(["No activities."]));
 
   // the commands an activity can send, by device
   commandList = toJs(webapp.commands(bytes));
@@ -140,9 +236,9 @@ function show() {
     cornerSelect.replaceChildren(...CORNERS.map((c, i) => option(i, c)));
   };
   fillMove($("mv-device"), $("mv-device-page"), $("mv-device-corner"), s.devices,
-    (x) => x.mode, (x) => `${x.name} (page ${x.page + 1}, ${CORNERS[x.corner]})`);
+    (x) => x.mode, (x) => `${x.name} (${where(x)})`);
   fillMove($("mv-activity"), $("mv-activity-page"), $("mv-activity-corner"), s.activities,
-    (x) => x.name, (x) => `${x.name} (page ${x.page + 1}, ${CORNERS[x.corner]})`);
+    (x) => x.name, (x) => `${x.name} (${where(x)})`);
   const delA = $("del-activity");
   delA.replaceChildren(...s.activities.map((a) => option(a.name, a.name)));
   const like = $("act-like");
@@ -151,6 +247,7 @@ function show() {
   on.replaceChildren();
   for (const name of toJs(webapp.power_devices(bytes))) {
     const l = document.createElement("label");
+    l.className = "check";
     const box = document.createElement("input");
     box.type = "checkbox";
     box.value = name;
@@ -159,12 +256,14 @@ function show() {
   }
 
   const n = history.length - 1;
-  $("changes").textContent = n === 0 ? "No changes yet." :
+  $("changes").textContent = n === 0 ? "" :
     `${n} change${n > 1 ? "s" : ""}: ${history.slice(1).map((h) => h.label).join("; ")}`;
   $("undo").disabled = n === 0;
-  drawScreens(bytes);
+  $("empty").hidden = true;
   $("result").hidden = false;
   $("save").disabled = false;
+  remote.load(model);
+  drawScreens();
 }
 
 async function change(label, run) {
@@ -404,6 +503,24 @@ async function main() {
     return;
   }
   buildDeviceForm();
+  remote = new RemoteView($("remote"), { screen: screenOf, onEvent: onRemote });
+  for (const b of $("tabs").querySelectorAll("button")) {
+    b.addEventListener("click", () => {
+      for (const o of $("tabs").querySelectorAll("button")) o.classList.toggle("on", o === b);
+      for (const t of document.querySelectorAll(".tab")) t.hidden = t.id !== `tab-${b.dataset.tab}`;
+    });
+  }
+  // pointing at a key row of the add device form lights that key on the drawn remote
+  const glowRow = (event, on) => {
+    const tr = event.target.closest?.("tr");
+    if (!tr) return;
+    if (tr.dataset.key) remote.glow(tr.dataset.key, on);
+    else if (tr.dataset.corner != null) remote.glow(`soft${tr.dataset.corner}`, on);
+  };
+  for (const id of ["dev-keys", "dev-soft"]) {
+    $(id).addEventListener("mouseover", (e) => glowRow(e, true));
+    $(id).addEventListener("mouseout", (e) => glowRow(e, false));
+  }
   status(Harmony525.supported()
     ? "Ready. Connect the remote by USB and press Read the remote, or open a file."
     : "This browser has no WebHID (use Chrome or Edge on a computer). Opening a file still works.");

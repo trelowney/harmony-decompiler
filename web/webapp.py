@@ -235,21 +235,21 @@ def remote_model(container: bytes) -> dict:
     by_group = {x.group: x.name for x in devs}
     key_name = {v: k for k, v in compose525.KEYS.items()}
 
-    def send_text(operand):
+    def send_text(operand, fallback=None):
         g, c = operand >> 8, operand & 0xFF
-        dev, label = labels.get((g, c), (by_group.get(g, f"group {g}"), f"command {c}"))
+        dev, label = labels.get((g, c), (by_group.get(g, f"group {g}"), fallback or f"command {c}"))
         return {"device": dev, "label": label}
 
-    def sends(op, v, depth=0, seen=None):
+    def sends(op, v, fallback=None, depth=0, seen=None):
         seen = set() if seen is None else seen
         if op == 0x7D:
-            return [send_text(v)]
+            return [send_text(v, fallback)]
         if op != 0x7F or depth > 5 or v in seen:
             return []
         seen.add(v)
         out = []
         for o, x in d.ins(v):
-            out += sends(o, x, depth + 1, seen)
+            out += sends(o, x, fallback, depth + 1, seen)
         return out
 
     def keys_of(lists):
@@ -257,7 +257,7 @@ def remote_model(container: bytes) -> dict:
         for at in lists:
             for tag, op, v in cmp.tagged(d.blob, at):
                 if tag in key_name and key_name[tag] not in out:
-                    s = sends(op, v)
+                    s = sends(op, v, key_name[tag])
                     if s:
                         out[key_name[tag]] = s
         return out
@@ -266,9 +266,20 @@ def remote_model(container: bytes) -> dict:
         pages = []
         for p in d.mode(mode)["pages"]:
             row = [None] * 4
+            drawn = [(it["operands"][0], it["operands"][1], compose525.renderer_string(d, it))
+                     for it in compose525.sem.screen_program_path(d.blob, p["program"])
+                     if it["opcode"] in (4, 5)]
+
+            def drawn_label(c):
+                rows = (13, 16, 24) if c < 2 else (35, 46)
+                lines = {}
+                for x, y, codes in sorted(drawn, key=lambda t: t[1]):
+                    if y in rows and (x >= 48) == (c in (1, 3)):
+                        lines.setdefault(y, "".join(d.alphabet.get(ch, "?") for ch in codes))
+                return " ".join(lines.values()) or None
             for tag, op, v in cmp.tagged(d.blob, p["list"]):
                 if tag in compose525.SOFT:
-                    s = sends(op, v)
+                    s = sends(op, v, drawn_label(compose525.SOFT.index(tag)))
                     if s:
                         row[compose525.SOFT.index(tag)] = s
             pages.append(row)

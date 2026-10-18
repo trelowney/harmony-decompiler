@@ -5,97 +5,226 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Harmony 525</title>
 <style>
-  :root { --bg: #f6f5f2; --fg: #1d1d1b; --muted: #6b6a66; --line: #d9d6cf; --accent: #2d5bd7;
-          --ok: #1e7a3a; --bad: #b3261e; --lcd: #c9d4b2; --ink: #22281a; }
+  :root {
+    --bg: #f4f3ef; --card: #ffffff; --fg: #1d1d1b; --muted: #6b6a66; --line: #e2dfd8;
+    --accent: #2d5bd7; --accent-soft: #e6ecfb; --ok: #1e7a3a; --bad: #b3261e; --bad-soft: #fbeceb;
+    --lcd: #5cc3ee; --ink: #082536; --flash: #ffe58a;
+    --body: #2b2d31; --body-edge: #1b1c1f; --key: #45484e; --key-fg: #eef0f3;
+    --glow: #7fb2ff;
+  }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #181817; --fg: #ecebe6; --muted: #a3a19a; --line: #3a3936; --accent: #7aa2ff;
-            --ok: #6fcf8a; --bad: #ff8a80; --lcd: #9fae86; --ink: #1a2012; }
+    :root {
+      --bg: #141416; --card: #1d1e21; --fg: #ecebe6; --muted: #a3a19a; --line: #303136;
+      --accent: #7aa2ff; --accent-soft: #23304d; --ok: #6fcf8a; --bad: #ff8a80; --bad-soft: #3a2020;
+      --lcd: #5cc3ee; --ink: #082536; --flash: #5a4a12;
+      --body: #2f3136; --body-edge: #0e0f11; --key: #4a4d54; --key-fg: #f1f2f4;
+    }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg);
          font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  main { max-width: 980px; margin: 0 auto; padding: 24px 16px 64px; }
-  h1 { font-size: 22px; margin: 0 0 4px; }
-  h2 { font-size: 16px; margin: 28px 0 8px; }
-  p.lead { color: var(--muted); margin: 0 0 20px; }
-  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  button, label.button { font: inherit; padding: 8px 14px; border-radius: 6px; cursor: pointer;
-           border: 1px solid var(--line); background: transparent; color: var(--fg); }
-  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
-  button:disabled { opacity: .5; cursor: default; }
-  input[type=file] { display: none; }
-  #status { color: var(--muted); min-height: 1.5em; }
-  .bar { position: sticky; top: 0; z-index: 10; background: var(--bg); padding: 10px 0;
-         border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
-  .sep { flex: 1; }
-  .warning { border: 2px solid var(--bad); border-radius: 8px; padding: 12px 14px; margin: 0 0 16px;
-             background: color-mix(in srgb, var(--bad) 10%, transparent); line-height: 1.5; }
-  .warning strong { color: var(--bad); }
-  #status.bad { color: var(--bad); }
-  progress { width: 260px; }
-  table { border-collapse: collapse; width: 100%; }
-  td, th { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); }
-  th { color: var(--muted); font-weight: 500; }
-  .ok { color: var(--ok); } .bad { color: var(--bad); }
-  .screens { display: flex; flex-wrap: wrap; gap: 12px; }
-  figure { margin: 0; }
-  figcaption { font-size: 12px; color: var(--muted); }
-  canvas { image-rendering: pixelated; border-radius: 4px; display: block; }
-  code { font-size: 13px; }
+  header, .bar-inner, .layout { max-width: 1280px; margin: 0 auto; padding: 0 16px; }
+  header { padding-top: 20px; }
+  h1 { font-size: 22px; margin: 0; }
+  h2 { font-size: 16px; margin: 0 0 10px; }
   h3 { font-size: 15px; margin: 0 0 8px; }
   h4 { font-size: 13px; margin: 12px 0 4px; color: var(--muted); font-weight: 500; }
+  p.lead { color: var(--muted); margin: 4px 0 12px; }
+  code { font-size: 13px; }
   .muted, .hint { color: var(--muted); font-size: 13px; }
-  .panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px;
-            margin-top: 12px; }
-  .panel { border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: flex;
-           flex-direction: column; gap: 8px; align-items: flex-start; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .sep { flex: 1; }
+
+  button, label.button { font: inherit; padding: 7px 14px; border-radius: 8px; cursor: pointer;
+           border: 1px solid var(--line); background: var(--card); color: var(--fg); }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.danger { background: var(--bad); color: #fff; border-color: var(--bad); }
+  button:disabled { opacity: .45; cursor: default; }
+  input[type=file] { display: none; }
+  input, select { font: inherit; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line);
+                  background: var(--card); color: var(--fg); }
+  fieldset { border: 1px solid var(--line); border-radius: 8px; width: 100%; }
+  label.check { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: var(--fg); }
+
+  .warning { border: 1px solid var(--bad); border-radius: 10px; padding: 10px 14px; margin: 0 0 14px;
+             background: var(--bad-soft); font-size: 13px; line-height: 1.5; }
+  .warning strong { color: var(--bad); }
+
+  .bar { position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--bg) 92%, transparent);
+         backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); }
+  .bar-inner { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; padding-bottom: 10px; }
+  .bar .check { max-width: 430px; }
+  #status { color: var(--muted); font-size: 13px; min-height: 1.4em; }
+  #status.bad { color: var(--bad); }
+  progress { width: 220px; }
+
+  .empty { text-align: center; padding: 64px 16px; color: var(--muted); }
+  .layout { display: grid; grid-template-columns: 330px minmax(0, 1fr); gap: 24px; padding-top: 20px;
+            padding-bottom: 64px; align-items: start; }
+  .layout[hidden] { display: none; }
+  .remote-col { position: sticky; top: 124px; max-height: calc(100vh - 132px); overflow-y: auto;
+                padding: 4px 4px 12px; scrollbar-width: thin; }
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; }
+    .remote-col { position: static; max-width: 360px; margin: 0 auto; }
+  }
+
+  .tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+  .tabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none;
+                 padding: 8px 12px; color: var(--muted); }
+  .tabs button.on { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
+  .tab[hidden] { display: none; }
+
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+          margin-bottom: 16px; }
+  table { border-collapse: collapse; width: 100%; }
+  td, th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  th { color: var(--muted); font-weight: 500; font-size: 13px; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); }
+  tr.linked { transition: background .2s; }
+  tr.linked:hover { background: var(--accent-soft); }
+  tr.flash { animation: flash 1.4s ease-out; }
+  @keyframes flash { 0% { background: var(--flash); } 100% { background: transparent; } }
+  .where { color: var(--muted); white-space: nowrap; font-size: 13px; }
+  .does span { display: inline-block; padding: 1px 8px; margin: 1px 4px 1px 0; border-radius: 999px;
+               background: var(--accent-soft); font-size: 13px; }
+
+  .panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px;
+           display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
   .panel.wide { grid-column: 1 / -1; }
   .panel label { display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--muted); }
-  input, select { font: inherit; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line);
-                  background: var(--bg); color: var(--fg); }
-  fieldset { border: 1px solid var(--line); border-radius: 6px; }
-  .keys { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; width: 100%; }
-  .keys label { flex-direction: row; align-items: center; justify-content: space-between; }
-  .soft { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; width: 100%; }
+  .panel label.check { flex-direction: row; color: var(--fg); }
   .learn-table { width: auto; }
-  .learn-table td { padding: 2px 6px; border-bottom: 1px solid var(--line); }
+  .learn-table td { padding: 2px 6px; }
   .learn-table .r-what { min-width: 110px; }
-  label.check { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; color: var(--fg); }
+  .learn-table tr.soft-head td { padding-top: 10px; }
   .db { width: 100%; }
+  .db label { width: 100%; }
+  .db input { width: 100%; max-width: 420px; }
   .db-results { list-style: none; padding: 0; margin: 4px 0; max-height: 240px; overflow-y: auto; width: 100%; }
   .db-results li button { width: 100%; text-align: left; border: none; border-bottom: 1px solid var(--line);
-                          border-radius: 0; padding: 4px 8px; font-size: 13px; }
-  .db-results li button:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-  button.danger { background: var(--bad); color: #fff; border-color: var(--bad); }
+                          border-radius: 0; padding: 4px 8px; font-size: 13px; background: none; }
+  .db-results li button:hover { background: var(--accent-soft); }
+
+  .gallery h3 { margin-top: 18px; }
+  .screens { display: flex; flex-wrap: wrap; gap: 12px; }
+  figure { margin: 0; cursor: pointer; }
+  figure canvas { width: 192px; height: 128px; image-rendering: pixelated; border-radius: 6px; display: block;
+                  border: 2px solid transparent; }
+  figure:hover canvas { border-color: var(--accent); }
+  figcaption { font-size: 12px; color: var(--muted); }
+
+  /* the drawn remote: glossy black top, silver bottom, blue screen */
+  .remote { --r-lcd: #5cc3ee; --r-ink: #082536; --glow: #7fd3ff;
+            width: 300px; margin: 0 auto; border-radius: 40px 40px 56px 56px; overflow: hidden;
+            box-shadow: 0 14px 34px rgb(0 0 0 / .35), 0 0 0 2px #9da3aa; user-select: none; }
+  .r-black { background: radial-gradient(120% 60% at 30% 0%, #3b3f45 0%, #131417 55%, #0b0c0e 100%);
+             padding: 18px 16px 16px; display: flex; flex-direction: column; gap: 10px; align-items: center; }
+  .r-silver { background: linear-gradient(90deg, #a9aeb4 0%, #e6e9ec 30%, #f4f5f6 50%, #dfe2e6 70%, #a3a8ae 100%);
+              padding: 14px 18px 34px; display: flex; flex-direction: column; gap: 12px; align-items: center;
+              border-top: 2px solid #c9ced3; }
+  .rk { background: #2c2f34; color: #e9ecef; border: none; border-radius: 10px; padding: 0; height: 24px;
+        min-width: 0; font-size: 11px; box-shadow: 0 2px 0 #000, inset 0 1px 0 rgb(255 255 255 / .12);
+        transition: background .15s, opacity .15s, box-shadow .15s; }
+  .rk:hover:not(:disabled) { background: #464a51; border: none; }
+  .rk.dead { opacity: .4; }
+  .rk.glow { box-shadow: 0 0 0 3px var(--glow), 0 0 14px var(--glow) !important; opacity: 1; }
+  .rk.hit { animation: hit .35s ease-out; }
+  @keyframes hit { 0% { transform: translateY(2px); box-shadow: 0 0 0 3px var(--glow); } 100% { transform: none; } }
+  .rk:disabled { opacity: .3; }
+  .r-row { display: grid; gap: 8px; width: 100%; }
+  .r-act { grid-template-columns: 1fr; width: 56%; }
+  .rk.act { height: 26px; border-radius: 999px; font-size: 12px; font-weight: 600; color: #dff6ff;
+            background: linear-gradient(180deg, #3a9fd6, #1d6fa3); box-shadow: 0 0 10px rgb(80 190 255 / .55), 0 2px 0 #000; }
+  .r-two { grid-template-columns: 1fr 1fr; }
+  .r-small { width: 70%; }
+  .rk.pill { border-radius: 999px; height: 20px; }
+  .r-screenrow { display: grid; grid-template-columns: 14px 1fr 14px; gap: 6px; width: 100%; }
+  .r-softcol { display: flex; flex-direction: column; justify-content: space-around; gap: 10px; }
+  .rk.soft { height: 34px; border-radius: 6px; background: #3a3e45; }
+  .r-lcd { position: relative; border-radius: 6px; padding: 5px; background: #050607;
+           box-shadow: inset 0 0 0 1px #2a2d33; }
+  .r-lcd canvas { display: block; width: 100%; aspect-ratio: 3 / 2; image-rendering: pixelated; border-radius: 3px;
+                  box-shadow: 0 0 12px rgb(92 195 238 / .35); }
+  .r-quad { position: absolute; width: calc(50% - 5px); height: calc(50% - 5px); pointer-events: none;
+            border-radius: 4px; transition: background .15s, box-shadow .15s; }
+  .r-quad.q0 { left: 5px; top: 5px; } .r-quad.q1 { right: 5px; top: 5px; }
+  .r-quad.q2 { left: 5px; bottom: 5px; } .r-quad.q3 { right: 5px; bottom: 5px; }
+  .r-quad.lit { background: rgb(255 255 255 / .25); box-shadow: inset 0 0 0 2px #fff; }
+  .r-pages { grid-template-columns: 1fr 1fr; width: 64%; gap: 2px; }
+  .rk.page { height: 16px; font-size: 12px; }
+  .r-pages .r-cap:first-child .rk, .r-pages > .rk:first-child { border-radius: 999px 0 0 999px; }
+  .r-pages > .rk:last-child { border-radius: 0 999px 999px 0; }
+  .r-transport { grid-template-columns: repeat(4, 1fr); gap: 4px 10px; width: 92%; }
+  .r-cap { display: flex; flex-direction: column; align-items: center; gap: 1px; }
+  .r-cap small { font-size: 9px; color: #9aa1a9; }
+  .rk.round { width: 30px; height: 30px; border-radius: 50%; font-size: 10px; }
+  .rk.rec { color: #ff5a4e; }
+  .r-black .r-two { width: 84%; }
+  .r-wheelwrap { position: relative; margin-top: -2px; }
+  .r-wheel { display: grid; grid-template-columns: 30px 132px 30px; gap: 8px; align-items: center;
+             padding: 10px 14px; border-radius: 999px;
+             background: linear-gradient(180deg, #d6dade, #f7f8f9 50%, #c8cdd2); box-shadow: inset 0 1px 3px rgb(0 0 0 / .25); }
+  .r-rocker { display: flex; flex-direction: column; gap: 4px; }
+  .rk.rock { height: 46px; background: #e9ecef; color: #3a3f45; font-size: 15px; font-weight: 600;
+             box-shadow: 0 2px 0 #9aa0a6, inset 0 1px 0 #fff; }
+  .rk.rock:hover:not(:disabled) { background: #fff; }
+  .r-vol .rk.rock:first-child, .r-ch .rk.rock:first-child { border-radius: 14px 14px 4px 4px; }
+  .r-vol .rk.rock:last-child, .r-ch .rk.rock:last-child { border-radius: 4px 4px 14px 14px; }
+  .r-wheelcap { display: flex; justify-content: space-between; padding: 0 22px; font-size: 9px; color: #5d636a; }
+  .r-disc { position: relative; width: 132px; height: 132px; border-radius: 50%;
+            background: radial-gradient(circle at 40% 30%, #3b3f45, #101114 70%); box-shadow: 0 2px 6px rgb(0 0 0 / .4); }
+  .rk.nav { position: absolute; width: 38px; height: 34px; background: transparent; box-shadow: none; font-size: 12px; }
+  .rk.nav:hover:not(:disabled) { background: rgb(255 255 255 / .12); }
+  .n-up { left: 47px; top: 6px; } .n-down { left: 47px; bottom: 6px; }
+  .n-left { left: 4px; top: 49px; } .n-right { right: 4px; top: 49px; }
+  .rk.n-ok { left: 40px; top: 40px; width: 52px; height: 52px; border-radius: 50%; background: #25282d;
+             box-shadow: 0 0 0 2px #4b5058; font-weight: 700; }
+  .r-digits { grid-template-columns: repeat(3, 1fr); gap: 8px 16px; width: 84%; }
+  .r-silver .rk:not(.rock):not(.nav):not(.n-ok) { background: linear-gradient(180deg, #fbfbfc, #d9dde1); color: #33383e;
+             box-shadow: 0 2px 0 #8e949a, inset 0 1px 0 #fff; height: 20px; border-radius: 999px; font-size: 11px; }
+  .r-silver .rk:not(.rock):not(.nav):not(.n-ok):hover:not(:disabled) { background: #fff; }
+  .r-colours { grid-template-columns: repeat(4, 1fr); gap: 10px; width: 84%; }
+  .r-silver .rk.c-red { background: linear-gradient(180deg, #ef5b4f, #b72a20) !important; }
+  .r-silver .rk.c-green { background: linear-gradient(180deg, #4fd27f, #1f8c46) !important; }
+  .r-silver .rk.c-yellow { background: linear-gradient(180deg, #f6d84a, #c29a0c) !important; }
+  .r-silver .rk.c-blue { background: linear-gradient(180deg, #5b9df0, #2563c4) !important; }
+  .r-colours .rk { height: 12px !important; }
+  .r-where { text-align: center; font-weight: 600; margin-top: 14px; }
+  .r-log { text-align: center; color: var(--muted); font-size: 13px; min-height: 2.6em; margin-top: 4px; }
+  .r-log.pulse { animation: logpulse .6s ease-out; }
+  @keyframes logpulse { 0% { color: var(--accent); } 100% { color: var(--muted); } }
 </style>
 </head>
 <body>
-<main>
+<header>
   <h1>Harmony 525</h1>
-  <p class="lead">Reads a Logitech Harmony 525 over USB in this browser, or opens a saved
-    <code>.EZHex</code>, shows its devices, activities and screens, changes them, and writes the
-    result back the way Concordance does. Nothing is sent anywhere but to the remote, and nothing
-    is written to it unless you tick the box and press Write.</p>
-
+  <p class="lead">Read a Logitech Harmony 525 over USB, or open a saved <code>.EZHex</code>; see and try its
+    devices, activities and screens; change them; write the result back. Everything happens in this browser.</p>
   <div class="warning" role="alert">
     <strong>Experimental. Use entirely at your own risk.</strong>
-    This is a test version from a reverse engineering project. It has been tried on
-    <strong>one Harmony 525 only</strong>, the author's own, and on nothing else. Writing to a remote
-    can leave it not working, and there may be no way back. There is no warranty and no support,
-    and nobody behind this page is responsible for a remote, or anything else, that it damages.
-    Not affiliated with or endorsed by Logitech. Always keep the backup file it saves.
+    A test version from a reverse engineering project, tried on <strong>one Harmony 525 only</strong>, the
+    author's own. Writing to a remote can leave it not working, and there may be no way back. No warranty, no
+    support; nobody behind this page is responsible for a remote, or anything else, that it damages. Not
+    affiliated with or endorsed by Logitech. Always keep the backup file it saves.
   </div>
+</header>
 
-  <div class="bar">
+<div class="bar">
+  <div class="bar-inner">
     <div class="row">
       <button id="connect" class="primary">Read the remote</button>
       <label class="button" for="file">Open a .EZHex</label>
       <input id="file" type="file" accept=".EZHex,.ezhex">
       <button id="save" disabled>Save .EZHex</button>
+      <button id="undo" disabled>Undo</button>
       <span class="sep"></span>
       <label class="check"><input type="checkbox" id="write-ok"> I understand this is experimental,
-        tested on one remote only and entirely at my own risk, I keep the backup, and I want to
-        replace my remote's configuration</label>
+        tested on one remote only and at my own risk, I keep the backup, and I want to replace my
+        remote's configuration</label>
       <button id="write" class="danger" disabled>Write to the remote</button>
       <button id="finish" class="primary" hidden>Reconnect and finish</button>
       <button id="restore" hidden>Write the backup back</button>
@@ -103,95 +232,55 @@
     <div class="row">
       <progress id="progress" value="0" max="1" hidden></progress>
       <div id="status">Loading the reader…</div>
+      <span class="sep"></span>
+      <span id="changes" class="muted"></span>
     </div>
   </div>
+</div>
 
-  <section id="result" hidden>
-    <h2>Remote</h2>
-    <table id="identity"></table>
-    <h2>Devices</h2>
-    <table id="devices"></table>
-    <h2>Activities</h2>
-    <table id="activities"></table>
-    <h2>Change</h2>
-    <p class="lead">Each change is built and checked in this page; nothing reaches the remote.
-      Save the result and write it with Concordance:
-      <code>concordance --no-web --write-config file.EZHex</code>.</p>
-    <div class="row">
-      <button id="undo" disabled>Undo</button>
-      <span id="changes" class="muted">No changes yet.</span>
-    </div>
+<div id="empty" class="empty">Read the remote, or open a <code>.EZHex</code> file, to start.</div>
 
-    <div class="panels">
-      <form id="f-del-device" class="panel">
-        <h3>Delete a device</h3>
-        <select id="del-device"></select>
-        <p class="hint">It goes from every Devices screen. If activities use it, it is taken out of
-          them: they no longer switch it or send to it. A soft key label an activity screen has for
-          it stays drawn and does nothing.</p>
-        <button>Delete</button>
-      </form>
+<div id="result" class="layout" hidden>
+  <aside class="remote-col">
+    <div id="remote"></div>
+  </aside>
 
-      <form id="f-move-device" class="panel">
-        <h3>Move a device</h3>
-        <select id="mv-device"></select>
-        <div class="row">
-          <label>to page <select id="mv-device-page"></select></label>
-          <label>corner <select id="mv-device-corner"></select></label>
-        </div>
-        <p class="hint">A device already there swaps places with it. Every Devices screen, each
-          activity's too, gets the same order.</p>
-        <button>Move</button>
-      </form>
+  <main>
+    <nav class="tabs" id="tabs">
+      <button data-tab="overview" class="on">Overview</button>
+      <button data-tab="add-device">Add a device</button>
+      <button data-tab="change">Change</button>
+      <button data-tab="screens">All screens</button>
+      <button data-tab="details">Details</button>
+    </nav>
 
-      <form id="f-move-activity" class="panel">
-        <h3>Move an activity</h3>
-        <select id="mv-activity"></select>
-        <div class="row">
-          <label>to page <select id="mv-activity-page"></select></label>
-          <label>corner <select id="mv-activity-corner"></select></label>
-        </div>
-        <p class="hint">An activity already there swaps places with it.</p>
-        <button>Move</button>
-      </form>
+    <section class="tab" id="tab-overview">
+      <div class="card">
+        <h2>Devices</h2>
+        <table id="devices"></table>
+      </div>
+      <div class="card">
+        <h2>Activities</h2>
+        <table id="activities"></table>
+      </div>
+      <p class="hint">Point at a row to see where it sits on the remote. Press keys on the drawn remote to
+        try the configuration: it shows what each key would send, and the row it belongs to lights up.
+        Dimmed keys do nothing on the screen on show.</p>
+    </section>
 
-      <form id="f-del-activity" class="panel">
-        <h3>Delete an activity</h3>
-        <select id="del-activity"></select>
-        <button>Delete</button>
-      </form>
-
-      <form id="f-add-activity" class="panel">
-        <h3>Add an activity</h3>
-        <label>Name <input id="act-name" required maxlength="20"></label>
-        <label>Built like <select id="act-like"></select></label>
-        <fieldset><legend>Switch on</legend><div id="act-on"></div></fieldset>
-        <fieldset><legend>Then send, in this order</legend>
-          <div class="row">
-            <select id="act-step-device"></select>
-            <select id="act-step-command"></select>
-            <button type="button" id="act-step-add">Add</button>
-          </div>
-          <ol id="act-steps"></ol>
-        </fieldset>
-        <p class="hint">Its keys and Devices screen are the ones of the activity it is built like;
-          everything not switched on is switched off. With no commands to send it also takes that
-          activity's inputs (its TV input, say); with commands, those are what it sends.</p>
-        <button>Add</button>
-      </form>
-
+    <section class="tab" id="tab-add-device" hidden>
       <form id="f-add-device" class="panel wide">
         <h3>Add a device</h3>
-        <p class="hint">For each 525 key the device should answer, press Learn, point the device's
-          own remote at the bottom end of the 525 (below the keypad, a hand's width away) and tap that
-          key on it. Any infrared works: NEC is recognised and shown, anything else is kept as it was
-          received. Or type an NEC command, with the NEC address below. Keys left empty do nothing.</p>
         <div class="db">
-          <label>Or find it in the Flipper-IRDB database (some 8,900 remotes, CC0)
-            <input id="db-search" placeholder="brand and type, e.g. philips tv" size="34" autocomplete="off"></label>
+          <label>Find it in the Flipper-IRDB database (some 8,900 remotes, CC0)
+            <input id="db-search" placeholder="brand and type, e.g. philips tv" autocomplete="off"></label>
           <ul id="db-results" class="db-results"></ul>
           <p id="db-note" class="hint"></p>
         </div>
+        <p class="hint">Or learn it: for each 525 key the device should answer, press Learn, point the
+          device's own remote at the bottom end of the 525 (below the keypad, a hand's width away) and tap
+          that key on it. Any infrared works. Or type an NEC command, with the NEC address below. Keys left
+          empty do nothing. Pointing at a row lights its key on the drawn remote.</p>
         <div class="row">
           <label>Name <input id="dev-name" required maxlength="20"></label>
           <label>NEC address, for typed codes <input id="dev-address" placeholder="0xD5" size="8"></label>
@@ -201,24 +290,100 @@
         <button type="button" id="dev-soft-page">Add a page of soft keys</button>
         <h4>525 keys</h4>
         <table id="dev-keys" class="learn-table"><tbody></tbody></table>
-        <button>Add the device</button>
+        <button class="primary">Add the device</button>
       </form>
-    </div>
+    </section>
 
-    <h2>Write to the remote</h2>
-    <div class="panel wide" id="write-panel">
-      <p class="hint">Writes the configuration on show to the remote the way Concordance does:
-        it invalidates the old one, erases only the configuration's own flash (never the firmware),
-        writes, reads everything back and compares, restarts the remote and sets its clock. Before it
-        starts, the page saves what it read from the remote as a backup file. Only possible after
-        reading the remote in this page.</p>
-      <p class="hint">The write controls are in the bar at the top, which stays in view.</p>
-    </div>
+    <section class="tab" id="tab-change" hidden>
+      <p class="hint">Each change is built and checked here; nothing reaches the remote until you write it.
+        Undo is in the bar at the top.</p>
+      <h2>Devices</h2>
+      <div class="panels">
+        <form id="f-move-device" class="panel">
+          <h3>Move a device</h3>
+          <select id="mv-device"></select>
+          <div class="row">
+            <label>to page <select id="mv-device-page"></select></label>
+            <label>corner <select id="mv-device-corner"></select></label>
+          </div>
+          <p class="hint">A device already there swaps places with it.</p>
+          <button>Move</button>
+        </form>
+        <form id="f-del-device" class="panel">
+          <h3>Delete a device</h3>
+          <select id="del-device"></select>
+          <p class="hint">It goes from every Devices screen. Activities that use it no longer switch it or
+            send to it.</p>
+          <button>Delete</button>
+        </form>
+      </div>
 
-    <h2>Screens</h2>
-    <div id="screens" class="screens"></div>
-  </section>
-</main>
+      <h2 style="margin-top:20px">Activities</h2>
+      <div class="panels">
+        <form id="f-add-activity" class="panel wide">
+          <h3>Add an activity</h3>
+          <div class="row">
+            <label>Name <input id="act-name" required maxlength="20"></label>
+            <label>Built like <select id="act-like"></select></label>
+          </div>
+          <fieldset><legend>Switch on</legend><div id="act-on" class="row"></div></fieldset>
+          <fieldset><legend>Then send, in this order</legend>
+            <div class="row">
+              <select id="act-step-device"></select>
+              <select id="act-step-command"></select>
+              <button type="button" id="act-step-add">Add</button>
+            </div>
+            <ol id="act-steps"></ol>
+          </fieldset>
+          <p class="hint">Its keys and Devices screen are the ones of the activity it is built like;
+            everything not switched on is switched off. With no commands to send it also takes that
+            activity's inputs (its TV input, say); with commands, those are what it sends.</p>
+          <button>Add</button>
+        </form>
+        <form id="f-move-activity" class="panel">
+          <h3>Move an activity</h3>
+          <select id="mv-activity"></select>
+          <div class="row">
+            <label>to page <select id="mv-activity-page"></select></label>
+            <label>corner <select id="mv-activity-corner"></select></label>
+          </div>
+          <p class="hint">An activity already there swaps places with it.</p>
+          <button>Move</button>
+        </form>
+        <form id="f-del-activity" class="panel">
+          <h3>Delete an activity</h3>
+          <select id="del-activity"></select>
+          <button>Delete</button>
+        </form>
+      </div>
+    </section>
+
+    <section class="tab gallery" id="tab-screens" hidden>
+      <p class="hint">Every screen of the configuration, drawn from the file. Click one to show it on the
+        remote.</p>
+      <div id="screens"></div>
+    </section>
+
+    <section class="tab" id="tab-details" hidden>
+      <div class="card">
+        <h2>Configuration</h2>
+        <table id="identity"></table>
+      </div>
+      <div class="card" id="write-panel">
+        <h2>Writing to the remote</h2>
+        <p class="hint">Write does what Concordance does: it invalidates the old configuration, erases only
+          the configuration's own flash (never the firmware), writes, reads everything back and compares,
+          restarts the remote and sets its clock. Before it starts, the page saves what it read from the
+          remote as a backup file. Only possible after reading the remote in this page. Without this page:
+          <code>concordance --no-web --write-config file.EZHex</code>.</p>
+      </div>
+      <div class="card">
+        <h2>Devices, as the file has them</h2>
+        <table id="devices-raw"></table>
+      </div>
+    </section>
+  </main>
+</div>
 <script type="module" src="app.js"></script>
 </body>
 </html>
