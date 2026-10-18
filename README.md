@@ -59,6 +59,22 @@ python render_525_screens.py --out rendered   # draw all 135 menus as BMPs
 python verify_compose525.py                   # add five devices to the sample, check every step
 ```
 
+## In a browser, with nothing installed
+
+`web/` reads a Harmony 525 over USB straight from Chrome or Edge (WebHID), or
+opens a saved `.EZHex`, and shows its devices, activities and rendered screens,
+with a backup to save. It runs the same Python as `tools/` in the browser
+(Pyodide), sends nothing anywhere, and can only send two commands: the version
+query and flash reads. On 2026-10-18 it read the owner's 525 byte identical to
+`concordance --dump-config`. Serve the repository and open `web/`:
+
+```sh
+python -m http.server 8525      # then http://127.0.0.1:8525/web/
+```
+
+The USB reading follows [@dannybloe](https://github.com/dannybloe)'s protocol
+work in harmony-explorations (MIT). Writing from the page comes later.
+
 ## Scope
 
 This repository is about **the config format and the toolchain around it**.

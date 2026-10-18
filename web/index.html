@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Harmony 525 Reader</title>
+<style>
+  :root { --bg: #f6f5f2; --fg: #1d1d1b; --muted: #6b6a66; --line: #d9d6cf; --accent: #2d5bd7;
+          --ok: #1e7a3a; --bad: #b3261e; --lcd: #c9d4b2; --ink: #22281a; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #181817; --fg: #ecebe6; --muted: #a3a19a; --line: #3a3936; --accent: #7aa2ff;
+            --ok: #6fcf8a; --bad: #ff8a80; --lcd: #9fae86; --ink: #1a2012; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 28px 0 8px; }
+  p.lead { color: var(--muted); margin: 0 0 20px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button, label.button { font: inherit; padding: 8px 14px; border-radius: 6px; cursor: pointer;
+           border: 1px solid var(--line); background: transparent; color: var(--fg); }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  input[type=file] { display: none; }
+  #status { margin-top: 12px; color: var(--muted); min-height: 1.5em; }
+  #status.bad { color: var(--bad); }
+  progress { width: 260px; }
+  table { border-collapse: collapse; width: 100%; }
+  td, th { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 500; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); }
+  .screens { display: flex; flex-wrap: wrap; gap: 12px; }
+  figure { margin: 0; }
+  figcaption { font-size: 12px; color: var(--muted); }
+  canvas { image-rendering: pixelated; border-radius: 4px; display: block; }
+  code { font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Harmony 525 Reader</h1>
+  <p class="lead">Reads a Logitech Harmony 525 over USB in this browser, or opens a saved
+    <code>.EZHex</code>, and shows its devices, activities and screens. Nothing is sent anywhere,
+    and this page cannot write to the remote: it only sends the version query and flash reads.</p>
+
+  <div class="row">
+    <button id="connect" class="primary">Read the remote</button>
+    <label class="button" for="file">Open a .EZHex</label>
+    <input id="file" type="file" accept=".EZHex,.ezhex">
+    <button id="save" disabled>Save backup (.EZHex)</button>
+    <progress id="progress" value="0" max="1" hidden></progress>
+  </div>
+  <div id="status">Loading the reader…</div>
+
+  <section id="result" hidden>
+    <h2>Remote</h2>
+    <table id="identity"></table>
+    <h2>Devices</h2>
+    <table id="devices"></table>
+    <h2>Activities</h2>
+    <table id="activities"></table>
+    <h2>Screens</h2>
+    <div id="screens" class="screens"></div>
+  </section>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>
