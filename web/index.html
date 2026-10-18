@@ -55,11 +55,10 @@
 
   /* three columns the height of the window: the remote, the tabs (the only part
      that scrolls), and the file and write controls; stacked on a narrow screen */
-  .r-fit { transform-origin: top center; }
-  .app { display: grid; grid-template-columns: clamp(300px, 24vw, 520px) minmax(0, 1fr) 300px; height: 100vh; }
+  .r-fit { transform-origin: top left; }
+  .app { display: grid; grid-template-columns: auto minmax(0, 1fr) 300px; height: 100vh; }
   .remote-col { height: 100vh; overflow: hidden; padding: 16px 18px; border-right: 1px solid var(--line); }
   .center { height: 100vh; overflow-y: auto; padding: 16px 24px 48px; }
-  .center > * { max-width: 1000px; }
   .side { height: 100vh; overflow-y: auto; padding: 16px; border-left: 1px solid var(--line);
           display: flex; flex-direction: column; gap: 14px; background: var(--card); }
   .side-block { display: flex; flex-direction: column; gap: 8px; }

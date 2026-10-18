@@ -282,19 +282,21 @@ export class RemoteView {
   fit() {
     const box = this.fitBox;
     if (matchMedia("(max-width: 1100px)").matches) {
-      box.style.transform = "";
-      box.style.marginBottom = "";
+      box.style.transform = box.style.marginBottom = box.style.width = this.root.style.width = "";
       return;
     }
+    // as tall as the window allows, and the column exactly as wide as the
+    // remote drawn at that size, so there is no empty band beside it
     const cs = getComputedStyle(this.root);
     const room = this.root.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
-    const need = box.offsetHeight;
-    // grows and shrinks with the window: as tall as the column, no wider than it
-    const width = this.root.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
     const drawn = this.body.offsetWidth;
-    const scale = need && room && drawn ? Math.min(room / need, width / drawn, 1.8) : 1;
+    box.style.width = `${drawn}px`;
+    const need = box.offsetHeight;
+    if (!need || !room || !drawn) return;
+    const scale = Math.min(room / need, (innerWidth * 0.4) / drawn, 1.8);
     box.style.transform = `scale(${scale})`;
     box.style.marginBottom = `${need * (scale - 1)}px`;
+    this.root.style.width = `${Math.ceil(drawn * scale + parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight))}px`;
   }
 
   // the backlight: on for six seconds, then the screen goes dim again
