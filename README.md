@@ -74,8 +74,9 @@ configuration (add or delete a device or an activity) and writes it back the
 way Concordance does, only inside the configuration's own flash and only after
 a box is ticked, with a backup saved first. On 2026-10-18 it read the owner's
 525 byte identical to `concordance --dump-config`, and wrote it back, reset it
-and set its clock, after which Concordance read the same bytes. Serve the
-repository and open `web/`:
+and set its clock, after which Concordance read the same bytes. It runs at
+**https://trelowney.github.io/harmony-decompiler/web/** in Chrome or Edge. To
+run it locally instead, serve the repository and open `web/`:
 
 ```sh
 python -m http.server 8525      # then http://127.0.0.1:8525/web/
