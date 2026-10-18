@@ -171,10 +171,11 @@ def render_map(blob: bytes) -> dict[tuple[int, int], tuple[list[list[int]], list
     sections = semantics.section_offsets(blob)
     fonts = renderer.fonts(blob, sections)
     result = {}
+    images = {}
     for entry in renderer.page_roots(blob, sections):
         try:
             result[(entry["mode"], entry["page"])] = renderer.render_page(
-                blob, fonts, entry["root"])
+                blob, fonts, entry["root"], images)
         except Exception as error:
             raise RuntimeError(
                 f"render failed for mode {entry['mode']} page {entry['page']} "

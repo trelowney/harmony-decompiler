@@ -136,11 +136,17 @@ def picture(blob: bytes, address: int) -> list[list[int]]:
 
 
 def draw_picture(canvas, source, source_x, source_y, dest_x, dest_y, width, height):
+    # Row slices, clipped to both bitmaps: the same pixels the per-pixel loop
+    # put, about twenty times faster, which matters once this runs in a browser.
     for y in range(height):
-        for x in range(width):
-            sy, sx = source_y + y, source_x + x
-            if 0 <= sy < len(source) and 0 <= sx < len(source[sy]):
-                put(canvas, dest_x + x, dest_y + y, source[sy][sx])
+        sy, dy = source_y + y, dest_y + y
+        if not (0 <= sy < len(source) and 0 <= dy < len(canvas)):
+            continue
+        row, out = source[sy], canvas[dy]
+        x0 = max(0, -source_x, -dest_x)
+        x1 = min(width, len(row) - source_x, len(out) - dest_x)
+        if x1 > x0:
+            out[dest_x + x0:dest_x + x1] = row[source_x + x0:source_x + x1]
 
 
 def draw_string(canvas, font: Font, codes: bytes, x: int, y: int) -> int:
@@ -167,11 +173,14 @@ def page_roots(blob: bytes, sections: list[int | None]):
     return result
 
 
-def render_page(blob: bytes, font_sets: list[Font], root: int):
+def render_page(blob: bytes, font_sets: list[Font], root: int, image_cache: dict | None = None):
+    """`image_cache` may be shared between pages of one blob: the background
+    strips are a handful of bitmaps drawn over a thousand times."""
     canvas = blank(96, 64)
     current_font = 0
     strings = []
-    image_cache = {}
+    if image_cache is None:
+        image_cache = {}
     for item in semantics.screen_program_path(blob, root):
         opcode, operands = item["opcode"], item["operands"]
         if opcode == 3:

@@ -1759,8 +1759,16 @@ def _overlay_known_regions(blob: bytes, regions: list[dict], known: list[dict]):
             raise ConfigError(f"overlapping semantic overlay at 0x{start:X}")
         advance(start, keep=True)
 
-        touched = [r for r in regions
-                   if r["offset"] < stop and start < r["offset"] + r["length"]]
+        # `regions` tiles the blob in offset order and `index` is at or before
+        # the region holding `start`, so the overlap is a short walk from there
+        # rather than a scan of every region (that scan was most of a decompile)
+        touched = []
+        j = max(index - 1, 0)
+        while j < len(regions) and regions[j]["offset"] < stop:
+            r = regions[j]
+            if start < r["offset"] + r["length"]:
+                touched.append(r)
+            j += 1
         sections = {r["section"] for r in touched if "section" in r}
         if len(sections) == 1:
             semantic["section"] = sections.pop()
