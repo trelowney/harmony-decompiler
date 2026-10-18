@@ -5447,6 +5447,109 @@ omitted holder. `verify_525_semantics.py` takes shared page records.
   how many devices, activities and pages. The capacity left is about 50 KB
   (5w), and a device costs 2 to 20 KB.
 
+## 5ag. Activities read and composed as macros, keys, Off and Help - MEASURED, PARTLY ON THE REMOTE
+
+The same night as 5af, everything below is in `tools/compose525.py` and checked
+by `tools/verify_compose525.py` on the public samples. What was pressed on the
+owner's 525 is said where it was.
+
+### An activity's start, read as steps
+
+`describe_activity` walks an activity's start list and its `0x7F` calls and
+names what it does: a write into a power variable is a device on or off, a
+write into another state variable is followed through section 13's
+transitions to the command it sends, and a `0x7D` is a send. Every command is
+named as the remote names it, the soft key's label on the device's own screen
+or the 525 key (`device_commands`). On the composed sample:
+
+| activity | reads as |
+|---|---|
+| Watch TV | TV on, TV `Input Hdmi1` (variable 20 = 5, through variable 21), amplifier off, XBOX off |
+| Watch DVD | XBOX on, TV on, TV `Input Hdmi2`, XBOX `Play` (a direct send), amplifier off |
+| Play on XBOX | XBOX on, TV on, TV `Input Hdmi2`, amplifier off |
+
+That is what the owner remembered them doing. `add_activity(steps=...)` adds
+commands after the switching, each its own list of `0x7D` and the device's
+usual `0x7C` (@dannybloe, section 278), called from the start the way Watch DVD
+calls its XBOX send.
+
+### Ending on a device, and the volume elsewhere - PRESSED
+
+The firmware searches a key against a stack: section 9 list 2 (every binding
+flagged, so it runs and searches on), the list `0x341` names, then the current
+page's list and the mode's own list (`0xFD`, 5ad), then the activity's key set
+(`0x340`), then list 1. So **a screen's own list wins over the activity's key
+set**, and on a device's screen the device's volume keys answer.
+
+* `add_activity(show=mode)` ends the activity on a device's own screen instead
+  of a copy of the source's: the source's screen is mapped to the device's in
+  the copied start chain, the status screens and section 14's record for
+  variable 15, so the Devices/Activities toggle returns there too.
+* `add_activity(volume=mode)` puts that device's Vol +, Vol - and Mute bindings
+  into the activity's screen's own list; with `show` the activity ends on its
+  own copy of the device's screen, so the device is left as it was.
+
+Written to the 525 as candidate F (X plus Test: TV and amplifier on, HDMI 1,
+ending on a copy of the X96's screen with the amplifier's volume) and pressed:
+all five checks passed, Off switched TV and amplifier off and returned to
+Activities, the other activities behaved as before.
+
+`0x341` was considered for the volume and not used: opcode `0x1F 0xE8nn` sets
+it, it is searched above the screen's lists, and on the 525 Logitech uses it
+only for section 9 list 3, one flagged binding of system event `0x18`. Using
+it would have needed every activity and Off to set it back.
+
+### Off and Help
+
+* **Off** runs the all-off list (list 430 on the composed sample: zero writes
+  into variables 17, 16 and 19) through section 11 stream 13, reached from the
+  idle key set's start, not from a key binding (@dannybloe, section 280).
+* **Key `0xAE` is Help**, not Off: in each activity it enters a screen (81, 99,
+  105) whose event `0x06` resends that activity's power and input commands,
+  for Watch TV the TV's power and `Input Hdmi1`.
+
+### A power state for another device - NOT CONFIRMED ON HARDWARE
+
+`add_power(mode, on, off)` gives a device the power variable Logitech gives
+the TV, the amplifier and the XBOX, following @dannybloe's composer (sections
+277, 278, 280): a record at the state table's `narrow` count (on the 525 the
+header is count 24, narrow 23, wide 1, and nothing names variable 23, the one
+two byte variable, so it moves to 24 by its pointer alone), transitions 0 -> 1
+running the on send and a wake delay and 1 -> 0 the off send, a
+`<Device>_Power_2` node in the name tree, a zero write appended to the all-off
+list and inserted before the activity counter in every activity's start. It
+refuses when a variable at or above `narrow` is named anywhere. Danny's reader
+then names the variable and lists it in the all-off list.
+
+Written once, for the X96 (candidate G), and it could not be judged: the X96
+does not switch off by infrared even from its own remote. The Samsung, which
+does, is in another room. The remote went back to X.
+
+### Device and IR sources
+
+* `rekey_device` from the page edits an existing device key by key; it
+  refuses to replace soft key pages an activity's screen shares (the
+  Panasonic's).
+* Soft key labels are drawn on two lines where Logitech draws two (13 and 24
+  at the top, 35 and 46 at the bottom).
+* Codes from **Flipper-IRDB** (CC0, `tools/flipper_ir.py`), **irdb**
+  (`tools/irdb.py`) and **Pronto hex** (`tools/pronto.py`) are encoded with the
+  timings Flipper Zero's firmware uses and checked against what the remote is
+  known to send: from Flipper-IRDB 40 of the Panasonic's 49 Kaseikyo frames and
+  39 of 39 Samsung frames, from irdb 48 of 49 and 39 of 39, bit for bit, none
+  with a scrambled layout; the usual Samsung power Pronto code is one of the
+  Samsung's frames. RC5, RC6 and Sony are encoded from Flipper's definitions
+  and not checked against a device.
+
+### A write that does not come back
+
+When the page has the remote open over WebHID, Concordance cannot find it
+after its reset ("error 11"): the configuration is written and verified, the
+clock is not set, and the remote may not have restarted. `concordance --reset`
+then `--set-time` finishes it. The state variables are only seeded at start
+up (@dannybloe, section 274), so a configuration whose state table changed
+must be followed by a restart.
+
 ## 6. Prior art
 
 The key thread is
