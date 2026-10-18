@@ -235,8 +235,14 @@ async function learnInto(tr) {
   }
 }
 
-function buildDeviceForm() {
+function addSoftPage() {
   const soft = $("dev-soft").querySelector("tbody");
+  const page = soft.querySelectorAll("tr.soft-head").length;
+  if (page >= 6) return;
+  const head = document.createElement("tr");
+  head.className = "soft-head";
+  head.innerHTML = `<td colspan="4"><strong>page ${page + 1}</strong></td>`;
+  soft.append(head);
   CORNERS.forEach((corner, i) => {
     const label = document.createElement("input");
     label.className = "soft-label";
@@ -244,8 +250,15 @@ function buildDeviceForm() {
     label.maxLength = 10;
     const tr = learnRow(label, false);
     tr.dataset.corner = i;
+    tr.dataset.page = page;
     soft.append(tr);
   });
+  $("dev-soft-page").disabled = page + 1 >= 6;
+}
+
+function buildDeviceForm() {
+  addSoftPage();
+  $("dev-soft-page").addEventListener("click", addSoftPage);
   const keys = $("dev-keys").querySelector("tbody");
   for (const key of toJs(webapp.key_names())) {
     const tr = learnRow(key, REPEATING_KEYS.has(key));
@@ -390,7 +403,7 @@ async function main() {
 
   $("f-add-device").addEventListener("submit", (event) => {
     event.preventDefault();
-    const commands = [], keys = {}, lcd = [null, null, null, null];
+    const commands = [], keys = {}, lcd = [];
     let typed = false;
     try {
       for (const tr of $("dev-keys").querySelectorAll("tbody tr")) {
@@ -400,17 +413,21 @@ async function main() {
         commands.push(c);
         keys[tr.dataset.key] = c.name;
       }
-      for (const tr of $("dev-soft").querySelectorAll("tbody tr")) {
+      for (const tr of $("dev-soft").querySelectorAll("tbody tr:not(.soft-head)")) {
+        const page = Number(tr.dataset.page), corner = Number(tr.dataset.corner);
         const label = tr.querySelector(".soft-label").value.trim();
-        const c = rowCommand(tr, `soft:${tr.dataset.corner}`);
+        const c = rowCommand(tr, `soft:${page}:${corner}`);
         if (!c && !label) continue;
-        if (!c || !label) throw new Error(`soft key ${CORNERS[tr.dataset.corner]} needs both a label and a command`);
+        if (!c || !label) {
+          throw new Error(`soft key ${CORNERS[corner]} on page ${page + 1} needs both a label and a command`);
+        }
         typed ||= !tr.dataset.learned;
         commands.push(c);
-        lcd[Number(tr.dataset.corner)] = [label, c.name];
+        while (lcd.length <= page) lcd.push([null, null, null, null]);
+        lcd[page][corner] = [label, c.name];
       }
       if (!commands.length) throw new Error("learn or type at least one command");
-      if (!lcd.some(Boolean)) throw new Error("give the device at least one soft key");
+      if (!lcd.some((p) => p.some(Boolean))) throw new Error("give the device at least one soft key");
     } catch (error) {
       status(error.message, true);
       return;

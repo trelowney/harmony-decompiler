@@ -194,10 +194,15 @@ def op_add_device(container: bytes, name: str, address: int, commands, keys, lcd
             cmds.append(compose525.nec_command(str(c["name"]), a, int(c["code"]),
                                                repeat=bool(c.get("repeat")), address_high=a2))
     key_map = {str(k): str(v) for k, v in dict(keys).items() if v}
-    page = [None if item is None or not item[0] else (str(item[0]), str(item[1])) for item in lcd]
-    if not any(page):
+    # lcd: one page of four, or a list of such pages (up to six)
+    pages = lcd if lcd and isinstance(lcd[0], list) and (not lcd[0] or len(lcd[0]) == 4
+                                                         and not isinstance(lcd[0][0], str)) else [lcd]
+    pages = [[None if item is None or not item[0] else (str(item[0]), str(item[1])) for item in page]
+             for page in pages]
+    pages = [p for p in pages if any(p)]
+    if not pages:
         raise compose525.ComposeError("give the device at least one soft key")
-    out, _ = compose525.add_device(bytes(container), str(name), cmds, key_map, [page])
+    out, _ = compose525.add_device(bytes(container), str(name), cmds, key_map, pages)
     return out
 
 
