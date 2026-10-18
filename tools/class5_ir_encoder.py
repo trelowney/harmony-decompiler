@@ -9,8 +9,17 @@ place anything into a real configuration.
 The class-5 body/table/block layout was published and firmware-verified by
 Danny Bloemendaal in ``harmony-explorations`` (commit a6516c7).  The bounded
 literal packing strategy, relocatable builder and independent decoder here are
-from the trelowney Harmony project.  Literal packing uses one symbol for every
-unique complete stream.  It is intentionally simple rather than size-optimal.
+from the trelowney Harmony project.  Each stream is cut into mark-led chunks (a
+mark word and the space words after it, a leading run of spaces a chunk of its
+own) and every unique chunk is one symbol, which is the shape Logitech's own
+records have: blocks of 1, 2, 4 and 16 words on the public 525, never above 54.
+
+That is not a matter of size.  Until 2026-10-18 this packed one symbol per whole
+stream, and a 39-command device built that way was invisible to the television:
+class 5's arm (@dannybloe, harmony-explorations findings section 80) refuses a
+symbol block whose word count would overflow its 0xFE byte pulse queue, so a
+block holds at most 127 words, and those were 69 to 154.  Re-chunked in place,
+the same streams went out.  FORMAT 5af.
 """
 from __future__ import annotations
 
@@ -26,7 +35,8 @@ IR_HEADER_GROUP = 9
 IR_RECORD_POINTER_BIAS = 7
 IR_MAX_GROUPS = 16
 IR_SYMBOL_LIMIT = 0xFF
-IR_SYMBOL_WORD_LIMIT = 8192
+IR_SYMBOL_WORD_LIMIT = 0xFE // 2    # one symbol block, firmware's pulse queue
+IR_STREAM_WORD_LIMIT = 8192
 IR_DURATION_MAX = 0x7FFF
 IR_MARK = 0x8000
 IR_CARRIER_MAX_NS = 256_000
@@ -109,9 +119,9 @@ def _put24(out: bytearray, offset: int, value: int) -> None:
 def _normalise_stream(stream: Sequence[int], label: str) -> tuple[int, ...]:
     if not stream:
         raise Class5EncodeError(f"{label} is empty")
-    if len(stream) > IR_SYMBOL_WORD_LIMIT:
+    if len(stream) > IR_STREAM_WORD_LIMIT:
         raise Class5EncodeError(
-            f"{label} has {len(stream)} words, above the {IR_SYMBOL_WORD_LIMIT} safety limit"
+            f"{label} has {len(stream)} words, above the {IR_STREAM_WORD_LIMIT} safety limit"
         )
     words = []
     for index, raw in enumerate(stream):
@@ -183,6 +193,20 @@ def pulses_from_words(words: Sequence[int], *, coalesce: bool = False) -> tuple[
     return tuple(merged)
 
 
+def _chunks(words: tuple[int, ...]) -> list[tuple[int, ...]]:
+    """Mark-led chunks: a mark word and the spaces after it; leading spaces alone."""
+    out: list[tuple[int, ...]] = []
+    current: list[int] = []
+    for word in words:
+        if word & IR_MARK and current:
+            out.append(tuple(current))
+            current = []
+        current.append(word)
+    if current:
+        out.append(tuple(current))
+    return out
+
+
 def _symbol_block(words: tuple[int, ...]) -> bytes:
     out = bytearray(4 + 2 * len(words))
     out[0:2] = len(words).to_bytes(2, "little")
@@ -222,6 +246,8 @@ def encode_class5_record(
         raise Class5EncodeError(f"{groups} pointer groups exceed the {IR_MAX_GROUPS} safety limit")
 
     normalised: list[tuple[int, ...] | None] = []
+    streams: list[tuple[int, ...]] = []
+    stream_index: dict[tuple[int, ...], int] = {}
     unique: list[tuple[int, ...]] = []
     symbol_index: dict[tuple[int, ...], int] = {}
     for slot, stream in enumerate(pointer_streams):
@@ -230,9 +256,18 @@ def encode_class5_record(
             continue
         words = _normalise_stream(stream, f"pointer stream {slot}")
         normalised.append(words)
-        if words not in symbol_index:
-            symbol_index[words] = len(unique)
-            unique.append(words)
+        if words in stream_index:
+            continue
+        stream_index[words] = len(streams)
+        streams.append(words)
+        for chunk in _chunks(words):
+            if len(chunk) > IR_SYMBOL_WORD_LIMIT:
+                raise Class5EncodeError(
+                    f"pointer stream {slot} has a {len(chunk)}-word symbol, above the "
+                    f"{IR_SYMBOL_WORD_LIMIT} words the firmware's pulse queue takes")
+            if chunk not in symbol_index:
+                symbol_index[chunk] = len(unique)
+                unique.append(chunk)
     if not unique:
         raise Class5EncodeError("a class-5 record must contain at least one non-NULL stream")
     if len(unique) > IR_SYMBOL_LIMIT:
@@ -256,17 +291,18 @@ def encode_class5_record(
     cursor += len(table)
 
     body_addresses: list[int] = []
-    for index in range(len(unique)):
+    for words in streams:
+        indices = [symbol_index[chunk] for chunk in _chunks(words)]
         body_addresses.append(cursor)
-        body = bytearray(6)
+        body = bytearray(5 + len(indices))
         _put24(body, 0, table_address)
-        body[3:5] = (1).to_bytes(2, "little")
-        body[5] = index
+        body[3:5] = len(indices).to_bytes(2, "little")
+        body[5:] = bytes(indices)
         parts.append(bytes(body))
         cursor += len(body)
 
     pointer_body_addresses = tuple(
-        None if stream is None else body_addresses[symbol_index[stream]]
+        None if stream is None else body_addresses[stream_index[stream]]
         for stream in normalised
     )
 

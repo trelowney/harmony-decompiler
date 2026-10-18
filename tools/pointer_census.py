@@ -231,6 +231,14 @@ def _assert_superseded_readers_are_covered(
                 continue
             if any(left <= at and at + 3 <= right for left, right in glyph_spans):
                 continue
+            # find_references matches the byte pattern `16 <u24>`.  When the 0x16
+            # is itself a byte of a field the stronger readers already hold, it
+            # is that field's data and not an opcode.  A 9 byte shift made one
+            # such pointer read as a false reference at 0xF146 on 2026-10-18 and
+            # refused every later relocation of that file.
+            if any(field <= opcode_at < field + 3 for field in
+                   range(opcode_at - 2, opcode_at + 1) if field in by_at):
+                continue
             raise CensusError(
                 f"find_references found an unrepresented field at 0x{at:X}")
 

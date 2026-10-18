@@ -102,7 +102,7 @@ def verify_duplicate_sharing() -> None:
         pointer_streams=[stream, stream, None],
         base_address=0x60000,
     )
-    assert len(encoded.symbol_addresses) == 1
+    assert len(encoded.symbol_addresses) == 2      # (9000 mark, 4500) and (560 mark, 560)
     assert len(encoded.body_addresses) == 1
     assert encoded.pointer_body_addresses[0] == encoded.pointer_body_addresses[1]
     decoded = decode_class5_record(
@@ -140,7 +140,10 @@ def build_vectors() -> list[dict]:
         assert decoded.on_ns == period_ns >> 1
         assert decoded.pointer_streams == tuple(streams)
         assert source.nec_frame(list(decoded.pointer_streams[0])) == expected_frame
-        assert len(encoded.symbol_addresses) == len({stream for stream in streams if stream})
+        assert len(encoded.body_addresses) == len({stream for stream in streams if stream})
+        assert all(count <= IR_SYMBOL_WORD_LIMIT for count in (
+            int.from_bytes(encoded.blob[a - encoded.base_address:a - encoded.base_address + 2], "little")
+            for a in encoded.symbol_addresses))
         assert {
             address for address in encoded.pointer_body_addresses if address
         } == set(encoded.body_addresses)

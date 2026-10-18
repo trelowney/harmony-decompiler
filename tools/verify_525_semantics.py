@@ -100,8 +100,11 @@ def verify_slot8(blob: bytes, sections: list[int | None]) -> dict:
             page = u24(blob, entry + 6 + 3 * k) - CONFIG_BASE
             page_lists.append(u24(blob, page) - CONFIG_BASE)
 
-    assert len(page_lists) == len(set(page_lists)), "page-list addresses repeat"
-    ordered = sorted(page_lists)
+    # Logitech's compiler never shares a page record between modes, but the
+    # firmware does not mind: the 2026-10-18 builds share Devices page 2 across
+    # modes 45, 82, 90 and 100 and it pages on the remote (FORMAT 5af).  Section
+    # 8 must still be tiled exactly by the distinct page lists.
+    ordered = sorted(set(page_lists))
     assert ordered and ordered[0] == first_page_list
     cursor = first_page_list
     entries = []
@@ -369,8 +372,8 @@ def verify_screen_programs(blob: bytes, sections: list[int | None]) -> dict:
         for page_index in range(u16(blob, entry + 4)):
             page = u24(blob, entry + 6 + 3 * page_index) - CONFIG_BASE
             page_roots.append(u24(blob, page + 3) - CONFIG_BASE)
-    assert len(page_roots) == len(set(page_roots))
-    programs = [screen_program_path(blob, root) for root in page_roots]
+    # shared page records share their program too (see verify_slot8)
+    programs = [screen_program_path(blob, root) for root in dict.fromkeys(page_roots)]
     assert all(program[-1]["opcode"] == 0 for program in programs)
 
     opcode_counts = collections.Counter(item["opcode"]

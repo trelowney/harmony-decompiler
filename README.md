@@ -32,6 +32,17 @@ for the remotes it serves. It does not serve these.
 > timings. Those last two clauses exist because the pointer check on its own
 > once passed a file in which every IR command was ruined. See the caveat under
 > *Editing*.
+>
+> **And on a real Harmony 525 it now does what MyHarmony used to.** On
+> 2026-10-18, with configs composed here and written with Concordance: a fifth
+> and a sixth device on extra `Devices` pages, both answering their equipment;
+> a fourth activity that switches devices on and picks the TV input; page
+> counters on the menus; a device and an activity deleted again; and an existing
+> device re-keyed to match the owner's own programmable handset, volume
+> included. Every write was read back byte identical before a key was pressed,
+> and the original is kept. How each part works, and the one firmware limit that
+> made the first device silent, is in FORMAT 5af.
+>
 > See [`docs/FORMAT.md`](docs/FORMAT.md) for what is known and
 > [`docs/OPEN-QUESTIONS.md`](docs/OPEN-QUESTIONS.md) for what is not.
 

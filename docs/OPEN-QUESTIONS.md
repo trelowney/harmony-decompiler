@@ -382,6 +382,11 @@ The round-trip approach exists precisely to avoid needing this on day one. Modif
 an existing config, keep the size fixed, prove correctness by byte identity, and
 expand outward from there.
 
+> **Most of the way there on the 525, 2026-10-18.** Not from scratch, but from
+> an existing config outward, as planned: devices, an activity, extra menu pages
+> and deletions were composed here and work on a real remote, FORMAT 5af. What
+> is still missing is a config with nothing to start from.
+
 ---
 
 ## Questions that have been answered

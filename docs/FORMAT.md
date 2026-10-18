@@ -3331,6 +3331,12 @@ able to fail.
   check, putting LCD position 8 on K43 rather than K44 fails it, and reading
   **DVL-909 bound key 17 as 16 is accepted with nothing said.** The map is not
   defended at that point.
+
+  > **Answered 2026-10-01.** @kkong42 checked on his 885: in the DVL-909
+  > device, Menu (K17) sends a command
+  > ([discussion #6](https://github.com/trelowney/harmony-decompiler/discussions/6)).
+  > So the value the check could not defend is confirmed by hand, and this
+  > qualification no longer weakens the map.
 - **The final assertion pins six answers directly**, `{51: 53, 52: 54, 53: 55,
   54: 56, 55: 51, 56: 52}`, which makes that script partly a regression test on
   a result rather than purely a derivation of it. The intermediate counts,
@@ -5288,6 +5294,156 @@ A candidate with the second page in 45, 82, 90 and 100, sharing one page record,
 is in `codex-work` and has not been written to a remote.
 `codex-work/tooling/arch9_device_lists.py` prints every line of this section
 from a config.
+
+> **Settled on the remote, 2026-10-18, 5af.** That candidate was written and
+> pressed: from the idle remote `Devices` paged and the fifth device was on page
+> 2 in the corner its key binds, bottom right for `0x9E`. Moved to `0xA7`, it
+> showed top left. So the idle Devices is 82, and the soft key table above
+> holds for both keys pressed.
+
+## 5af. What the 525 does with a config composed here - MEASURED ON THE REMOTE
+
+On 2026-10-18 ten configs built in this project went onto the owner's Harmony
+525, one after another. Concordance wrote each one, and each was dumped back
+and was byte identical to its file before anything was pressed. The original
+stays in the owner's read-only backup. As of that evening the 525 does all of
+this, and none of it came from Logitech's compiler or MyHarmony:
+
+* **a fifth device** (Samsung T200HD, 39 commands) on a second `Devices` page,
+  and the television answers it;
+* **a sixth device** (a PC), first from six codes the 525 itself learned off
+  the owner's own programmable handset, later with that handset's whole PC
+  page, 18 commands;
+* **a fourth activity** on a second page of the activity menu that switches on
+  the TV and the amplifier and puts the TV on HDMI 1;
+* **the `n OF m` page counter** on `Devices` and on the activity menu;
+* **deleting** a device and an activity again;
+* **re-keying an existing device**: the X96 Box now has the keys of the owner's
+  KontroLIR, a programmable handset whose X96 page was taught off the box's own
+  remote. The 525 had volume on CH+/CH-, Menu sending Settings, and Menu and @
+  stored under the wrong NEC address.
+
+Each item below is what that took, and the measurement that settled it.
+
+### A symbol block holds at most 127 words
+
+The Samsung device from the 22 August build opened, its keys flashed the
+indicator, and the television ignored every command, while its own remote
+worked. The records decoded perfectly here, which is the 4m, 4n, 5o shape
+again: internally right, wrong on the hardware.
+
+@dannybloe's findings section 80 has class 5's arm in the firmware: it reads a
+symbol block's `u16` word count and refuses the block if twice that would
+overflow the `0xFE` byte pulse queue. So **a symbol block holds at most 127
+words**. `tools/class5_ir_encoder.py` packed one symbol per whole stream, and
+the Samsung blocks were 69 to 154 words. Logitech's own blocks on the public
+525 are 1, 2, 4 and 16 words long and never above 54.
+
+Re-cut in place into mark-led chunks (a mark word and the spaces after it, a
+leading run of spaces on its own), the same 39 streams decode to the same words
+and the television answers. The encoder does that now and refuses a chunk over
+127 words; its limit used to be 8192.
+
+### A device, and a third Devices page
+
+What a device needs, every part checked on the remote:
+
+* an infrared group in section 5, and class 5 records under the limit above;
+* one action list per command, `{0x7D (group << 8 | command), 0x7C (group << 8 | 1)}`,
+  which is the X96 group's own pattern, the `0x7C` low byte being the device's
+  `QueueDelay` (4k);
+* a selection list `{0x7E mode, 0x92 1}`;
+* a mode entry whose physical-key list is a copy of an existing device's with
+  the entries rebound or zeroed, and one or more pages, each a section 8 list,
+  a screen program and a pool copy;
+* a binding on a `Devices` page.
+
+**A page record shared by all four Devices modes works.** Logitech never shares
+one, but pages 2 and 3 here are each one record that modes 45, 82, 90 and 100
+all point at, and it pages from every context. `verify_slot8` and
+`verify_screen_programs` refused that and now take the distinct records.
+
+**The physical-key list must sit right before the first page's screen program.**
+That is how the compiler lays a mode out, and `arch9_record_body_regions` checks
+it. A build that dropped a mode's old pages and put the new one elsewhere read
+as 0 pooled lists until the new program went back right after the list.
+
+A selection list may also send. The PC's selection is
+`{0x7E mode, 0x92 1, 0x7F <keyboard mode>}`, so opening the device tells the
+PC which input mode it is in. Logitech never does this, and @dannybloe's reader
+then finds no name for the device, but the remote runs it.
+
+### Held keys, and why a press went twice
+
+A record's first block plays once and its held block repeats while the key is
+down (@dannybloe, section 258). The PC records took the X96 shape, a first
+block of about 0.27 s. The owner's PC decodes whole frames, so the held block
+had to be a whole frame, and the 525's keypad is sensitive enough that an
+ordinary press outlasted 0.27 s and sent the arrow twice. Ending the first
+block with 0.45 s of silence puts the first repeat 0.57 s after the press,
+which is about Windows' own key repeat delay, and a tap now sends once.
+
+### An activity
+
+The chain is @dannybloe's sections 86 and 120: the menu soft key sets the key
+set (`0x1F 0xFF0n`, 5ae), whose tag `0x01` entry is the start list. The start
+list does not send anything. It writes state variables (opcode `0x80 +
+variable`), and Logitech's own transitions on them send the codes. On this
+525:
+
+| variable | what it is | written by Watch TV's start |
+|---|---|---|
+| 15 | CurrentActivityState, idle 3 | `0x8F 0` |
+| 16 | amplifier power | `0x90 0` |
+| 17 | TV power | `0x91 1` |
+| 19 | XBOX power | `0x93 0` |
+| 20 | TV input request, 5 = code `0x41`, the Panasonic page's "Hdmi1" | `0x94 5` |
+| 21 | TV input, sent by its transitions | via 20 |
+
+The new activity copies Watch TV's key set (section 9 list 6) into list 8 and
+changes two entries. Its start is `{0x7E start screen, 0x91 1, 0x94 5, 0x90 1,
+0x93 0, 0x8F 4, end chain}`. It takes **value 4**: variable 15's max goes from
+3 to 4 and idle stays 3, which is @dannybloe's inference in section 273 and now
+holds on a remote. Section 14 records 1, 4, 8 and 9 each gain key 4, for its
+screen, its Devices (90), again its Devices, and its key set (`0x1F 0xFF08` in
+a new section 11 stream). A section 14 record is `u8 2, u8 count`, then items
+of `u16 key, u24 stream`. The start screen and the activity screen are copies
+of modes 103 and 46 with the name changed. @dannybloe's `activityBindings`
+reads four activities off the result, the new one on menu page 2, key `0xA7`,
+set 8.
+
+### The page counter
+
+A device page draws `1 OF 6` in band 7 after the background strip: font 4, the
+page number at y 56 (x 38 for 1, 35 for the wider digits), `OF` at x 47, the
+total at x 65. In font 4, 1 is `0x37`, 2 is `0x1E`, 3 is `0x35` and OF is
+`03 04`. The same four instructions added to the Devices and activity menu
+programs draw it there too.
+
+### Deleting
+
+Taking the activity and the sixth device out again was done by removing 333
+regions from the decompiled file and compiling, not by going back to an older
+file. Everything sat at the end of its table, so no index moved. The result
+equals the file from before either was added in actions, infrared, sections 9,
+13 and 14 and every screen, except the counters it kept. A deletion that has to
+renumber has not been done.
+
+### What the tools gained
+
+`class5_ir_encoder.py` chunks and keeps the 127 word limit. `pointer_census.py`
+no longer takes a `0x16` byte inside a known field for an opcode: a 9 byte shift
+made one such pointer read as a reference and refused every later relocation
+of that file, and the relocation verifier's negative matrix still catches every
+omitted holder. `verify_525_semantics.py` takes shared page records.
+
+### What is not settled
+
+* Which key is `#`. `0x99` was taken to be it, by elimination, and it was not
+  pressed.
+* What a deletion that renumbers costs, and where the remote's own limits are:
+  how many devices, activities and pages. The capacity left is about 50 KB
+  (5w), and a device costs 2 to 20 KB.
 
 ## 6. Prior art
 
