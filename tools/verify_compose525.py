@@ -363,6 +363,29 @@ def main() -> int:
     print("PASS letters the remote never had are added to its font: a device named Jukebox (Q5), "
           "an activity named Keys & Jukebox 78!")
 
+    # every activity deleted leaves what Logitech's empty 555 has: the activity
+    # state 0 of 0 and the key set record empty; then a first activity is built
+    # with nothing to copy (written to the owner's 525 as E0 and E2, pressed)
+    empty = composed
+    while c.activities(empty):
+        empty = c.delete_activity(empty, c.activities(empty)[0].name)
+    d = c._Doc(empty)
+    cas = c.ir.u24(d.blob, d.S[13] + 8 + 3 * d.cas_var) - c.BASE
+    if (c.ir.u16(d.blob, cas), c.ir.u16(d.blob, cas + 2)) != (0, 0) or \
+            [x.name for x in c.devices(empty)] != [x.name for x in c.devices(composed)]:
+        print("FAIL deleting every activity")
+        return 1
+    hdmi1 = next(k for k, v in c.device_commands(empty).items() if v == ("TV Panason..", "Input Hdmi1"))
+    first = c.add_first_activity(empty, "TV + X96", ["TV Panason.."],
+                                 show={x.name: x.mode for x in c.devices(empty)}["X96 Box"], steps=[hdmi1])
+    sent = [(s["device"], s.get("label", s.get("on"))) for s in c.describe_activity(first, "TV + X96")]
+    if [a.name for a in c.activities(first)] != ["TV + X96"] or ("TV Panason..", "Input Hdmi1") not in sent \
+            or ("TV Panason..", True) not in sent:
+        print(f"FAIL a first activity from nothing: {sent}")
+        return 1
+    print("PASS every activity deleted gives the activity state 0 of 0, and a first activity is built "
+          "from nothing: TV on, HDMI 1, ending on the X96's screen")
+
     # a power state for the X96 and the Samsung: Off and every activity switch
     # them off, a new activity can switch one on, deleting one takes it out
     label = lambda n: {v[1]: k[1] for k, v in c.device_commands(composed).items() if v[0] == n}
