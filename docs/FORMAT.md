@@ -5550,6 +5550,83 @@ then `--set-time` finishes it. The state variables are only seeded at start
 up (@dannybloe, section 274), so a configuration whose state table changed
 must be followed by a restart.
 
+## 5ah. Editing what is there, a power state pressed, and a Panasonic press - MEASURED ON THE REMOTE
+
+Four candidates on 2026-10-19, each read back identical and pressed: I
+(an edit and a rename), then J, J2 and J3 (a power state on a device made
+from Flipper-IRDB). The remote holds J3.
+
+### Editing an activity
+
+`edit_activity` builds the activity again beside the old one, deletes the old
+one and puts the new one in the old one's corner of the menu.
+`activity_settings` reads an activity back as `add_activity`'s arguments:
+devices switched on, commands sent, its other state writes (the inputs), and
+the device whose screen it ends on. A copy with the volume keys rebound is
+recognised by comparing everything but the volume keys with each device's
+list. Candidate I turned Logitech's own Watch TV + into "TV + X96": the same
+switching and HDMI 1, ending on the X96's screen. It stayed in its corner and
+behaved as described. Watch DVD - and Play on XBOX were unchanged.
+
+Deleting one of Logitech's own activities, which an edit does, needed three
+things the activities composed here never had:
+
+* **A menu page's pool copy has lists of its own.** Watch TV +'s corner binds
+  action list 468 on the page and 331 in the pool copy; both are
+  `1F FF06, 92`. The twin goes with the original.
+* **A deleted screen may hold a string other screens draw** (opcode `0x04`).
+  Such strings are kept, as when devices are moved.
+* **Section 14 is searched as ranges.** `0x72` tries the exact key, then takes
+  consecutive keys as bounds (4o). So an item covers its key up to the next
+  one. A record whose only key is 0 covers every activity and must stay
+  when value 0 goes. When the next key is one higher, the first item takes
+  the second item's stream and the second goes. Otherwise the item still
+  covers what is above it and stays.
+
+The name node `CurrentActivityState_0_<n>` ends in the variable's value count,
+the highest value plus one (@dannybloe's rule). It now follows an added or
+deleted activity.
+
+### Renaming a device
+
+`rename_device` redraws the name in the device's corner of all four Devices
+screens and as the title at `y = 0` of each of its own pages. Screens copied
+from it for an activity keep the name they were drawn with. Pressed in I: the
+X96 Box became "Android box" in both places. A rename and a rename back
+are not byte identical, because strings another screen shares are kept, but
+they draw the same.
+
+### A power state, pressed
+
+J3: the Samsung deleted, a device "TV test" made from Flipper-IRDB's
+`TVs/Panasonic/Panasonic_TX_L42E5E.ir`, whose Power is bit for bit the
+Panasonic's own toggle, `add_power` on that toggle, and an activity "Power
+test" that switches only TV test on. From everything off:
+
+| press | TV |
+|---|---|
+| Power test | on |
+| Power test again | stays on: nothing is sent at 1 -> 1 |
+| Off | off |
+| Off again | stays off |
+
+So a power variable composed here is seeded, written by activities and the
+all-off list, and sends only on a transition. The second Power test also sent
+HDMI 1: it was built like TV + X96, and Logitech's re-pick list writes the
+inputs again.
+
+### A Panasonic press is three frames, power fourteen
+
+J and J2 did not switch the TV on. One Kaseikyo frame is ignored by this
+Panasonic. In the remote's own records for it, 65 of 67 commands are three
+frames, and the two its power state sends (PwrOn and PwrOff) are
+**fourteen**. The repeat period is 134.6 ms, about 60 ms of frame and 74.8 ms
+of silence. The soft keys labelled PwrOn and PwrOff send other, three-frame
+records. KontroLIR had counted the same (`KIR_Panasonic_Tx.ino`). Kaseikyo and
+irdb's Panasonic now go out as three frames at 36.7 kHz, fourteen for a
+command whose name says power. `verify_flipper_ir.py` checks both counts
+against the remote's records.
+
 ## 6. Prior art
 
 The key thread is
