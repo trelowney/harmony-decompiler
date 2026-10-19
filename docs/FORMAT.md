@@ -5657,6 +5657,52 @@ in its power-on list. That is why an input sent straight after switching it on
 works. Pressed: TV on, HDMI 2, a 5 s wait, HDMI 1, with the pause visible on
 the television.
 
+## 5ai. The Harmony 515 and 555: three things that were the 525's - MEASURED ON FILES
+
+The 515 and 555 run the 525's firmware (5ab). Their configurations, @kkong42's
+from issues #35 and #42 and now in `samples/`, round trip byte for byte. Yet
+the composer read no device and no activity from the 515 until three
+assumptions were taken out. Each had been a constant from the 525's file.
+
+**The typeface.** A glyph code is assigned per configuration (@dannybloe,
+his section 112), and skin 67 draws other pixels than skin 22. By pixels only
+11 of the 515's 64 codes match the 525. Its codes follow the 525's order up
+to 49 and differ from 50, where the generator met other characters. Read with
+the 525's alphabet, "Input Video" came out "Input +ideo" and "Next" as "Ne-t".
+A code is now read by its pixels. `tools/arch9_glyphs.json` maps a glyph's
+pixels to its character, from three files:
+
+* the 525 sample, whose alphabet is known;
+* the 515's 64 glyphs, read by eye;
+* three glyphs of the 555 (comma, K, double quote). The 555 otherwise draws the
+  525's typeface, 50 of its 53 codes.
+
+The one shape two characters share (`l` and `I` on the 525) is settled by one
+code per character, and the space is the one code drawn blank. The 525's
+alphabet comes out of the table exactly as `H525_OWNER_ALPHABET` has it. The
+page counter's digits are spelt the same way: `0x37` is "1" on the 525's and
+")" on the 515's.
+
+**Two state variables are numbered after the devices'.** `CurrentActivityState`
+is 15 on the 525's, 17 on the 515's and 16 on the 555's. It is found by its
+name in the name table. The variable a Devices soft key sets to 1 after
+entering a device, and the activity menu sets to 0, is 18 on the 525's
+(`0x92`) and 21 on the 515's (`0x95`). It is read off the Devices screens' own
+soft key lists. Nothing in either file reads it back.
+
+**A corner's second line** is drawn at 25 and 47 on the 515, at 24 and 46 on
+the 525, so a name is read from the band between the title and the counter.
+
+With those, every operation the page offers passes the composer's own checks
+on the 515: add, edit, rename, move and delete devices and activities, waits,
+and a power state. An activity added and deleted gives the file back
+(`tools/verify_500_series.py`). Nothing has been written to a 515.
+
+The 555 sample is an empty configuration, no device and no activity. A
+device is built from an existing device's screen, and the device flag is read
+off an existing soft key, so nothing can be added to it yet. One 555
+configuration with a device in it would settle both.
+
 ## 6. Prior art
 
 The key thread is
