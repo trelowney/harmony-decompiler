@@ -5738,6 +5738,14 @@ device is built from an existing device's screen, and the device flag is read
 off an existing soft key, so nothing can be added to it yet. One 555
 configuration with a device in it would settle both.
 
+**The keys are the 525's.** Every key code any list of the 515's configuration
+binds is one the 525's binds, 50 of 50, and Logitech's server serves the 525's
+user manual, byte for byte, as the 515's. The 555 binds the same 50 and two
+more, `0xBA` and `0xBD` (5ab's row 7 columns 2 and 5), which run what system
+event `0x07` runs; its own manual's page 5 draws the 525's pad, label for
+label, so those two are not keys a person presses. The page draws the same
+remote for all three, with the model's name under the colour keys.
+
 ## 5aj. Any key to any device, and letters a font never had - MEASURED ON THE REMOTE
 
 **An activity's keys.** The activity's screen is a mode, and its own list comes
