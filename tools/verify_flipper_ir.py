@@ -122,7 +122,55 @@ def main() -> int:
     failed += bool(bad)
     print(f"{'PASS' if not bad else 'FAIL'} NEC and NECext frames equal compose525.nec_frame "
           f"({bad} differ)")
+
+    # a Panasonic press is as many frames as Logitech stored for the owner's
+    # TV: 3, and 14 for switching it on and off (one frame is ignored)
+    blob = hconfig.split_container(raw)[2]
+    S = sem.section_offsets(blob)
+    tv = next(d for d in compose525.devices(raw) if d.name.startswith("TV Panason"))
+    labels = {label: cmd for (g, cmd), (dev, label) in compose525.device_commands(raw).items()
+              if g == tv.group}
+    heads = lambda us: sum(1 for k in range(0, len(us), 2) if us[k] > 3000)
+    group = ir.ir_groups(blob, S)[tv.group]
+    # what the TV's power state sends on 0 -> 1 and 1 -> 0 (its soft keys
+    # labelled PwrOn and PwrOff send other, three frame, records)
+    d = compose525._Doc(raw)
+    var = compose525.power_variables(raw)["TV Panason.."]
+    record = ir.u24(blob, S[13] + 8 + 3 * var) - compose525.BASE
+    sent = {}
+    for t in range(ir.u16(blob, record + 4)):
+        at = record + 7 + 8 * t
+        stack, cmds = [(blob[at + 7], ir.u16(blob, at + 5))], []
+        while stack:
+            o, x = stack.pop(0)
+            if o == 0x7D and x >> 8 == tv.group:
+                cmds.append(x & 0xFF)
+            elif o == 0x7F:
+                stack = d.ins(x) + stack
+        sent["PwrOn" if ir.u16(blob, at + 3) else "PwrOff"] = cmds[0]   # the value it goes to
+    theirs = {n: heads(record_durations(blob, group[c])) for n, c in sent.items()}
+    theirs["Input Hdmi1"] = heads(record_durations(blob, group[labels["Input Hdmi1"]]))
+    signal = {"type": "parsed", "protocol": "Kaseikyo", "address": 2097792, "command": 976}
+    mine = {}
+    for n in ("Power", "Input"):
+        c = flipper_ir.command(n, {**signal, "name": n})
+        mine[n] = heads(_durations(c.streams[0]))
+    ok = theirs == {"PwrOn": 14, "PwrOff": 14, "Input Hdmi1": 3} and mine == {"Power": 14, "Input": 3}
+    failed += not ok
+    print(f"{'PASS' if ok else 'FAIL'} Panasonic frames per press: Logitech's {theirs}, ours {mine}")
     return 1 if failed else 0
+
+
+def _durations(words) -> list[int]:
+    """A command's words as alternating mark and space microseconds."""
+    us = []
+    for w in words:
+        mark, v = bool(w & 0x8000), w & 0x7FFF
+        if (len(us) % 2 == 0) == mark:
+            us.append(v)
+        elif us:
+            us[-1] += v
+    return us
 
 
 if __name__ == "__main__":

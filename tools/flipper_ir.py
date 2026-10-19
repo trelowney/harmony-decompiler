@@ -25,15 +25,22 @@ from compose525 import Command, _spaces
 PROTOCOLS = {
     "NEC": (38_000, 110_000, 1), "NECext": (38_000, 110_000, 1),
     "NEC42": (38_000, 110_000, 1), "NEC42ext": (38_000, 110_000, 1),
-    "Samsung32": (38_000, 108_000, 1), "Kaseikyo": (38_000, 130_000, 1),
+    # Panasonic's own: 36.7 kHz, and three frames a press, as every Panasonic
+    # code Logitech learned on the owner's remote has them (one frame does not
+    # switch that TV on)
+    "Samsung32": (38_000, 108_000, 1), "Kaseikyo": (36_700, 130_000, 3),
     "RC5": (36_000, 113_778, 1), "RC5X": (36_000, 113_778, 1),
     "RC6": (36_000, 106_667, 1),
     "SIRC": (40_000, 45_000, 3), "SIRC15": (40_000, 45_000, 3), "SIRC20": (40_000, 45_000, 3),
     # two more that irdb uses and Flipper does not name: NECx (Samsung and its
     # kin, a 4.5 ms header and two free address bytes) and Panasonic (Kaseikyo
     # with Panasonic's vendor code, device, subdevice and function)
-    "NECx": (38_000, 108_000, 1), "Panasonic": (37_000, 130_000, 1),
+    "NECx": (38_000, 108_000, 1), "Panasonic": (36_700, 130_000, 3),
 }
+# frames for switching on and off, where a television wants the key held: the
+# owner's Panasonic takes 14, and Logitech stored its PwrOn and PwrOff so
+POWER_FRAMES = {"Kaseikyo": 14, "Panasonic": 14}
+_POWER = re.compile(r"(?i)(power|pwr)|on.?off|standby")
 
 
 class FlipperError(ValueError):
@@ -205,6 +212,8 @@ def command(name: str, signal: dict, repeat: bool = False, repeat_delay_ms: int 
     one-shot after Logitech's 500 ms lead; repeating after a 50 ms lead with a
     pause before the held block, so a normal press sends once."""
     carrier, f, gap, count = durations(signal)
+    if not repeat and _POWER.search(str(signal.get("name") or name)):
+        count = POWER_FRAMES.get(signal.get("protocol"), count)
     one = _words(f, gap)
     if repeat:
         first = _spaces(50_000) + one * (count - 1) + _words(f, repeat_delay_ms * 1000) + (1,)
