@@ -338,6 +338,15 @@
             <label>Then show <select id="act-show"></select></label>
             <label>Volume and Mute go to <select id="act-volume"></select></label>
           </div>
+          <fieldset><legend>Other keys that go to another device</legend>
+            <div class="row">
+              <select id="act-key-name"></select>
+              <span>goes to</span>
+              <select id="act-key-device"></select>
+              <button type="button" id="act-key-add">Add</button>
+            </div>
+            <ul id="act-keys"></ul>
+          </fieldset>
           <fieldset><legend>Then send, in this order</legend>
             <div class="row">
               <select id="act-step-device"></select>
@@ -358,7 +367,8 @@
             are what it sends. <strong>Then show</strong> picks where the remote ends: the activity's
             own screen, whose keys are those of the activity it is built like, or a device's screen, so
             the remote then simply works that device. <strong>Volume and Mute</strong> can go to another
-            device while the activity runs, the amplifier, say, with the X96 on screen. A wait holds back only the device it names: the
+            device while the activity runs, the amplifier, say, with the X96 on screen, and so can any other
+            key: channels to the TV, the cursor to the box. A wait holds back only the device it names: the
             others' commands still go, as on Logitech's remotes. An activity
             that is edited is built again and keeps its place in the menu.</p>
           <button id="act-submit">Add</button>
@@ -456,6 +466,6 @@
     </div>
   </aside>
 </div>
-<script type="module" src="app.js?v=29ce44e101"></script>
+<script type="module" src="app.js?v=4694918604"></script>
 </body>
 </html>

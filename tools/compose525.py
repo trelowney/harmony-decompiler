@@ -1916,7 +1916,7 @@ def describe_activity(raw: bytes, name: str) -> list:
 def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
                  writes: dict | None = None, steps: Sequence = (),
                  show: int | None = None, volume: int | None = None,
-                 _replacing: str | None = None) -> bytes:
+                 keys: dict | None = None, _replacing: str | None = None) -> bytes:
     """Add an activity built like an existing one.
 
     It copies `like`'s key set (so its keys do what `like`'s do), its Devices
@@ -1930,7 +1930,8 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
     of a copy of `like`'s screen. `volume`, a device's mode, sends Vol +, Vol -
     and Mute to that device while the activity's screen is up; with `show` the
     activity then ends on its own copy of the device's screen, so the device
-    itself is left as it was. The menu gets it in the first free corner,
+    itself is left as it was. `keys`, key name -> a device's mode, does the
+    same for any key: channels to one device, the cursor to another. The menu gets it in the first free corner,
     a new page when the menu is full. Value: the variable's highest plus one,
     idle unchanged (@dannybloe, section 273; FORMAT 5af)."""
     d = _Doc(raw)
@@ -2030,30 +2031,39 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
         return new
 
     device_modes = {x.mode for x in devices(raw)}
-    for m in (show, volume):
-        if m is not None and m not in device_modes:
+    # keys of the activity's screen that send to another device: key -> mode;
+    # `volume` is Vol +, Vol - and Mute at once
+    routed: dict[int, int] = {}
+    if volume is not None:
+        routed.update({KEYS[k]: volume for k in ("VolumeUp", "VolumeDown", "Mute")})
+    for k, m in (keys or {}).items():
+        tag = KEYS[k] if isinstance(k, str) else int(k)
+        if tag not in KEYS.values():
+            raise ComposeError(f"{k} is not a key of the 525")
+        routed[tag] = int(m)
+    for m in {show, *routed.values()} - {None}:
+        if m not in device_modes:
             raise ComposeError(f"mode {m} is not a device on the Devices screens")
-    if volume is not None and volume == show:
-        volume = None                   # the device's own volume already
+    routed = {t: m for t, m in routed.items() if m != show}   # the device's own already
     if show is None:
         work = copy_mode(src.work_mode, "work")
-    elif volume is None:
+    elif not routed:
         # every way back to the source's screen now leads to the device's
         mode_map[src.work_mode] = show
         work = show
     else:
         work = copy_mode(show, "device")
         mode_map[src.work_mode] = work
-    if volume is not None:
-        # the activity's screen sends its volume keys where the activity says
-        vol_tags = (KEYS["VolumeUp"], KEYS["VolumeDown"], KEYS["Mute"])
-        theirs = {e["tag"]: e for e in d.region(d.mode(volume)["start"], "tagged_list")["entries"]
-                  if e["tag"] in vol_tags}
-        if not theirs:
-            raise ComposeError(f"mode {volume} binds no volume keys")
+    if routed:
+        # the activity's screen sends those keys where the activity says
         ml = next(r for r in new_mode_regions if r["id"] == f"act{value}_m{work}_list")
         mine = {e["tag"]: e for e in ml["entries"]}
-        for tag, e in theirs.items():
+        names = {v: k for k, v in KEYS.items()}
+        for tag, m in sorted(routed.items()):
+            theirs = {e["tag"]: e for e in d.region(d.mode(m)["start"], "tagged_list")["entries"]}
+            if tag not in theirs:
+                raise ComposeError(f"{names[tag]} does nothing on mode {m}'s screen")
+            e = theirs[tag]
             if tag in mine:
                 mine[tag].update(operand=e["operand"], opcode=e["opcode"])
             else:
@@ -2635,29 +2645,44 @@ def activity_settings(raw: bytes, name: str) -> dict:
         else:
             unread += 1
     show = volume = None
-    devs = {x.mode for x in devices(raw)}
-    vol_tags = (KEYS["VolumeUp"], KEYS["VolumeDown"], KEYS["Mute"])
-
-    def keys_of(mode, volume_keys):
-        return sorted((t, o, v) for t, o, v in cmp.tagged(d.blob, d.mode(mode)["start"])
-                      if (t in vol_tags) == volume_keys)
+    routed: dict[int, int] = {}
+    devs = sorted({x.mode for x in devices(raw)})
+    binds = {m: {t: (o, v) for t, o, v in cmp.tagged(d.blob, d.mode(m)["start"])}
+             for m in [*devs, act.work_mode]}
     if act.work_mode in devs:
         show = act.work_mode
     else:
-        work = keys_of(act.work_mode, False)
+        # a copy of a device's screen whose every other key sends what some
+        # other device's same key sends: that device, and where those keys go
+        work = binds[act.work_mode]
         pages = len(d.mode(act.work_mode)["pages"])
-        same = [m for m in devs if keys_of(m, False) == work and len(d.mode(m)["pages"]) == pages]
-        if len(same) == 1:
-            show = same[0]
-            mine = keys_of(act.work_mode, True)
-            volume = next((m for m in sorted(devs) if m != show and mine and keys_of(m, True) == mine), None)
+        fits = []
+        for m in devs:
+            if len(d.mode(m)["pages"]) != pages:
+                continue
+            differ = {t for t in set(work) | set(binds[m]) if work.get(t) != binds[m].get(t)}
+            where = {t: next((x for x in devs if x != m and t in work and binds[x].get(t) == work[t]), None)
+                     for t in differ}
+            if None not in where.values():
+                fits.append((len(differ), m, where))
+        fits.sort(key=lambda f: f[0])
+        if fits and (len(fits) == 1 or fits[0][0] < fits[1][0]):
+            _, show, routed = fits[0]
+    vol_tags = {KEYS["VolumeUp"], KEYS["VolumeDown"], KEYS["Mute"]}
+    targets = {routed.get(t) for t in vol_tags}
+    if len(targets) == 1 and None not in targets:
+        volume = targets.pop()
+        routed = {t: m for t, m in routed.items() if t not in vol_tags}
+    names = {v: k for k, v in KEYS.items()}
     return {"on": on, "writes": writes, "steps": steps, "show": show, "volume": volume,
+            "keys": {names[t]: m for t, m in sorted(routed.items()) if t in names},
             "unread": unread, "page": act.page, "corner": act.corner}
 
 
 def edit_activity(raw: bytes, name: str, new_name: str, like: str, on: Sequence[str],
                   writes: dict | None = None, steps: Sequence = (),
-                  show: int | None = None, volume: int | None = None) -> bytes:
+                  show: int | None = None, volume: int | None = None,
+                  keys: dict | None = None) -> bytes:
     """Change an activity: it is built again with these settings beside the
     old one, the old one deleted, and the new one put in the old one's corner
     of the menu. `like` may be the activity itself. writes None keeps the
@@ -2670,7 +2695,7 @@ def edit_activity(raw: bytes, name: str, new_name: str, like: str, on: Sequence[
     if writes is None:
         writes = activity_settings(raw, name)["writes"]
     out = add_activity(raw, new_name, like, on, writes=writes, steps=steps,
-                       show=show, volume=volume, _replacing=name)
+                       show=show, volume=volume, keys=keys, _replacing=name)
     value = max(a.value for a in activities(out))
     out = delete_activity(out, name, value=old.value)
     mine = [a for a in activities(out) if a.value == value - 1]

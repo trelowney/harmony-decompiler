@@ -316,6 +316,26 @@ def main() -> int:
         return 1
     print("PASS a 15 s wait for the TV between two inputs: 100 and 50 tenths, read back, deleted again")
 
+    # any key of the activity's screen to another device: the X96 on screen,
+    # its volume on the amplifier, channels and Red on the TV
+    tv = modes["TV Panason.."]
+    out = c.add_activity(composed, "Film", "Watch TV +", ["TV Panason.."], writes={},
+                         show=modes["X96 Box"], volume=modes["Amplifier Genius"],
+                         keys={"ChannelUp": tv, "ChannelDown": tv, "Red": tv})
+    s = c.activity_settings(out, "Film")
+    film = next(a for a in c.activities(out) if a.name == "Film")
+    d = c._Doc(out)
+    sent = {t: (o, v) for t, o, v in c.cmp.tagged(d.blob, d.mode(film.work_mode)["start"])}
+    theirs = {t: (o, v) for t, o, v in c.cmp.tagged(d.blob, d.mode(tv)["start"])}
+    if (s["show"], s["volume"], s["keys"]) != (modes["X96 Box"], modes["Amplifier Genius"],
+                                               {"Red": tv, "ChannelDown": tv, "ChannelUp": tv}) or \
+            any(sent[c.KEYS[k]] != theirs[c.KEYS[k]] for k in ("ChannelUp", "ChannelDown", "Red")) or \
+            c.delete_activity(out, "Film") != composed:
+        print(f"FAIL keys routed to the TV: {s}")
+        return 1
+    print("PASS an activity on the X96's screen sends channels and Red to the TV and volume to the "
+          "amplifier, reads back so, and deletes to the file it came from")
+
     # a device renamed: its corner on every Devices screen and its pages' title
     renamed = c.rename_device(composed, modes["X96 Box"], "Android box")
     names = {x.mode: x.name for x in c.devices(renamed)}

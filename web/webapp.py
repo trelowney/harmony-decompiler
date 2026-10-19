@@ -150,8 +150,13 @@ def _steps(steps) -> list:
             for s in (_py(steps) or [])]
 
 
+def _keys(keys) -> dict:
+    """The page's routed keys: {key name: device mode}."""
+    return {str(k): int(v) for k, v in dict(_py(keys) or {}).items()}
+
+
 def op_add_activity(container: bytes, name: str, like: str, on, steps=None,
-                    show=None, volume=None) -> bytes:
+                    show=None, volume=None, keys=None) -> bytes:
     """steps: [[group, command], ...] sent after the switching, in order. With
     steps the source activity's own inputs are not copied: the steps say it.
     show: a device's mode to end on; volume: a device's mode for Vol and Mute."""
@@ -160,7 +165,8 @@ def op_add_activity(container: bytes, name: str, like: str, on, steps=None,
                                    [str(x) for x in _py(on)],
                                    writes={} if steps else None, steps=steps,
                                    show=None if show is None else int(show),
-                                   volume=None if volume is None else int(volume))
+                                   volume=None if volume is None else int(volume),
+                                   keys=_keys(keys))
 
 
 def activity_settings(container: bytes, name: str) -> dict:
@@ -180,7 +186,8 @@ def activity_settings(container: bytes, name: str) -> dict:
              if x["kind"] == "send" and (x["group"], x["command"]) not in direct]
     if s["writes"] and not keeps:
         keeps = [f"variable {v} = {x}" for v, x in sorted(s["writes"].items())]
-    return {"on": s["on"], "show": s["show"], "volume": s["volume"], "unread": s["unread"],
+    return {"on": s["on"], "show": s["show"], "volume": s["volume"], "keys": s["keys"],
+            "unread": s["unread"],
             "steps": [{"wait": x[2], "group": x[1], "text": f"wait {x[2] / 10:g} s before "
                        f"{by_group.get(x[1], 'that device')}'s next command"}
                       if x[0] == "wait" else {"group": x[0], "command": x[1], "text": text(*x)}
@@ -189,7 +196,7 @@ def activity_settings(container: bytes, name: str) -> dict:
 
 
 def op_edit_activity(container: bytes, name: str, new_name: str, like: str, on, steps=None,
-                     show=None, volume=None, keep_inputs: bool = True) -> bytes:
+                     show=None, volume=None, keep_inputs: bool = True, keys=None) -> bytes:
     """keep_inputs: the activity's own state writes (its TV input, say) stay;
     otherwise only what steps sends."""
     steps = _steps(steps)
@@ -197,7 +204,8 @@ def op_edit_activity(container: bytes, name: str, new_name: str, like: str, on, 
                                     [str(x) for x in _py(on)],
                                     writes=None if keep_inputs else {}, steps=steps,
                                     show=None if show is None else int(show),
-                                    volume=None if volume is None else int(volume))
+                                    volume=None if volume is None else int(volume),
+                                    keys=_keys(keys))
 
 
 def op_rename_device(container: bytes, mode: int, name: str) -> bytes:

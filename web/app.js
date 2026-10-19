@@ -15,6 +15,20 @@ let history = [];          // [{bytes, label}], the last one is on show
 const current = () => history[history.length - 1];
 let commandList = [];      // [{device, label, group, command}]
 let steps = [];            // the activity being built: [{group, command, text}]
+let actKeys = {};          // its keys that go to another device: {key name: device mode}
+
+function drawActKeys() {
+  const names = Object.fromEntries([...$("act-key-device").options].map((o) => [o.value, o.textContent]));
+  $("act-keys").replaceChildren(...Object.entries(actKeys).map(([key, mode]) => {
+    const li = document.createElement("li");
+    const x = document.createElement("button");
+    x.type = "button";
+    x.textContent = "×";
+    x.addEventListener("click", () => { delete actKeys[key]; drawActKeys(); });
+    li.append(`${key} goes to ${names[mode] ?? `mode ${mode}`} `, x);
+    return li;
+  }));
+}
 
 function fillStepCommands() {
   const dev = $("act-step-device").value;
@@ -59,6 +73,8 @@ function loadActivityIntoForm() {
     $("act-volume").value = "";
     steps = [];
     drawSteps();
+    actKeys = {};
+    drawActKeys();
     return;
   }
   const s = toJs(webapp.activity_settings(current().bytes, name));
@@ -69,6 +85,8 @@ function loadActivityIntoForm() {
   $("act-volume").value = s.volume ?? "";
   steps = s.steps;
   drawSteps();
+  actKeys = { ...s.keys };
+  drawActKeys();
   if (s.keeps.length) {
     $("act-keeps").textContent = s.keeps.join(", ");
     $("act-keep").checked = true;
@@ -312,6 +330,11 @@ function show() {
     ...byName.map((d) => option(d.mode, `${d.name}'s screen`)));
   $("act-volume").replaceChildren(option("", "as on that screen"),
     ...byName.map((d) => option(d.mode, d.name)));
+  $("act-key-device").replaceChildren(...byName.map((d) => option(d.mode, d.name)));
+  if (!$("act-key-name").options.length) {
+    $("act-key-name").replaceChildren(...toJs(webapp.key_names())
+      .filter((k) => !["VolumeUp", "VolumeDown", "Mute"].includes(k)).map((k) => option(k, k)));
+  }
   const on = $("act-on");
   on.replaceChildren();
   for (const name of toJs(webapp.power_devices(bytes))) {
@@ -348,9 +371,11 @@ async function change(label, run) {
     history.push({ bytes, label });
     show();
     status(`${label}: done. Save the file to keep it.`);
+    return true;
   } catch (error) {
     const message = String(error.message ?? error).split("\n").filter(Boolean).pop();
     status(`${label}: refused. ${message}`, true);
+    return false;
   }
 }
 
@@ -765,11 +790,12 @@ async function main() {
     const sendSteps = steps.map((s) => s.wait ? ["wait", s.group, s.wait] : [s.group, s.command]);
     const show = $("act-show").value === "" ? null : Number($("act-show").value);
     const volume = $("act-volume").value === "" ? null : Number($("act-volume").value);
+    const routedKeys = { ...actKeys };
     const editing = $("act-which").value;
     if (editing !== "") {
       const keep = $("act-keep-row").hidden || $("act-keep").checked;
       change(editing === name ? `edit activity ${name}` : `edit activity ${editing} into ${name}`,
-        (bytes) => webapp.op_edit_activity(bytes, editing, name, like, on, sendSteps, show, volume, keep))
+        (bytes) => webapp.op_edit_activity(bytes, editing, name, like, on, sendSteps, show, volume, keep, routedKeys))
         .then(() => {
           // renamed: follow it to its new name
           if (editing !== name && [...$("act-which").options].some((o) => o.value === name)) {
@@ -780,13 +806,22 @@ async function main() {
       return;
     }
     change(`add activity ${name}`,
-      (bytes) => webapp.op_add_activity(bytes, name, like, on, sendSteps, show, volume));
-    steps = [];
-    drawSteps();
+      (bytes) => webapp.op_add_activity(bytes, name, like, on, sendSteps, show, volume, routedKeys))
+      .then((ok) => {
+        if (!ok) return;            // a refused one keeps what was typed, to fix and try again
+        steps = [];
+        drawSteps();
+        actKeys = {};
+        drawActKeys();
+      });
   });
 
   $("act-step-device").addEventListener("change", fillStepCommands);
   $("act-which").addEventListener("change", loadActivityIntoForm);
+  $("act-key-add").addEventListener("click", () => {
+    actKeys[$("act-key-name").value] = Number($("act-key-device").value);
+    drawActKeys();
+  });
   $("pw-device").addEventListener("change", fillPowerCommands);
   $("f-power").addEventListener("submit", (event) => {
     event.preventDefault();
