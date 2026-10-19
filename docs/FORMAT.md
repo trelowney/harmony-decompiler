@@ -27,6 +27,7 @@ each part, start here:
 | infrared | 4n, 5q, 5af, 5ah |
 | devices, activities, power and what composing them does on the remote | 5af, 5ag, 5ah |
 | the 515 and 555 | 5ab, 5ai |
+| routing any key of an activity, adding letters to a font | 5aj |
 | arch 8 and the other protocols | 5, 5j, 5n, 5u |
 
 ---
@@ -5736,6 +5737,40 @@ The 555 sample is an empty configuration, no device and no activity. A
 device is built from an existing device's screen, and the device flag is read
 off an existing soft key, so nothing can be added to it yet. One 555
 configuration with a device in it would settle both.
+
+## 5aj. Any key to any device, and letters a font never had - MEASURED ON THE REMOTE
+
+**An activity's keys.** The activity's screen is a mode, and its own list comes
+before the activity's key set in the search (5ag). So any key can send to any
+device by copying that device's binding for the key into the activity's
+screen list. Volume (5ag) is the case of three keys. `add_activity(keys=...)`
+does it for any key; `activity_settings` reads it back as the device screen the
+copy was taken from plus, for every key that differs, the device whose binding
+it matches. Pressed: an activity on the X96's screen sent CH+, CH- and Info to
+the TV and the volume to the amplifier.
+
+**Characters.** Logitech's compiler put in a font only the characters its own
+texts used. The 525's font 0 has no K, Q, J, j, 5, 7, 8 or ?, and the 515's
+lacks digits 3 to 9 among others, so a name with one was refused. A missing
+character is now added to the font, at its own code when the configuration has
+one (the 525's 5 and ? live in other font sets), else at a new code after the
+whole alphabet (`h525_lcd_author.install_character_glyph`). The glyph comes from
+the nearest source that draws in the same style:
+
+1. another font set of the same configuration that draws every shared code
+   identically (the 515's fonts 0 and 1, 41 of 41; the 525's 0 and 3 differ in
+   29 of 39, so they are not used for each other);
+2. the same typeface's sample, `tools/arch9_font_glyphs.json`: the 525's font 0
+   for the 11 row typeface (which the 555 shares), the 515's for its 12 rows;
+3. glyphs drawn here in that typeface's style, `compose525.EXTRA_GLYPHS`: one
+   pixel strokes for 11 rows, two for 12, cap height rows 2 to 8. K, the comma
+   and the double quote for 11 rows are the 555's own.
+
+Each set was compared enlarged beside the font's own letters, and on the 525's
+display: an activity named "Kodi Jukebox (Q7)!" drew K, J, Q, 7, brackets and
+the exclamation mark in line with the rest. What is drawn reads back, because
+the drawn shapes join `arch9_glyphs.json`'s at load. A deleted name leaves its
+glyphs in the font; nothing else draws them and nothing minds.
 
 ## 6. Prior art
 
