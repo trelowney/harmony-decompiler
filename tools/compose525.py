@@ -3518,9 +3518,10 @@ def place_activity(raw: bytes, name: str, page: int, corner: int) -> bytes:
 
 
 def rename_device(raw: bytes, mode: int, name: str) -> bytes:
-    """Give a device a new name: in its corner of every Devices screen and as
-    the title of each of its own pages. Screens copied from it for an
-    activity keep the name they were drawn with."""
+    """Give a device a new name: in its corner of every Devices screen, as
+    the title of each of its own pages and in every Help question that names
+    it. Screens copied from it for an activity keep the name they were drawn
+    with."""
     d = _Doc(raw)
     before = devices(raw)
     target = [x for x in before if x.mode == mode]
@@ -3529,6 +3530,7 @@ def rename_device(raw: bytes, mode: int, name: str) -> bytes:
     if not name.strip():
         raise ComposeError("a device needs a name")
     title = d.text(name, limit=96)
+    old_title = device_title(d, target[0])
     # as the corner draws it, cut short when it is long
     drawn = " ".join("".join(d.alphabet.get(ch, "?") for ch in line) for line in _name_lines(d, name))
     layout = [[None if item is None else
@@ -3541,6 +3543,49 @@ def rename_device(raw: bytes, mode: int, name: str) -> bytes:
         record = d.region(p["address"], "mode_page")
         program = _clone_program(d, p["program"], f"rename{mode}_p{k}",
                                  lambda x, y, text: ((96 - d.width(title)) // 2, y, title) if y == 0 else None)
+        first_item = sem.screen_program_path(d.blob, p["program"])[0]
+        anchor = next(r for r in d.at[first_item["offset"]] if r["kind"] != "section")
+        i = d.index_of(anchor)
+        d.regions[i:i] = program
+        _drop_program(d, p["program"], gone)
+        record["targets"][1] = {"to": program[0]["id"]}
+    # Help's questions name it by its whole title ("Is the TV Panasonic on?"),
+    # Logitech's own and composed ones alike: the new name, wrapped again
+    said = re.compile(rf"\bthe {re.escape(old_title)}(?=[ ?]|$)")
+    most_ys = None
+    asked = {}
+    for m in range(d.n_modes):
+        question = _help_text(d, m)
+        if question is None or not said.search(question[2]):
+            continue
+        ys, font, text, _ = question
+        most_ys = most_ys or _question_template(d)[1]
+        # a longer name may need the lines the richest Yes/No screen has
+        if len(most_ys) > len(ys) and ys == most_ys[:len(ys)]:
+            ys = most_ys
+        lines = _wrap(d, said.sub(f"the {name.strip()}", text), font, len(ys))
+        by_y = dict(zip(ys, lines))
+        asked[m] = by_y
+        p = d.mode(m)["pages"][0]
+        record = d.region(p["address"], "mode_page")
+        centred = lambda y, by_y=by_y, font=font: ((96 - d.width(by_y[y], font)) // 2, y, by_y[y], font)
+
+        def replace(x, y, t, by_y=by_y, centred=centred):
+            if t in ("Yes", "No"):
+                return None
+            return centred(y) if y in by_y else False
+        program = _clone_program(d, p["program"], f"rename{mode}_help{m}", replace)
+        # lines the screen did not have, in every band their glyphs reach
+        fonts_at = _fonts_at_band_ends(d, p["program"])
+        per_band: dict[int, list[dict]] = {}
+        for y in set(by_y) - set(question[0]):
+            x, _, codes, _ = centred(y)
+            for band in _bands(y):
+                rid = f"rename{mode}_help{m}_y{y}_b{band}"
+                per_band.setdefault(band, []).extend(
+                    [opaque(f"{rid}_f", bytes((0x10, font))), _draw(x, y, codes, rid),
+                     opaque(f"{rid}_fb", bytes((0x10, fonts_at[band])))])
+        _insert_in_program(program, per_band)
         first_item = sem.screen_program_path(d.blob, p["program"])[0]
         anchor = next(r for r in d.at[first_item["offset"]] if r["kind"] != "section")
         i = d.index_of(anchor)
@@ -3568,8 +3613,12 @@ def rename_device(raw: bytes, mode: int, name: str) -> bytes:
         raise AssertionError("the activities changed")
     if any(d.ins(i) != after.ins(i) for i in range(d.n_actions)) or after.n_actions != d.n_actions:
         raise AssertionError("an action list changed")
+    for m, by_y in asked.items():
+        question = _help_text(after, m)
+        if question is None or question[3] != {y: bytes(t) for y, t in by_y.items()}:
+            raise AssertionError(f"Help screen {m} reads {question and question[2]}")
     r0, r1 = render_map(d.blob), render_map(after.blob)
-    moved = set(d.devices_modes()) | {mode}
+    moved = set(d.devices_modes()) | {mode} | set(asked)
     changed = [k for k in r0 if k[0] not in moved and r0[k][0] != r1.get(k, (None,))[0]]
     if changed:
         raise AssertionError(f"screens changed that should not have: {changed}")
@@ -3632,28 +3681,39 @@ def _question_template(d: _Doc):
     Returns (mode, [line ys], font of the lines)."""
     best = None
     for m in range(d.n_modes):
-        f = d.mode(m)
-        if len(f["pages"]) != 1:
-            continue
-        tags = {t for t, _, _ in cmp.tagged(d.blob, f["pages"][0]["list"])}
-        if not {HELP_YES, HELP_NO} <= tags:
-            continue
-        font, lines, words = 0, {}, []
-        for it in sem.screen_program_path(d.blob, f["pages"][0]["program"]):
-            if it["opcode"] == 0x10:
-                font = it["operands"][0]
-            elif it["opcode"] in (4, 5):
-                text = "".join(d.alphabet.get(ch, "?") for ch in renderer_string(d, it))
-                words.append(text)
-                if text not in ("Yes", "No"):
-                    lines.setdefault(it["operands"][1], font)
-        if words[-2:] != ["Yes", "No"] or not lines or len(set(lines.values())) != 1:
-            continue
-        if best is None or len(lines) > len(best[1]):
-            best = (m, sorted(lines), next(iter(lines.values())))
+        question = _help_text(d, m)
+        if question and (best is None or len(question[0]) > len(best[1])):
+            best = (m, question[0], question[1])
     if best is None:
         raise ComposeError("no Yes/No screen to draw Help questions on")
     return best
+
+
+def _help_text(d: _Doc, m: int):
+    """Mode m as a Help Yes/No screen: (line ys, their font, the question as
+    one text, {y: codes}), or None when it is not one."""
+    f = d.mode(m)
+    if len(f["pages"]) != 1:
+        return None
+    tags = {t for t, _, _ in cmp.tagged(d.blob, f["pages"][0]["list"])}
+    if not {HELP_YES, HELP_NO} <= tags:
+        return None
+    font, lines, fonts, words = 0, {}, {}, []
+    for it in sem.screen_program_path(d.blob, f["pages"][0]["program"]):
+        if it["opcode"] == 0x10:
+            font = it["operands"][0]
+        elif it["opcode"] in (4, 5):
+            codes = bytes(renderer_string(d, it))
+            text = "".join(d.alphabet.get(ch, "?") for ch in codes)
+            words.append(text)
+            if text not in ("Yes", "No"):
+                lines.setdefault(it["operands"][1], codes)
+                fonts.setdefault(it["operands"][1], font)
+    if words[-2:] != ["Yes", "No"] or not lines or len(set(fonts.values())) != 1:
+        return None
+    ys = sorted(lines)
+    text = " ".join("".join(d.alphabet.get(ch, "?") for ch in lines[y]) for y in ys)
+    return ys, fonts[ys[0]], text, lines
 
 
 def _wrap(d: _Doc, text: str, font: int, lines: int) -> list[bytes]:

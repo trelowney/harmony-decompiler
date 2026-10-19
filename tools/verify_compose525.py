@@ -364,6 +364,16 @@ def main() -> int:
     print("PASS the X96 renamed on every Devices screen and its own pages; the activity state's "
           "name counts its values")
 
+    # and Help's questions name it by its new name, wrapped onto a third line
+    # when two do not hold it
+    asked = lambda raw: sorted(q[2] for m in range(c._Doc(raw).n_modes) if (q := c._help_text(c._Doc(raw), m)))
+    console = c.rename_device(composed, modes["XBOX 360"], "Herni konzole v obyvaku")
+    want = sorted(t.replace("the XBOX 360", "the Herni konzole v obyvaku") for t in asked(composed))
+    if asked(console) != want or not any("obyvaku on?" in t for t in want):
+        print(f"FAIL Help after renaming the XBOX: {sorted(set(asked(console)) - set(want))}")
+        return 1
+    print("PASS Help's questions follow a renamed device, on a third line when the name is long")
+
     # characters the 525's font 0 never had (K, Q, J, j, 5, 7, 8, ?, !, &,
     # brackets) are added to it, drawn and read back
     jukebox = c.rename_device(composed, modes["PC"], "Jukebox (Q5)")

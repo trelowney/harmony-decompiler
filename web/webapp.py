@@ -161,6 +161,14 @@ def op_add_activity(container: bytes, name: str, like: str, on, steps=None,
     steps the source activity's own inputs are not copied: the steps say it.
     show: a device's mode to end on; volume: a device's mode for Vol and Mute."""
     steps = _steps(steps)
+    if not compose525.activities(bytes(container)):
+        # nothing to build it like: the first activity, its own screens and Help
+        if show is None:
+            raise compose525.ComposeError("the first activity has no screen to copy: choose a device to show")
+        return compose525.add_first_activity(bytes(container), str(name), [str(x) for x in _py(on)],
+                                             int(show), steps=steps,
+                                             volume=None if volume is None else int(volume),
+                                             keys=_keys(keys))
     return compose525.add_activity(bytes(container), str(name), str(like),
                                    [str(x) for x in _py(on)],
                                    writes={} if steps else None, steps=steps,

@@ -326,7 +326,8 @@ function show() {
   loadDeviceIntoForm();
 
   const like = $("act-like");
-  like.replaceChildren(...s.activities.map((a) => option(a.name, a.name)));
+  like.replaceChildren(...(s.activities.length ? s.activities.map((a) => option(a.name, a.name))
+    : [option("", "nothing, the first one")]));
   const byName = [...s.devices].sort((x, y) => x.name.localeCompare(y.name));
   $("act-show").replaceChildren(option("", "its own screen"),
     ...byName.map((d) => option(d.mode, `${d.name}'s screen`)));
