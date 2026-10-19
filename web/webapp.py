@@ -406,6 +406,7 @@ def remote_model(container: bytes) -> dict:
         "devices": [{"name": x.name, "mode": x.mode, "page": x.page, "corner": x.corner} for x in devs],
         "activities": acts,
         "modes": {str(k): v for k, v in modes.items()},
+        "model": model(raw),
     }
 
 

@@ -2,8 +2,9 @@
 // is the config's own screen, rendered by the decompiler; Activities and
 // Devices open their menus, the soft keys enter devices and activities, the
 // arrows under the screen turn pages, and every key says what it would send.
-// The layout follows the European 525 (colour keys below the number pad); it
-// is a drawing of our own, not a picture of the product.
+// The layout follows the European 525 (colour keys below the number pad), which
+// is also the 515's and the 555's (FORMAT 5ai); it is a drawing of our own, not
+// a picture of the product.
 
 const CORNERS = ["top left", "top right", "bottom left", "bottom right"];
 
@@ -71,6 +72,10 @@ export class RemoteView {
         into.append(r);
       }
     }
+    // the model under the colour keys: the 515 and 555 have the 525's keys
+    // (the 515's key table is the 525's, the 555's manual draws the same pad)
+    this.badge = el("div", "r-badge", "Harmony 525");
+    bottom.append(this.badge);
     body.append(top, bottom);
     this.where = el("div", "r-where");
     this.log = el("div", "r-log", "Press a key.");
@@ -152,6 +157,7 @@ export class RemoteView {
 
   load(model) {
     this.model = model;
+    this.badge.textContent = model.model ?? "Harmony 525";
     this.go({ mode: model.devices_mode, page: 0 });
     requestAnimationFrame(() => this.fit());
     this.say("Press a key.");
