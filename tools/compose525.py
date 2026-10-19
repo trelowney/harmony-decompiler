@@ -54,6 +54,12 @@ KEYS = {
     "0": 0x9A, "1": 0xAB, "2": 0x82, "3": 0x81, "4": 0x83, "5": 0x8A,
     "6": 0x89, "7": 0x8B, "8": 0x92, "9": 0x91,
 }
+# a device mode's own key list, in the order every device on the 525's and the
+# 515's lists them: the 39 keys and the four soft keys, 0 where unused
+DEVICE_KEY_ORDER = (0x89, 0x8B, 0x8A, 0x8D, 0x8C, 0x8F, 0x8E, 0x81, 0x83, 0x82, 0x85, 0x84, 0x87, 0x86,
+                    0x99, 0x9A, 0x9B, 0x9C, 0x9D, 0x9E, 0x9F, 0x91, 0x92, 0x93, 0x94, 0x95, 0xAB, 0xA9,
+                    0xAD, 0xAC, 0xA3, 0xA2, 0xA1, 0xA7, 0xA6, 0xA5, 0xA4, 0xB9, 0xB2, 0xB3, 0xB1, 0xB4,
+                    0xB5)
 # soft keys beside the screen, in reading order: top left, top right,
 # bottom left, bottom right (FORMAT 5ae, both top-left and bottom-right pressed)
 SOFT = (0xA7, 0xA6, 0x9F, 0x9E)
@@ -403,9 +409,16 @@ class _Doc:
                         for p in self.mode(m)["pages"]:
                             for t, o, v in cmp.tagged(self.blob, p["list"]):
                                 ins = self.ins(v) if o == 0x7F else []
-                                if len(ins) >= 2 and ins[0][0] == 0x7E and 0x80 <= ins[1][0] < 0x100                                         and ins[1][1] == 1:
+                                if len(ins) >= 2 and ins[0][0] == 0x7E and 0x80 <= ins[1][0] < 0x100 \
+                                        and ins[1][1] == 1:
                                     seen[ins[1][0]] = seen.get(ins[1][0], 0) + 1
             if not seen:
+                # no device yet (an empty 555): the system list that clears it,
+                # [flag := 0, 0x72 13], list 53 on the 525's and the 515's
+                seen = {ins[0][0]: 1 for ins in map(self.ins, range(self.n_actions))
+                        if len(ins) == 2 and 0x80 <= ins[0][0] < 0x100 and ins[0][1] == 0
+                        and ins[1] == (0x72, 13)}
+            if len(seen) < 1 or (len(seen) > 1 and len(set(seen.values())) == 1):
                 raise ComposeError("no Devices soft key enters a device here, so the device flag is unknown")
             self._device_flag_op = max(seen, key=seen.get)
         return self._device_flag_op
@@ -514,8 +527,10 @@ class _Doc:
         modes = sorted(set(out))
         for m in modes:
             first = self.mode(m)["pages"][0]["list"]
-            if not any(op == 0x7F and self.selection_target(v) is not None
-                       for _, op, v in cmp.tagged(self.blob, first)):
+            listed = cmp.tagged(self.blob, first)
+            # an empty Devices screen (the 555's before setup) lists nothing at all
+            if listed and not any(op == 0x7F and self.selection_target(v) is not None
+                                  for _, op, v in listed):
                 raise ComposeError(f"mode {m} is entered by 0xAF but is no device list")
         if not modes:
             raise ComposeError("no Devices screen found")
@@ -719,9 +734,11 @@ def _blank_devices_page(d: _Doc, template_root: int, rid: str,
                 out.append(opaque(name, bytes((op,)) + ops))
         elif op == 0x10 and bytes(ops) == b"\x04":
             continue              # the page counter's font; a counter added brings its own
-        elif op == 0x10 and bytes(ops) == b"\x03" and title is not None:
-            # font 3 has its own glyph numbering; a new title is drawn in font 0,
-            # as the August device pages were and the remote showed them
+        elif op == 0x10 and title is not None:
+            # the template's title font (3 on the 525's Devices screen, another
+            # on the 555's) may lack the new title's letters; a new title is
+            # drawn in font 0, as the August device pages were and the remote
+            # showed them, and font 0 is the one missing letters are added to
             out.append(opaque(name, b"\x10\x00"))
         else:
             out.append(opaque(name, bytes((op,)) + ops))
@@ -807,10 +824,6 @@ def add_device(raw: bytes, name: str, commands: Sequence[Command],
     """
     d = _Doc(raw)
     blob, S = d.blob, d.S
-    if not _devices_of(raw):
-        # a device is built from an existing one's screen and keys (an empty
-        # 555 setup has none)
-        raise ComposeError("this configuration has no device yet, and a new one is built from an existing one")
     by_name = {c.name: i for i, c in enumerate(commands)}
     if len(by_name) != len(commands):
         raise ComposeError("command names must be unique")
@@ -850,7 +863,18 @@ def add_device(raw: bytes, name: str, commands: Sequence[Command],
             raise ComposeError("the Devices screens' later pages are not shared; not written yet")
         shared.append(pages[devices[0]][k])
     corner, target_page = None, None
-    if shared:
+    first_pages = []
+    if not any(cmp.tagged(blob, pages[m][0]["list"]) for m in devices):
+        # no device anywhere yet (an empty 555): the first one goes on the
+        # first page, top left, of every Devices screen
+        corner = 0
+        seen_pages = set()
+        for m in devices:
+            if pages[m][0]["address"] not in seen_pages:
+                seen_pages.add(pages[m][0]["address"])
+                first_pages.append(pages[m][0])
+        target_page = first_pages[0]
+    elif shared:
         last = shared[-1]
         used = {t for t, _, _ in cmp.tagged(blob, last["list"])}
         free = [i for i, tag in enumerate(SOFT) if tag not in used]
@@ -889,8 +913,15 @@ def add_device(raw: bytes, name: str, commands: Sequence[Command],
     device_modes = sorted({t for m in devices for p in pages[m]
                            for _, op, v in cmp.tagged(blob, p["list"])
                            if op == 0x7F and (t := d.selection_target(v)) is not None})
-    template = max(device_modes, key=lambda m: len(cmp.tagged(blob, d.mode(m)["start"])))
-    tpl_list = d.region(d.mode(template)["start"], "tagged_list")
+    if device_modes:
+        template = max(device_modes, key=lambda m: len(cmp.tagged(blob, d.mode(m)["start"])))
+        tpl_list = d.region(d.mode(template)["start"], "tagged_list")
+        donor_root = d.mode(template)["pages"][0]["program"]
+    else:
+        # the first device (an empty 555): every key, as Logitech lists them,
+        # and the Devices screen's own frame of four corners for its pages
+        tpl_list = {"wide": False, "entries": [{"tag": t, "operand": 0, "opcode": 0} for t in DEVICE_KEY_ORDER]}
+        donor_root = pages[devices[0]][0]["program"]
     entries = []
     for e in copy.deepcopy(tpl_list["entries"]):
         cname = key_tags.get(e["tag"])
@@ -904,7 +935,7 @@ def add_device(raw: bytes, name: str, commands: Sequence[Command],
 
     # ---- the device's own pages, from a blanked device page ----
     mode_pages, mode_programs, page_lists, copies = _device_pages(
-        d, f"dev{group}", name, lcd, act, d.mode(template)["pages"][0]["program"])
+        d, f"dev{group}", name, lcd, act, donor_root)
     entry = fresh_region("record_header", f"dev{group}_mode_entry",
                          back_reference={"to": physical["id"]},
                          targets=[{"to": p["id"]} for p in mode_pages])
@@ -932,13 +963,18 @@ def add_device(raw: bytes, name: str, commands: Sequence[Command],
                          fresh_region("tagged_list", f"dev{group}_devices_copy", wide=False,
                                       role="page_binding_copy", entries=[dict(select_entry)]))
     else:
-        twin = d.pool_copy(target_page["list"])
-        d.region(target_page["list"], "tagged_list")["entries"].append(dict(select_entry))
-        twin["entries"].append(dict(select_entry))
-        ends = d.band_ends(target_page["program"])
-        fonts_at = _fonts_at_band_ends(d, target_page["program"])
-        for band in sorted(draws, reverse=True):
-            d.insert_before(ends[band], _in_font_0(draws[band], fonts_at[band], f"dev{group}_b{band}"))
+        for k, page in enumerate(first_pages or [target_page]):
+            twin = d.pool_copy(page["list"])
+            plist = d.region(page["list"], "tagged_list")
+            if not plist["entries"]:
+                plist["wide"] = twin["wide"] = False   # a list with entries is narrow here
+            plist["entries"].append(dict(select_entry))
+            twin["entries"].append(dict(select_entry))
+            ends = d.band_ends(page["program"])
+            fonts_at = _fonts_at_band_ends(d, page["program"])
+            these = draws if k == 0 else _corner_draws(d, corner, name, f"dev{group}_on_devices{k}")
+            for band in sorted(these, reverse=True):
+                d.insert_before(ends[band], _in_font_0(these[band], fonts_at[band], f"dev{group}_b{band}_{k}"))
 
     # ---- counters on every Devices page ----
     counters = {}
@@ -956,6 +992,13 @@ def add_device(raw: bytes, name: str, commands: Sequence[Command],
         new_devices_regions[:-1] = body
 
     # ---- tables and placement ----
+    empty5 = [r for r in d.at[S[5]] if r["kind"] == "section" and r.get("data") == ["00"]]
+    if empty5:
+        # no infrared group yet (an empty 555): section 5 is a count of 0, read
+        # as plain bytes; it becomes the table it is, one byte of count
+        empty5[0].update(kind="pointer_table", count_width=1, header="", targets=[])
+        for key in ("data", "part"):
+            empty5[0].pop(key, None)
     d.region(S[5], "pointer_table")["targets"].append({"to": group_region["id"]})
     d.region(S[sem.MODE_SLOT], "pointer_table")["targets"].append({"to": entry["id"]})
     d.region(S[sem.ACTION_SLOT], "pointer_table")["targets"].extend(

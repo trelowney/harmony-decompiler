@@ -10,7 +10,7 @@ flag are, and in where a corner's second line is drawn (FORMAT 5ai). Checks:
 * on the 515, adding a device and an activity, editing the activity, renaming,
   moving and deleting a device, and a power state each pass the composer's own
   checks, and adding then deleting an activity gives the file back;
-* the 555, empty, reads as empty and refuses a device with a reason.
+* the 555, empty, takes a first device with nothing to copy from.
 """
 from __future__ import annotations
 
@@ -79,12 +79,14 @@ def main() -> int:
     check({x.mode: x.name for x in c.devices(kitchen)}[modes["Mini System"]] == "Kitchen Q7&J",
           "515 takes a name with K, Q, 7, & and J, none of which its font had")
 
-    try:
-        c.add_device(s555, "Test Box", cmds, {"VolumeUp": "Vol+"}, [[("Power", "Power"), None, None, None]])
-        refused = None
-    except c.ComposeError as e:
-        refused = str(e)
-    check(not c.devices(s555) and refused is not None, f"555 is empty and refuses a device: {refused}")
+    # the empty 555 takes a first device with nothing to copy: every key as
+    # Logitech lists them, the Devices screen's frame, section 5 grown from 0
+    first, where = c.add_device(s555, "TV Box", cmds, {"VolumeUp": "Vol+"},
+                                [[("Power", "Power"), None, None, None]])
+    names = {v[1] for v in c.device_commands(first).values()}
+    check(not c.devices(s555) and [(x.name, x.page, x.corner) for x in c.devices(first)] == [("TV Box", 0, 0)]
+          and {"Power", "VolumeUp"} <= names,
+          f"555 starts empty and takes a first device, top left of Devices, its keys named {sorted(names)}")
     return 1 if failed else 0
 
 

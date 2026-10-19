@@ -20,7 +20,9 @@ Its typeface is the 525's: 50 of its 53 glyph codes draw the 525's pixels, and
 the other three (a comma, a K and a double quote) are read from this file into
 `tools/arch9_glyphs.json`.
 
-Nothing can be added to it yet. A device is built from an existing device's
-screen, and the state variable a Devices soft key sets is read off an existing
-soft key; with none, both are unknown. A 555 config with one device in it would
-settle that.
+A first device can be added to it now, with nothing to copy from: every key as
+Logitech lists them on the 525 and the 515, the Devices screen's own frame for
+its page, section 5's count grown from 0, and the state variable a Devices
+soft key sets read off the system list that clears it (FORMAT 5ak). It has
+never been written to a 555. An activity cannot be added yet: a new activity
+is built like an existing one, and this file has none.
