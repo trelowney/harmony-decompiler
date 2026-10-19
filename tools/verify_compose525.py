@@ -264,6 +264,50 @@ def main() -> int:
     print("PASS activities read as steps; one ends on the X96, one sends volume to the amplifier; "
           "each deleted gives the file back")
 
+    # an activity edited: read as settings, built again, in the same corner
+    hdmi1 = next(k for k, v in c.device_commands(composed).items() if v == ("TV Panason..", "Input Hdmi1"))
+    out = c.add_activity(composed, "Film", "Watch TV +", ["TV Panason.."], writes={}, steps=[hdmi2],
+                         show=modes["X96 Box"], volume=modes["Amplifier Genius"])
+    s = c.activity_settings(out, "Film")
+    if (s["on"], s["steps"], s["show"], s["volume"], s["unread"]) != \
+            (["TV Panason.."], [hdmi2], modes["X96 Box"], modes["Amplifier Genius"], 0):
+        print(f"FAIL Film reads back as {s}")
+        return 1
+    edited = c.edit_activity(out, "Film", "Movie", "Film", ["Amplifier Genius", "TV Panason.."],
+                             writes={}, steps=[hdmi1], show=modes["X96 Box"])
+    s = c.activity_settings(edited, "Movie")
+    where = {a.name: (a.page, a.corner) for a in c.activities(edited)}
+    if (s["on"], s["steps"], s["show"], s["volume"]) != \
+            (["Amplifier Genius", "TV Panason.."], [hdmi1], modes["X96 Box"], None) or \
+            where.get("Movie") != (0, 3) or "Film" in where:
+        print(f"FAIL Film edited into Movie reads {s} at {where}")
+        return 1
+    w = c.activity_settings(composed, "Watch TV +")
+    again = c.edit_activity(composed, "Watch TV +", "Watch TV +", "Watch TV +", w["on"], None,
+                            w["steps"], w["show"], w["volume"])
+    same = lambda raw: sorted(map(repr, c.describe_activity(raw, "Watch TV +")))   # order of the switching aside
+    if w["unread"] or same(again) != same(composed) \
+            or {a.name: (a.page, a.corner) for a in c.activities(again)} != \
+            {a.name: (a.page, a.corner) for a in c.activities(composed)}:
+        print("FAIL Watch TV + edited with its own settings does something else")
+        return 1
+    print("PASS an activity reads back as its settings, is edited and renamed in its own corner, "
+          "and Watch TV + rebuilt from its own settings does the same")
+
+    # a device renamed: its corner on every Devices screen and its pages' title
+    renamed = c.rename_device(composed, modes["X96 Box"], "Android box")
+    names = {x.mode: x.name for x in c.devices(renamed)}
+    if names[modes["X96 Box"]] != "Android box" or             {m: n for m, n in names.items() if m != modes["X96 Box"]} !=             {x.mode: x.name for x in c.devices(composed) if x.name != "X96 Box"}:
+        print(f"FAIL renaming the X96: {names}")
+        return 1
+    if "CurrentActivityState_0_4" not in [r["name"] for r in c._Doc(composed).region(
+            c._Doc(composed).S[0], "name_table")["records"]] or             "CurrentActivityState_0_5" not in [r["name"] for r in c._Doc(out).region(
+                c._Doc(out).S[0], "name_table")["records"]]:
+        print("FAIL CurrentActivityState's name does not count its values")
+        return 1
+    print("PASS the X96 renamed on every Devices screen and its own pages; the activity state's "
+          "name counts its values")
+
     # a power state for the X96 and the Samsung: Off and every activity switch
     # them off, a new activity can switch one on, deleting one takes it out
     label = lambda n: {v[1]: k[1] for k, v in c.device_commands(composed).items() if v[0] == n}

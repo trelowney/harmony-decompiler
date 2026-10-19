@@ -131,6 +131,44 @@ def op_add_activity(container: bytes, name: str, like: str, on, steps=None,
                                    volume=None if volume is None else int(volume))
 
 
+def activity_settings(container: bytes, name: str) -> dict:
+    """An activity as the add form's fields, for editing it: {on, steps:
+    [{group, command, text}], show, volume, keeps: what its own inputs send,
+    unread: calls an edit would drop}."""
+    raw = bytes(container)
+    s = compose525.activity_settings(raw, str(name))
+    labels = compose525.device_commands(raw)
+    by_group = {x.group: x.name for x in compose525.devices(raw)}
+
+    def text(g, cmd):
+        dev, label = labels.get((g, cmd), (by_group.get(g, f"group {g}"), f"command {cmd}"))
+        return f"{dev}: {label}"
+    direct = set(s["steps"])
+    keeps = [_step_text(x) for x in compose525.describe_activity(raw, str(name))
+             if x["kind"] == "send" and (x["group"], x["command"]) not in direct]
+    if s["writes"] and not keeps:
+        keeps = [f"variable {v} = {x}" for v, x in sorted(s["writes"].items())]
+    return {"on": s["on"], "show": s["show"], "volume": s["volume"], "unread": s["unread"],
+            "steps": [{"group": g, "command": c, "text": text(g, c)} for g, c in s["steps"]],
+            "keeps": keeps if s["writes"] else []}
+
+
+def op_edit_activity(container: bytes, name: str, new_name: str, like: str, on, steps=None,
+                     show=None, volume=None, keep_inputs: bool = True) -> bytes:
+    """keep_inputs: the activity's own state writes (its TV input, say) stay;
+    otherwise only what steps sends."""
+    steps = [tuple(int(v) for v in s) for s in (_py(steps) or [])]
+    return compose525.edit_activity(bytes(container), str(name), str(new_name), str(like),
+                                    [str(x) for x in _py(on)],
+                                    writes=None if keep_inputs else {}, steps=steps,
+                                    show=None if show is None else int(show),
+                                    volume=None if volume is None else int(volume))
+
+
+def op_rename_device(container: bytes, mode: int, name: str) -> bytes:
+    return compose525.rename_device(bytes(container), int(mode), str(name))
+
+
 def commands(container: bytes) -> list:
     """Every named command: [{device, label, group, command}], for the page's
     activity steps."""

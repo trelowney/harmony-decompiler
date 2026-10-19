@@ -1492,6 +1492,17 @@ class Activity:
     corner: int
 
 
+def _name_value_count(d: _Doc, var: int, top: int) -> None:
+    """A state variable's name node ends in its value count, the highest value
+    plus one: CurrentActivityState_0_4 (@dannybloe, config-format.md, the
+    rule of his section 86)."""
+    for r in d.region(d.S[0], "name_table")["records"]:
+        if r["parent"] == 1 and r["index"] == var:
+            stem, _, count = r["name"].rpartition("_")
+            if stem and count.isdigit():
+                r["name"] = f"{stem}_{top + 1}"
+
+
 def _menu_mode(d: _Doc) -> int:
     """The activity menu: the mode whose soft keys select key sets."""
     hits = []
@@ -1734,7 +1745,8 @@ def describe_activity(raw: bytes, name: str) -> list:
 
 def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
                  writes: dict | None = None, steps: Sequence = (),
-                 show: int | None = None, volume: int | None = None) -> bytes:
+                 show: int | None = None, volume: int | None = None,
+                 _replacing: str | None = None) -> bytes:
     """Add an activity built like an existing one.
 
     It copies `like`'s key set (so its keys do what `like`'s do), its Devices
@@ -1757,7 +1769,7 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
     if len(src) != 1:
         raise ComposeError(f"no single activity named {like!r}: {[x.name for x in acts]}")
     src = src[0]
-    if any(x.name == name for x in acts):
+    if any(x.name == name and x.name != _replacing for x in acts):
         raise ComposeError(f"there is already an activity named {name!r}")
     power = power_variables(raw)
     unknown = [n for n in on if n not in power]
@@ -2041,6 +2053,7 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
 
     # ---- CurrentActivityState's highest value ----
     _patch_bytes(d, cas_record + 2, value.to_bytes(2, "little"))
+    _name_value_count(d, cas_var, value)
 
     # ---- the menu: first free corner, or a new page ----
     menu_pages = d.mode(menu)["pages"]
@@ -2169,15 +2182,16 @@ def _drop_corner(d: _Doc, page: dict, corner: int, gone: set) -> None:
                 gone.update(r["id"] for r in d.at.get(item["offset"] + 3, []) if r["kind"] == "glyph_string")
 
 
-def delete_activity(raw: bytes, name: str) -> bytes:
+def delete_activity(raw: bytes, name: str, value: int | None = None) -> bytes:
     """Delete an activity: its menu entry and name, key set, start, re-pick and
     menu lists and whatever only they reach, the screens only it shows, and its
     CurrentActivityState value, renumbering later action lists, modes, key
-    sets and values. A last menu page it leaves empty goes too."""
+    sets and values. A last menu page it leaves empty goes too. `value` picks
+    one of two activities of the same name (edit_activity's moment)."""
     d = _Doc(raw)
     blob, S = d.blob, d.S
     acts = activities(raw)
-    hit = [a for a in acts if a.name == name]
+    hit = [a for a in acts if a.name == name and (value is None or a.value == value)]
     if len(hit) != 1:
         raise ComposeError(f"no single activity named {name!r}: {[a.name for a in acts]}")
     act = hit[0]
@@ -2197,7 +2211,11 @@ def delete_activity(raw: bytes, name: str) -> bytes:
     menu_select = {t: x for t, o, x in cmp.tagged(blob, page["list"])}[SOFT[act.corner]]
     set_at = ir.u24(blob, S[9] + 1 + 3 * k) - BASE
     set_entries = {t: (o, x) for t, o, x in cmp.tagged(blob, set_at)}
+    # Logitech's pool copy of a menu page has lists of its own, twins of the page's
+    twin_select = {e["tag"]: e for e in d.pool_copy(page["list"])["entries"]}.get(SOFT[act.corner])
     seeds = {menu_select, act.start} | ({act.repick} if act.repick is not None else set())
+    if twin_select is not None and twin_select["opcode"] == 0x7F:
+        seeds.add(twin_select["operand"])
     doomed = set(seeds)
     grow = True
     while grow:
@@ -2244,9 +2262,22 @@ def delete_activity(raw: bytes, name: str) -> bytes:
         for j in range(blob[rec + 1]):
             items.append((r_i, ir.u16(blob, rec + 2 + 5 * j), rec + 2 + 5 * j,
                           ir.u24(blob, rec + 4 + 5 * j) - BASE))
+    # An item covers its key up to the next one: 0x72 tries the exact key, then
+    # the ranges (4o). A record whose first key is v: alone, it covers every
+    # value and stays; followed by v + 1, that item's stream moves onto the
+    # first and the second goes; followed by more, it still covers v + 1 on.
+    shifted, kept_first = {}, set()
+    for r_i in sorted({r for r, *_ in items}):
+        mine = [(key, at, stream) for rr, key, at, stream in items if rr == r_i]
+        if mine[0][0] == v:
+            if len(mine) > 1 and mine[1][0] == v + 1:
+                shifted[r_i] = mine[1]
+            else:
+                kept_first.add(r_i)
     gone_streams = set()
     for r_i, key, at, stream in items:
-        if key == v and not any(s == stream and kk != v for _, kk, _, s in items):
+        if key == v and r_i not in kept_first and not any(
+                s == stream and (kk != v or rr in kept_first) for rr, kk, _, s in items):
             gone_streams.add(stream)
     for stream in gone_streams:
         if blob[stream + 3] == 0x7E:
@@ -2312,10 +2343,15 @@ def delete_activity(raw: bytes, name: str) -> bytes:
     for r_i in sorted({r for r, *_ in items}):
         rec = ir.u24(blob, s14 + 1 + 3 * r_i) - BASE
         mine = [(key, at) for rr, key, at, _ in items if rr == r_i]
-        if any(key == v for key, _ in mine):
+        if r_i in shifted:
+            _, at1, _ = shifted[r_i]
+            first = next(r for r in d.at[rec + 4] if r["kind"] == "raw_pointer")
+            first["targets"] = copy.deepcopy(next(r for r in d.at[at1 + 2] if r["kind"] == "raw_pointer")["targets"])
+            gone.add(next(r for r in d.at[at1] if r["kind"] == "opaque")["id"])
+            gone.add(next(r for r in d.at[at1 + 2] if r["kind"] == "raw_pointer")["id"])
+            _patch_bytes(d, rec + 1, bytes((blob[rec + 1] - 1,)))
+        elif r_i not in kept_first and any(key == v for key, _ in mine):
             at = next(at for key, at in mine if key == v)
-            if at == rec + 2:
-                raise ComposeError(f"value {v} is section 14 record {r_i}'s first key; not written yet")
             gone.add(next(r for r in d.at[at] if r["kind"] == "opaque")["id"])
             gone.add(next(r for r in d.at[at + 2] if r["kind"] == "raw_pointer")["id"])
             _patch_bytes(d, rec + 1, bytes((blob[rec + 1] - 1,)))
@@ -2328,6 +2364,7 @@ def delete_activity(raw: bytes, name: str) -> bytes:
         raise ComposeError("the activity holds the idle value")
     _patch_bytes(d, cas_record, new_idle.to_bytes(2, "little"))
     _patch_bytes(d, cas_record + 2, (top - 1).to_bytes(2, "little"))
+    _name_value_count(d, cas_var, top - 1)
 
     # ---- the menu ----
     _drop_corner(d, page, act.corner, gone)
@@ -2355,6 +2392,7 @@ def delete_activity(raw: bytes, name: str) -> bytes:
     st = d.region(S[9], "pointer_table")
     del st["targets"][k]
     _apply_maps(d, actions, modes, {}, keep=lambda r: r["id"] not in gone, sets=sets, values=values)
+    _keep_shared_strings(d, gone)
     d.regions[:] = [r for r in d.regions if r["id"] not in gone]
     dangling = [(r["id"], t["to"]) for r in d.regions for t in (r.get("targets") or []) if t and t["to"] in gone]
     if dangling:
@@ -2369,7 +2407,7 @@ def delete_activity(raw: bytes, name: str) -> bytes:
         if after.ins(new) != want:
             raise AssertionError(f"action list {old} -> {new}")
     want_acts = sorted((x.name, values.get(x.value, x.value), sets.get(x.key_set, x.key_set))
-                       for x in acts if x.name != name)
+                       for x in acts if x.value != act.value)
     got_acts = sorted((x.name, x.value, x.key_set) for x in activities(out))
     if got_acts != want_acts:
         raise AssertionError(f"activities {got_acts} != {want_acts}")
@@ -2382,6 +2420,89 @@ def delete_activity(raw: bytes, name: str) -> bytes:
         if r1.get((modes.get(m, m), p), (None,))[0] != value[0]:
             raise AssertionError(f"screen of mode {m} page {p} changed")
     _check_container(out)
+    return out
+
+
+def activity_settings(raw: bytes, name: str) -> dict:
+    """An activity as add_activity's arguments, so it can be edited:
+    {on, writes, steps, show, volume, unread, page, corner}. `steps` are the
+    commands its start sends itself (add_activity's own step lists, or any list
+    that only sends); `writes` its other state writes, a TV input request say;
+    `show` the device whose screen it ends on (its own, or a copy with the
+    volume keys rebound, and then `volume` names the device they send to), None
+    for a screen of its own. `unread` counts calls in its start this cannot say
+    as steps; an edit would drop them."""
+    d = _Doc(raw)
+    acts = [a for a in activities(raw) if a.name == name]
+    if len(acts) != 1:
+        raise ComposeError(f"no single activity named {name!r}")
+    act = acts[0]
+    power = power_variables(raw)
+    start = d.ins(act.start)
+    on = sorted(n for n, v in power.items() if (0x80 + v, 1) in start)
+    writes = {o - 0x80: x for o, x in start
+              if 0x80 <= o < 0x100 and o != 0x8F and o - 0x80 not in power.values()}
+    steps, unread = [], 0
+    calls = [x for o, x in start if o == 0x7F]
+    for x in calls[:-1]:                # the last one is the chain to its screen
+        ins = d.ins(x)
+        if ins and all(o in (0x7D, 0x7C) for o, _ in ins):
+            steps += [(v >> 8, v & 0xFF) for o, v in ins if o == 0x7D]
+        elif ins and all(o - 0x80 in power.values() for o, _ in ins):
+            on = sorted(set(on) | {n for n, v in power.items() if (0x80 + v, 1) in ins})
+        else:
+            unread += 1
+    show = volume = None
+    devs = {x.mode for x in devices(raw)}
+    vol_tags = (KEYS["VolumeUp"], KEYS["VolumeDown"], KEYS["Mute"])
+
+    def keys_of(mode, volume_keys):
+        return sorted((t, o, v) for t, o, v in cmp.tagged(d.blob, d.mode(mode)["start"])
+                      if (t in vol_tags) == volume_keys)
+    if act.work_mode in devs:
+        show = act.work_mode
+    else:
+        work = keys_of(act.work_mode, False)
+        pages = len(d.mode(act.work_mode)["pages"])
+        same = [m for m in devs if keys_of(m, False) == work and len(d.mode(m)["pages"]) == pages]
+        if len(same) == 1:
+            show = same[0]
+            mine = keys_of(act.work_mode, True)
+            volume = next((m for m in sorted(devs) if m != show and mine and keys_of(m, True) == mine), None)
+    return {"on": on, "writes": writes, "steps": steps, "show": show, "volume": volume,
+            "unread": unread, "page": act.page, "corner": act.corner}
+
+
+def edit_activity(raw: bytes, name: str, new_name: str, like: str, on: Sequence[str],
+                  writes: dict | None = None, steps: Sequence = (),
+                  show: int | None = None, volume: int | None = None) -> bytes:
+    """Change an activity: it is built again with these settings beside the
+    old one, the old one deleted, and the new one put in the old one's corner
+    of the menu. `like` may be the activity itself. writes None keeps the
+    activity's own state writes (its inputs), not `like`'s."""
+    acts = activities(raw)
+    old = [a for a in acts if a.name == name]
+    if len(old) != 1:
+        raise ComposeError(f"no single activity named {name!r}")
+    old = old[0]
+    if writes is None:
+        writes = activity_settings(raw, name)["writes"]
+    out = add_activity(raw, new_name, like, on, writes=writes, steps=steps,
+                       show=show, volume=volume, _replacing=name)
+    value = max(a.value for a in activities(out))
+    out = delete_activity(out, name, value=old.value)
+    mine = [a for a in activities(out) if a.value == value - 1]
+    if len(mine) != 1:
+        raise AssertionError("the rebuilt activity cannot be found")
+    if (mine[0].page, mine[0].corner) != (old.page, old.corner):
+        out = place_activity(out, mine[0].name, old.page, old.corner)
+    # by place, not name: a long name is drawn cut short
+    got = sorted((a.page, a.corner) for a in activities(out))
+    if got != sorted((a.page, a.corner) for a in acts):
+        raise AssertionError(f"the menu has {got} after the edit")
+    others = sorted((a.name, a.page, a.corner) for a in activities(out) if (a.page, a.corner) != (old.page, old.corner))
+    if others != sorted((a.name, a.page, a.corner) for a in acts if a.value != old.value):
+        raise AssertionError("another activity moved or changed name")
     return out
 
 
@@ -2785,5 +2906,65 @@ def place_activity(raw: bytes, name: str, page: int, corner: int) -> bytes:
         raise AssertionError(f"screens changed that should not have: {changed}")
     if [(x.name, x.page, x.corner) for x in devices(out)] != [(x.name, x.page, x.corner) for x in devices(raw)]:
         raise AssertionError("the device list changed")
+    _check_container(out)
+    return out
+
+
+def rename_device(raw: bytes, mode: int, name: str) -> bytes:
+    """Give a device a new name: in its corner of every Devices screen and as
+    the title of each of its own pages. Screens copied from it for an
+    activity keep the name they were drawn with."""
+    d = _Doc(raw)
+    before = devices(raw)
+    target = [x for x in before if x.mode == mode]
+    if len(target) != 1:
+        raise ComposeError(f"mode {mode} is not on the Devices screens")
+    if not name.strip():
+        raise ComposeError("a device needs a name")
+    title = d.text(name, limit=96)
+    # as the corner draws it, cut short when it is long
+    drawn = " ".join("".join(d.alphabet.get(ch, "?") for ch in line) for line in _name_lines(d, name))
+    layout = [[None if item is None else
+               (item[0], name if d.selection_target(item[0]) == mode else item[1]) for item in p]
+              for p in _devices_layout(d, raw)]
+    _apply_corner_layout(d, d.devices_modes(), layout, f"rename{mode}")
+    gone: set = set()
+    # the device's own pages: the line drawn at the top is its title
+    for k, p in enumerate(d.mode(mode)["pages"]):
+        record = d.region(p["address"], "mode_page")
+        program = _clone_program(d, p["program"], f"rename{mode}_p{k}",
+                                 lambda x, y, text: ((96 - d.width(title)) // 2, y, title) if y == 0 else None)
+        first_item = sem.screen_program_path(d.blob, p["program"])[0]
+        anchor = next(r for r in d.at[first_item["offset"]] if r["kind"] != "section")
+        i = d.index_of(anchor)
+        d.regions[i:i] = program
+        _drop_program(d, p["program"], gone)
+        record["targets"][1] = {"to": program[0]["id"]}
+    _keep_shared_strings(d, gone)
+    d.regions[:] = [r for r in d.regions if r["id"] not in gone]
+    dangling = [(r["id"], t["to"]) for r in d.regions for t in (r.get("targets") or []) if t and t["to"] in gone]
+    if dangling:
+        raise ComposeError(f"still referenced after the rename: {dangling[:3]}")
+    out = d.compile()
+
+    after = _Doc(out)
+    want = sorted((x.mode, x.group, x.page, x.corner, drawn if x.mode == mode else x.name) for x in before)
+    got = sorted((x.mode, x.group, x.page, x.corner, x.name) for x in devices(out))
+    if got != want:
+        raise AssertionError(f"the Devices screens read {got}, not {want}")
+    for k, p in enumerate(after.mode(mode)["pages"]):
+        tops = {renderer_string(after, it) for it in sem.screen_program_path(after.blob, p["program"])
+                if it["opcode"] in (4, 5) and it["operands"][1] == 0}
+        if tops and tops != {title}:
+            raise AssertionError(f"page {k + 1} of the device is titled {tops}")
+    if [a.name for a in activities(out)] != [a.name for a in activities(raw)]:
+        raise AssertionError("the activities changed")
+    if any(d.ins(i) != after.ins(i) for i in range(d.n_actions)) or after.n_actions != d.n_actions:
+        raise AssertionError("an action list changed")
+    r0, r1 = render_map(d.blob), render_map(after.blob)
+    moved = set(d.devices_modes()) | {mode}
+    changed = [k for k in r0 if k[0] not in moved and r0[k][0] != r1.get(k, (None,))[0]]
+    if changed:
+        raise AssertionError(f"screens changed that should not have: {changed}")
     _check_container(out)
     return out

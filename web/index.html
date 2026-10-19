@@ -257,7 +257,7 @@
       <form id="f-add-device" class="panel wide">
         <h3>Add or edit a device</h3>
         <label>Device <select id="dev-which"></select></label>
-        <p class="hint">Pick a device to change what its keys send: each key shows what it sends now;
+        <p class="hint">Pick a device to change its name or what its keys send: each key shows what it sends now;
           Learn, type or pick from the database to change one, × to make it send nothing. Keys left as
           they are keep what they send.</p>
         <div class="db">
@@ -323,7 +323,8 @@
       <h2 style="margin-top:20px">Activities</h2>
       <div class="panels">
         <form id="f-add-activity" class="panel wide">
-          <h3>Add an activity</h3>
+          <h3>Add or edit an activity</h3>
+          <label>Activity <select id="act-which"></select></label>
           <div class="row">
             <label>Name <input id="act-name" required maxlength="20"></label>
             <label>Built like <select id="act-like"></select></label>
@@ -341,13 +342,17 @@
             </div>
             <ol id="act-steps"></ol>
           </fieldset>
+          <label class="check" id="act-keep-row" hidden><input type="checkbox" id="act-keep" checked>
+            <span>Keep its own inputs: <span id="act-keeps"></span></span></label>
+          <p class="hint" id="act-unread" hidden></p>
           <p class="hint">Everything not switched on is switched off. With no commands to send it also
             takes the inputs of the activity it is built like (its TV input, say); with commands, those
             are what it sends. <strong>Then show</strong> picks where the remote ends: the activity's
             own screen, whose keys are those of the activity it is built like, or a device's screen, so
             the remote then simply works that device. <strong>Volume and Mute</strong> can go to another
-            device while the activity runs, the amplifier, say, with the X96 on screen.</p>
-          <button>Add</button>
+            device while the activity runs, the amplifier, say, with the X96 on screen. An activity
+            that is edited is built again and keeps its place in the menu.</p>
+          <button id="act-submit">Add</button>
         </form>
         <form id="f-move-activity" class="panel">
           <h3>Move an activity</h3>
@@ -429,7 +434,8 @@
         remote's configuration</label>
       <button id="write" class="danger wide" disabled>Write to the remote</button>
       <button id="finish" class="primary wide" hidden>Reconnect and finish</button>
-      <button id="restore" class="wide" hidden>Write the backup back</button>
+      <button id="restore" class="wide" hidden>Write back what was on before</button>
+      <button id="backup-save" class="wide" hidden>Save that backup</button>
     </div>
 
     <div class="side-block credits">
@@ -440,6 +446,6 @@
     </div>
   </aside>
 </div>
-<script type="module" src="app.js?v=3bd15f0aae"></script>
+<script type="module" src="app.js?v=5d51919d35"></script>
 </body>
 </html>

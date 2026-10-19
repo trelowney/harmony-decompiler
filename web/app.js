@@ -45,6 +45,42 @@ function drawSteps() {
   }));
 }
 
+// The add activity form, filled with an existing activity to edit it.
+function loadActivityIntoForm() {
+  const name = $("act-which").value;
+  const editing = name !== "";
+  $("act-submit").textContent = editing ? "Save the changes" : "Add";
+  $("act-keep-row").hidden = true;
+  $("act-unread").hidden = true;
+  for (const box of $("act-on").querySelectorAll("input")) box.checked = false;
+  if (!editing) {
+    $("act-name").value = "";
+    $("act-show").value = "";
+    $("act-volume").value = "";
+    steps = [];
+    drawSteps();
+    return;
+  }
+  const s = toJs(webapp.activity_settings(current().bytes, name));
+  $("act-name").value = name;
+  $("act-like").value = name;
+  for (const box of $("act-on").querySelectorAll("input")) box.checked = s.on.includes(box.value);
+  $("act-show").value = s.show ?? "";
+  $("act-volume").value = s.volume ?? "";
+  steps = s.steps;
+  drawSteps();
+  if (s.keeps.length) {
+    $("act-keeps").textContent = s.keeps.join(", ");
+    $("act-keep").checked = true;
+    $("act-keep-row").hidden = false;
+  }
+  if (s.unread) {
+    $("act-unread").textContent = `${s.unread} more thing${s.unread > 1 ? "s" : ""} this activity runs at ` +
+      "its start cannot be shown here, and saving drops them.";
+    $("act-unread").hidden = false;
+  }
+}
+
 function status(text, bad = false) {
   $("status").textContent = text;
   $("status").className = bad ? "bad" : "";
@@ -285,6 +321,11 @@ function show() {
     l.append(box, ` ${name}`);
     on.append(l);
   }
+  const actWhich = $("act-which");
+  const actNow = actWhich.value;
+  actWhich.replaceChildren(option("", "a new activity"), ...s.activities.map((a) => option(a.name, a.name)));
+  actWhich.value = [...actWhich.options].some((o) => o.value === actNow) ? actNow : "";
+  if (actWhich.value !== "" || actNow !== "") loadActivityIntoForm();
 
   const n = history.length - 1;
   $("changes").textContent = n === 0 ? "" :
@@ -535,7 +576,6 @@ function loadDeviceIntoForm() {
   clearDeviceRows();
   const mode = $("dev-which").value;
   const editing = mode !== "";
-  $("dev-name").disabled = editing;
   $("f-add-device").querySelector("button.primary").textContent = editing ? "Save the changes" : "Add the device";
   softSnapshot = null;
   if (!editing) {
@@ -544,6 +584,7 @@ function loadDeviceIntoForm() {
   }
   const layout = toJs(webapp.device_layout(current().bytes, Number(mode)));
   $("dev-name").value = layout.name;
+  $("dev-name").dataset.was = layout.name;
   for (const tr of $("dev-keys").querySelectorAll("tbody tr")) {
     const item = layout.keys[tr.dataset.key];
     if (item) setCurrent(tr, item);
@@ -722,6 +763,20 @@ async function main() {
     const sendSteps = steps.map((s) => [s.group, s.command]);
     const show = $("act-show").value === "" ? null : Number($("act-show").value);
     const volume = $("act-volume").value === "" ? null : Number($("act-volume").value);
+    const editing = $("act-which").value;
+    if (editing !== "") {
+      const keep = $("act-keep-row").hidden || $("act-keep").checked;
+      change(editing === name ? `edit activity ${name}` : `edit activity ${editing} into ${name}`,
+        (bytes) => webapp.op_edit_activity(bytes, editing, name, like, on, sendSteps, show, volume, keep))
+        .then(() => {
+          // renamed: follow it to its new name
+          if (editing !== name && [...$("act-which").options].some((o) => o.value === name)) {
+            $("act-which").value = name;
+            loadActivityIntoForm();
+          }
+        });
+      return;
+    }
     change(`add activity ${name}`,
       (bytes) => webapp.op_add_activity(bytes, name, like, on, sendSteps, show, volume));
     steps = [];
@@ -729,6 +784,7 @@ async function main() {
   });
 
   $("act-step-device").addEventListener("change", fillStepCommands);
+  $("act-which").addEventListener("change", loadActivityIntoForm);
   $("pw-device").addEventListener("change", fillPowerCommands);
   $("f-power").addEventListener("submit", (event) => {
     event.preventDefault();
@@ -808,12 +864,52 @@ async function main() {
     for (const c of newCommands) if (c.existing === undefined && c.code !== undefined) c.address = address;
     for (const c of commands) if (c.code !== undefined && c.address === undefined) c.address = address;
     const softChanged = softState() !== softSnapshot;
-    change(`edit ${name}`, (bytes) => webapp.op_rekey_device(bytes, Number(editing), newCommands, editKeys,
-      softChanged ? lcd : null));
+    const was = $("dev-name").dataset.was;
+    const rekey = softChanged || Object.keys(editKeys).length > 0 ||
+      newCommands.some((c) => c.existing === undefined);
+    if (!rekey && name === was) {
+      status("Nothing changed.");
+      return;
+    }
+    change(name === was ? `edit ${name}` : `edit ${was}, renamed ${name}`, (bytes) => {
+      // the rename first: it keeps every mode's number, which the rekey goes by
+      const out = name === was ? bytes : webapp.op_rename_device(bytes, Number(editing), name);
+      return rekey ? webapp.op_rekey_device(out, Number(editing), newCommands, editKeys,
+        softChanged ? lcd : null) : out;
+    });
   });
 
   // ---- writing ----
   let backupBytes = null;              // what this page read off the remote
+  // The last backup taken before a write stays in this browser too, so it can
+  // be written back after the page was closed. A convenience: the file is the copy.
+  const BACKUP_KEY = "harmony525-backup-before-write";
+  let backupWhen = null;
+  const showRestore = (when = backupWhen) => {
+    backupWhen = when;
+    $("restore").textContent = when ? `Write back what was on before (${when})` : "Write back what was on before";
+    $("restore").hidden = !backupBytes;
+    $("backup-save").hidden = !backupBytes;
+  };
+  try {
+    const kept = JSON.parse(localStorage.getItem(BACKUP_KEY) ?? "null");
+    if (kept) {
+      backupBytes = Uint8Array.from(atob(kept.data), (ch) => ch.charCodeAt(0));
+      showRestore(kept.when);
+    }
+  } catch { /* no storage here: the downloaded file is the backup */ }
+  const keepBackup = (bytes) => {
+    const when = new Date().toISOString().slice(0, 16).replace("T", " ");
+    try {
+      let text = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      localStorage.setItem(BACKUP_KEY, JSON.stringify({ when, data: btoa(text) }));
+    } catch { /* full or blocked */ }
+    return when;
+  };
+  $("backup-save").addEventListener("click", () => {
+    if (backupBytes) download(backupBytes, "harmony525-backup-before-write.EZHex");
+  });
   const download = (bytes, name) => {
     const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
     const a = document.createElement("a");
@@ -856,7 +952,7 @@ async function main() {
       return true;
     } catch (error) {
       status(`${label} failed: ${error.message ?? error}. The backup can be written back.`, true);
-      $("restore").hidden = !backupBytes;
+      showRestore();
       return false;
     } finally {
       $("progress").hidden = true;
@@ -887,7 +983,7 @@ async function main() {
       $("finish").hidden = true;
     } catch (error) {
       status(`Finishing failed: ${error.message ?? error}`, true);
-      $("restore").hidden = !backupBytes;
+      showRestore();
     } finally {
       if (remote) { try { await remote.close(); } catch { /* gone */ } }
     }
@@ -896,14 +992,21 @@ async function main() {
   $("write").addEventListener("click", async () => {
     if (!identity) return;
     backupBytes = history[0].bytes;
+    const when = keepBackup(backupBytes);
     download(backupBytes, `harmony525-backup-before-write-${new Date().toISOString().slice(0, 19).replace(/:/g, "")}.EZHex`);
     $("write-ok").checked = false;
     await writeBytes(current().bytes, "writing");
+    showRestore(when);
   });
 
   $("restore").addEventListener("click", async () => {
     if (!backupBytes) return;
-    if (await writeBytes(backupBytes, "writing the backup back")) $("restore").hidden = true;
+    if (!$("write-ok").checked) {
+      status("Writing the backup back replaces what is on the remote too: tick the box above first.", true);
+      return;
+    }
+    $("write-ok").checked = false;
+    await writeBytes(backupBytes, "writing the backup back");
   });
 }
 
