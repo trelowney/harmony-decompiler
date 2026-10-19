@@ -38,18 +38,19 @@ H515_ALPHABET = "HyOFaTermint EUSBCNDpgducs0:o2flL.wGWbIzkRPhAMq" + "\\" + 'v,x?
 H555_CODES = {50: ",", 51: "K", 52: '"'}
 
 OUT = Path(__file__).resolve().parent / "arch9_glyphs.json"
-# and each typeface's own glyphs for its font 0, by height, which a
+# and each typeface's own glyphs, by typeface (see compose525.EXTRA_GLYPHS), which a
 # configuration lacking a character borrows before anything drawn by hand
 FONT_OUT = Path(__file__).resolve().parent / "arch9_font_glyphs.json"
 
 
-def font0_glyphs(raw: bytes, alphabet) -> dict[str, list[str]]:
-    """Font 0's glyphs and those of every font set that draws exactly like it."""
+def font_glyphs(raw: bytes, alphabet, first: int, out: dict | None = None) -> dict[str, list[str]]:
+    """Font set `first`'s glyphs and those of every set that draws exactly
+    like it; `alphabet` None reads the codes by their pixels."""
     d = compose525._Doc(raw)
-    known = compose525.alphabet_map(alphabet)
-    out = {}
+    known = compose525.alphabet_map(alphabet) if alphabet else d.alphabet
+    out = {} if out is None else out
     for i, font in enumerate(d.fonts):
-        if font.height != d.fonts[0].height or (i and not compose525._same_style(d, 0, i)):
+        if font.height != d.fonts[first].height or (i != first and not compose525._same_style(d, first, i)):
             continue
         for code, ch in known.items():
             if ch not in out and ch != " " and d._has_glyph(i, code):
@@ -86,8 +87,13 @@ def main() -> int:
             table.setdefault(key, set()).update(chars)
     out = {key: "".join(sorted(chars)) for key, chars in sorted(table.items())}
     OUT.write_text(json.dumps(out, indent=0, ensure_ascii=False) + "\n", encoding="utf-8")
-    fonts = {11: font0_glyphs((root / "samples/harmony525/config.EZHex").read_bytes(), H525_OWNER_ALPHABET),
-             12: font0_glyphs(Path(sys.argv[1]).read_bytes(), H515_ALPHABET)}
+    s525 = (root / "samples/harmony525/config.EZHex").read_bytes()
+    fonts = {"525-0": font_glyphs(s525, H525_OWNER_ALPHABET, 0),
+             # the 555 draws the same wide typeface and has E, K, R, g, comma,
+             # colon and quote, which the 525 sample never drew in it
+             "525-1": font_glyphs(Path(sys.argv[2]).read_bytes(), None, 1,
+                                  font_glyphs(s525, H525_OWNER_ALPHABET, 1)),
+             "515-0": font_glyphs(Path(sys.argv[1]).read_bytes(), H515_ALPHABET, 0)}
     FONT_OUT.write_text(json.dumps({str(h): dict(sorted(g.items())) for h, g in fonts.items()},
                                    indent=0, ensure_ascii=False) + "\n", encoding="utf-8")
     print({h: "".join(sorted(g)) for h, g in fonts.items()})

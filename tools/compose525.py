@@ -182,10 +182,10 @@ def _glyph_table() -> dict:
         from pathlib import Path
         _GLYPHS = json.loads((Path(__file__).resolve().parent / "arch9_glyphs.json").read_text(encoding="utf-8"))
         # and the glyphs this module adds, so what it draws reads back
-        for height, glyphs in EXTRA_GLYPHS.items():
+        for glyphs in EXTRA_GLYPHS.values():
             for ch, rows in glyphs.items():
                 import hashlib
-                key = hashlib.sha1((f"{height}:" + "/".join(rows)).encode()).hexdigest()[:16]
+                key = hashlib.sha1((f"{len(rows)}:" + "/".join(rows)).encode()).hexdigest()[:16]
                 _GLYPHS[key] = "".join(sorted(set(_GLYPHS.get(key, "")) | {ch}))
     return _GLYPHS
 
@@ -256,8 +256,11 @@ def config_alphabet(blob: bytes, fonts) -> dict[int, str]:
 # glyphs for the 11 row typeface of the 525's font 0: K, the comma and the
 # double quote as the 555's fonts draw them, the rest drawn here in the same
 # style (cap height rows 2 to 8, one pixel strokes, a blank right column).
+# Keyed by typeface: "525-0" is the 525's (and 555's) font 0, narrow; "525-1"
+# its fonts 1 to 3, wider, which Help questions and Yes/No are drawn in;
+# "515-0" the 515's bold fonts. _style_of tells which a font set is.
 EXTRA_GLYPHS = {
-    11: {
+    "525-0": {
         "K": [".......", ".......", ".#...#.", ".#..#..", ".#.#...", ".##.#..", ".#..#..",
               ".#...#.", ".#...#.", ".......", "......."],
         ",": ["...", "...", "...", "...", "...", "...", "...", "...", ".#.", ".#.", ".#."],
@@ -285,7 +288,7 @@ EXTRA_GLYPHS = {
     },
     # the 515's 12 row typeface: two pixel strokes, cap height rows 2 to 8,
     # ascenders and the question mark from row 1
-    12: {
+    "515-0": {
         "K": [".......", ".......", "##..##.", "##.##..", "####...", "###....", "####...", "##.##..",
               "##..##.", ".......", ".......", "......."],
         "J": ["......", "......", "...##.", "...##.", "...##.", "...##.", "...##.", "##.##.", ".###..",
@@ -318,7 +321,66 @@ EXTRA_GLYPHS = {
         "#": [".......", ".......", ".#..#..", ".#..#..", "######.", ".#..#..", "######.", ".#..#..",
               ".#..#..", ".......", ".......", "......."],
     },
+    # the 525's wide typeface (fonts 1 to 3): capitals from column 1, five
+    # pixels wide; lower case from column 0 on rows 4 to 8; digits six wide
+    "525-1": {
+        "j": ["....", "....", "..#.", "....", "..#.", "..#.", "..#.", "..#.", "..#.", "..#.", "##.."],
+        "k": ["......", "......", "#.....", "#.....", "#..#..", "#.#...", "##....", "#.#...", "#..#..",
+              "......", "......"],
+        "q": ["......", "......", "......", "......", ".####.", "#...#.", "#...#.", "#...#.", ".####.",
+              "....#.", "....#."],
+        "z": ["......", "......", "......", "......", "#####.", "...#..", "..#...", ".#....", "#####.",
+              "......", "......"],
+        "F": [".......", ".......", ".#####.", ".#.....", ".#.....", ".####..", ".#.....", ".#.....",
+              ".#.....", ".......", "......."],
+        "J": ["......", "......", "....#.", "....#.", "....#.", "....#.", "....#.", "#...#.", ".###..",
+              "......", "......"],
+        "L": [".......", ".......", ".#.....", ".#.....", ".#.....", ".#.....", ".#.....", ".#.....",
+              ".#####.", ".......", "......."],
+        "M": [".........", ".........", ".#.....#.", ".##...##.", ".#.#.#.#.", ".#..#..#.", ".#.....#.",
+              ".#.....#.", ".#.....#.", ".........", "........."],
+        "Q": ["........", "........", "..####..", ".#....#.", ".#....#.", ".#....#.", ".#..#.#.", ".##..#..",
+              "..###.#.", "........", "........"],
+        "S": [".......", ".......", "..####.", ".#.....", ".#.....", "..###..", ".....#.", ".....#.",
+              ".####..", ".......", "......."],
+        "U": [".......", ".......", ".#...#.", ".#...#.", ".#...#.", ".#...#.", ".#...#.", ".#...#.",
+              "..###..", ".......", "......."],
+        "Z": [".......", ".......", ".#####.", ".....#.", "....#..", "...#...", "..#....", ".#.....",
+              ".#####.", ".......", "......."],
+        "4": ["......", "......", "...#..", "..##..", ".#.#..", "#..#..", "#####.", "...#..", "...#..",
+              "......", "......"],
+        "5": ["......", "......", "#####.", "#.....", "####..", "....#.", "....#.", "#...#.", ".###..",
+              "......", "......"],
+        "7": ["......", "......", "#####.", "....#.", "...#..", "...#..", "..#...", "..#...", "..#...",
+              "......", "......"],
+        "8": ["......", "......", ".###..", "#...#.", "#...#.", ".###..", "#...#.", "#...#.", ".###..",
+              "......", "......"],
+        "/": [".....", ".....", "....#", "...#.", "...#.", "..#..", ".#...", ".#...", "#....", ".....", "....."],
+        "(": ["....", "....", "..#.", ".#..", ".#..", ".#..", ".#..", ".#..", ".#..", "..#.", "...."],
+        ")": ["....", "....", ".#..", "..#.", "..#.", "..#.", "..#.", "..#.", "..#.", ".#..", "...."],
+        "&": [".......", ".......", ".##....", "#..#...", "#..#...", ".##....", "#..#.#.", "#...#..",
+              ".###.#.", ".......", "......."],
+        "'": ["...", "...", ".#.", ".#.", ".#.", "...", "...", "...", "...", "...", "..."],
+        "!": ["...", "...", ".#.", ".#.", ".#.", ".#.", ".#.", "...", ".#.", "...", "..."],
+    },
 }
+
+
+def _style_of(d, font: int):
+    """Which typeface a font set draws: the style whose sample glyphs it
+    matches most, by character, or None under five matches."""
+    rev = {v: k for k, v in d.alphabet.items()}
+    best, score = None, 0
+    for style, glyphs in _font_glyphs().items():
+        n = 0
+        for ch, rows in glyphs.items():
+            code = rev.get(ch)
+            if code is not None and d._has_glyph(font, code) and (font, code) not in getattr(d, "added_glyphs", {}):
+                if ["".join("#" if v == renderer.INK else "." for v in r) for r in d.fonts[font].glyph(code)] == rows:
+                    n += 1
+        if n > score:
+            best, score = style, n
+    return best if score >= 5 else None
 
 _FONT_GLYPHS: dict | None = None
 
@@ -465,7 +527,8 @@ class _Doc:
                 if i != font and other.height == height and self._has_glyph(i, code) and \
                         _same_style(self, font, i):
                     return ["".join("#" if v == renderer.INK else "." for v in row) for row in other.glyph(code)]
-        return _font_glyphs().get(str(height), {}).get(ch) or EXTRA_GLYPHS.get(height, {}).get(ch)
+        style = _style_of(self, font)
+        return _font_glyphs().get(style, {}).get(ch) or EXTRA_GLYPHS.get(style, {}).get(ch)
 
     def _ensure_glyphs(self, value: str, font: int) -> None:
         """Give `font` a glyph for each character of `value` it cannot draw yet
@@ -2072,11 +2135,13 @@ def _clone_program(d: _Doc, root: int, rid: str, replace) -> list[dict]:
             if r is False:
                 continue
             if r is not None:
-                # new text is spelt for font 0; another font may lack its glyphs
-                if font != 0:
-                    out.append(opaque(f"{name}_f0", b"\x10\x00"))
+                # new text is spelt for font 0 unless replace names its font
+                # (x, y, codes, font); another font may lack its glyphs
+                want = r[3] if len(r) > 3 else 0
+                if font != want:
+                    out.append(opaque(f"{name}_f0", bytes((0x10, want))))
                 out.append(_draw(r[0], r[1], r[2], name))
-                if font != 0:
+                if font != want:
                     out.append(opaque(f"{name}_fb", bytes((0x10, font))))
                 continue
             if op == 4:
@@ -2450,6 +2515,14 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
     def action_region(index, ins):
         return fresh_region("action_list", f"act{value}_action_{index}",
                             instructions=[{"operand": v, "opcode": f"0x{o:02X}"} for o, v in ins])
+    # ---- Help: its own tree, with this activity's devices and inputs ----
+    help_entry, regs, ls, cs = _help_tree(
+        d, f"act{value}_help", work, _help_questions(d, raw, on, steps, writes), next_mode, make_list)
+    next_mode += sum(1 for r in regs if r["kind"] == "record_header")
+    new_mode_regions.extend(regs)
+    mode_lists_sec8.extend(ls)
+    mode_copies.extend(cs)
+
     # copy_list numbers a list before its children and finishes it after them
     new_actions.sort()
     if [i for i, _ in new_actions] != list(range(d.n_actions, next_action)):
@@ -2465,6 +2538,8 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
             e["operand"] = start_list
         elif e["tag"] == 5 and repick_list is not None:
             e["operand"] = repick_list
+        elif e["tag"] == 0xAE:
+            e["operand"], e["opcode"] = help_entry, 0x7E
     set_region = fresh_region("tagged_list", f"act{value}_key_set", wide=src_set.get("wide", False),
                               role="section_9_binding", entries=set_entries)
 
@@ -2680,6 +2755,46 @@ def delete_activity(raw: bytes, name: str, value: int | None = None) -> bytes:
     seeds = {menu_select, act.start} | ({act.repick} if act.repick is not None else set())
     if twin_select is not None and twin_select["opcode"] == 0x7F:
         seeds.add(twin_select["operand"])
+    # its Help: the screens its key set enters directly (0xAE), and every
+    # screen and list those reach, up to a device's, an activity's or the
+    # system's own (FORMAT 5am); what something else also reaches stays
+    stop = set(d.devices_modes()) | {x.mode for x in devices(raw)} | \
+        {a.work_mode for a in acts} | {a.start_mode for a in acts} | {menu}
+    help_modes, help_lists = set(), set()
+    frontier = [x for o, x in set_entries.values() if o == 0x7E]
+
+    def walk(i):
+        if i in help_lists:
+            return
+        help_lists.add(i)
+        for o, x in d.ins(i):
+            if o == 0x7E:
+                frontier.append(x)
+            elif o == 0x7F:
+                walk(x)
+    while frontier:
+        m = frontier.pop()
+        if m in help_modes or m in stop or m <= 40:
+            continue
+        help_modes.add(m)
+        f = d.mode(m)
+        # the pool copy of a page can hold twin lists of its own (5ai), so it
+        # is walked as well as the page list
+        for entries in [d.region(f["start"], "tagged_list")["entries"]] + [
+                r["entries"] for p in f["pages"]
+                for r in (d.region(p["list"], "tagged_list"), d.pool_copy(p["list"]))]:
+            for e in entries:
+                if e["opcode"] == 0x7E:
+                    frontier.append(e["operand"])
+                elif e["opcode"] == 0x7F:
+                    walk(e["operand"])
+    help_own = set()
+    for m in help_modes:
+        f = d.mode(m)
+        help_own.add(f["start"])
+        for p in f["pages"]:
+            help_own |= {p["list"], d.pool_copy(p["list"])["offset"]}
+    seeds |= help_lists
     doomed = set(seeds)
     grow = True
     while grow:
@@ -2696,7 +2811,7 @@ def delete_activity(raw: bytes, name: str, value: int | None = None) -> bytes:
             if j not in doomed and (0x7F, i) in d.ins(j):
                 return True
         for r in d.regions:
-            if r["kind"] == "tagged_list" and r["offset"] not in (set_at, page["list"], menu_twin):
+            if r["kind"] == "tagged_list" and r["offset"] not in {set_at, page["list"], menu_twin} | help_own:
                 if any(e["opcode"] == 0x7F and e["operand"] == i for e in r["entries"]):
                     return True
             if r["kind"] == "action_list" and r.get("section") == 8:
@@ -2718,7 +2833,7 @@ def delete_activity(raw: bytes, name: str, value: int | None = None) -> bytes:
         raise ComposeError("the activity's menu or start list is used elsewhere")
 
     # ---- the screens only it shows ----
-    candidate_modes = {x for i in doomed for o, x in d.ins(i) if o == 0x7E}
+    candidate_modes = {x for i in doomed for o, x in d.ins(i) if o == 0x7E} | help_modes
     s14 = S[14]
     items = []                                     # (record, key, item offset, stream offset)
     for r_i in range(blob[s14]):
@@ -2757,7 +2872,8 @@ def delete_activity(raw: bytes, name: str, value: int | None = None) -> bytes:
             if j not in doomed and (0x7E, m) in d.ins(j):
                 return True
         own = {d.mode(x)["start"] for x in candidate_modes} | {
-            p["list"] for x in candidate_modes for p in d.mode(x)["pages"]}
+            p["list"] for x in candidate_modes for p in d.mode(x)["pages"]} | {
+            d.pool_copy(p["list"])["offset"] for x in candidate_modes for p in d.mode(x)["pages"]}
         for r in d.regions:
             if r["kind"] == "tagged_list" and r["offset"] not in own | {set_at}:
                 if any(e["opcode"] == 0x7E and e["operand"] == m for e in r["entries"]):
@@ -3469,10 +3585,11 @@ def rename_device(raw: bytes, mode: int, name: str) -> bytes:
 # that sequence shows, whose frame a "Starting" screen shares; a "Replace the
 # batteries" screen; and the section 14 records looked up by the activity state.
 
-def _copy_mode(d: _Doc, old: int, prefix: str, replace=None, entries=None):
+def _copy_mode(d: _Doc, old: int, prefix: str, replace=None, entries=None, page_entries=None):
     """A new mode copying `old`: its key list (or `entries`), its pages, each
-    page's list in section 8 and its pool copy. replace(x, y, text) as for
-    _clone_program. Returns (mode regions, section 8 lists, pool copies)."""
+    page's list in section 8 (or `page_entries[k]`) and its pool copy.
+    replace(x, y, text) as for _clone_program. Returns (mode regions,
+    section 8 lists, pool copies)."""
     f = d.mode(old)
     lst = d.region(f["start"], "tagged_list")
     ml = fresh_region("tagged_list", f"{prefix}_list", wide=lst.get("wide", True),
@@ -3481,6 +3598,8 @@ def _copy_mode(d: _Doc, old: int, prefix: str, replace=None, entries=None):
     regions, lists, copies, pages = [ml], [], [], []
     for k, p in enumerate(f["pages"]):
         src = d.region(p["list"], "tagged_list")
+        if page_entries is not None:
+            src = dict(src, entries=page_entries[k])
         pl = fresh_region("tagged_list", f"{prefix}_p{k}_list", section=8, wide=src.get("wide", False),
                           entries=copy.deepcopy(src["entries"]))
         prog = _clone_program(d, p["program"], f"{prefix}_p{k}", replace or (lambda x, y, t: None))
@@ -3493,6 +3612,196 @@ def _copy_mode(d: _Doc, old: int, prefix: str, replace=None, entries=None):
     regions.append(fresh_region("record_header", f"{prefix}_entry", back_reference={"to": ml["id"]},
                                 targets=[{"to": r["id"]} for r in pages]))
     return regions, lists, copies
+
+
+# ------------------------------------------------------------------- Help ---
+# Help, while an activity runs, is a tree of Yes/No screens Logitech wrote per
+# activity (FORMAT 5am): on entry it sends every device's power and input
+# again and asks "Did that fix the problem?"; No goes through the devices one
+# at a time ("Is the TV on?", then "Now is the TV on?" while sending its power
+# again); Yes anywhere goes back to the activity's screen. A composed activity
+# gets its own, with its own devices' names.
+
+HELP_YES, HELP_NO = 0x9F, 0x9E          # the bottom soft keys under "Yes" and "No"
+HELP_ENTRY = 0x06                       # the event a screen gets when it is shown
+FIX_TEXT = "Did that fix the problem?"
+
+
+def _question_template(d: _Doc):
+    """A Yes/No screen to draw questions on: the one with most lines of text.
+    Returns (mode, [line ys], font of the lines)."""
+    best = None
+    for m in range(d.n_modes):
+        f = d.mode(m)
+        if len(f["pages"]) != 1:
+            continue
+        tags = {t for t, _, _ in cmp.tagged(d.blob, f["pages"][0]["list"])}
+        if not {HELP_YES, HELP_NO} <= tags:
+            continue
+        font, lines, words = 0, {}, []
+        for it in sem.screen_program_path(d.blob, f["pages"][0]["program"]):
+            if it["opcode"] == 0x10:
+                font = it["operands"][0]
+            elif it["opcode"] in (4, 5):
+                text = "".join(d.alphabet.get(ch, "?") for ch in renderer_string(d, it))
+                words.append(text)
+                if text not in ("Yes", "No"):
+                    lines.setdefault(it["operands"][1], font)
+        if words[-2:] != ["Yes", "No"] or not lines or len(set(lines.values())) != 1:
+            continue
+        if best is None or len(lines) > len(best[1]):
+            best = (m, sorted(lines), next(iter(lines.values())))
+    if best is None:
+        raise ComposeError("no Yes/No screen to draw Help questions on")
+    return best
+
+
+def _wrap(d: _Doc, text: str, font: int, lines: int) -> list[bytes]:
+    """Words onto at most `lines` lines of the screen's width, the last cut
+    short with '..' when they do not fit."""
+    out, cur = [], ""
+    for word in text.split():
+        trial = f"{cur} {word}".strip()
+        if cur and d.width(d.text(trial, font, limit=None), font) > 94:
+            out.append(cur)
+            cur = word
+        else:
+            cur = trial
+    out.append(cur)
+    if len(out) > lines:
+        out = out[:lines - 1] + [" ".join(out[lines - 1:])]
+    return [d.text(line, font, limit=94) for line in out]
+
+
+def _help_tree(d: _Doc, prefix: str, work: int, questions: list, first_mode: int, make_list):
+    """The Help screens of an activity whose screen is `work`. `questions`:
+    [(is_text, now_text, [instruction, ...] that sends it again)]. Returns
+    (entry mode, mode regions, section 8 lists, pool copies)."""
+    template, ys, font = _question_template(d)
+    entries_of = lambda m: d.region(d.mode(m)["start"], "tagged_list")
+    wide = entries_of(template).get("wide", False)
+    entry = lambda tag, op, x: {**({"flags": 0} if wide else {}), "tag": tag, "operand": x, "opcode": op}
+    page_wide = d.region(d.mode(template)["pages"][0]["list"], "tagged_list").get("wide", False)
+    soft = lambda tag, op, x: {**({"flags": 0} if page_wide else {}), "tag": tag, "operand": x, "opcode": op}
+    n = len(questions)
+    fix, q, now, fixed = first_mode, [], [], []
+    for i in range(n):
+        q.append(first_mode + 1 + 3 * i)
+        now.append(first_mode + 2 + 3 * i)
+        fixed.append(first_mode + 3 + 3 * i)
+    after = lambda i: q[i + 1] if i + 1 < n else work
+    everything = [ins for _, _, sends in questions for ins in sends]
+    regions, lists, copies = [], [], []
+
+    def screen(mode, text, yes, no, on_entry=None):
+        lines = _wrap(d, text, font, len(ys))
+        by_y = dict(zip(ys, lines))
+
+        def replace(x, y, t):
+            if t in ("Yes", "No"):
+                return None
+            if y not in by_y:
+                return False
+            return ((96 - d.width(by_y[y], font)) // 2, y, by_y[y], font)
+        keys = [entry(0xAE, 0x7E, work)]
+        if on_entry:
+            keys.append(entry(HELP_ENTRY, 0x7F, make_list(on_entry)))
+        regs, ls, cs = _copy_mode(d, template, f"{prefix}_m{mode}", replace, entries=keys,
+                                  page_entries=[[soft(HELP_NO, *no), soft(HELP_YES, *yes)]])
+        regions.extend(regs)
+        lists.extend(ls)
+        copies.extend(cs)
+
+    screen(fix, FIX_TEXT, (0x7E, work), (0x7E, q[0] if n else work), everything or None)
+    for i, (is_text, now_text, sends) in enumerate(questions):
+        again = lambda nxt, sends=sends: (0x7F, make_list([*sends, (0x7E, nxt)]))
+        screen(q[i], is_text, (0x7E, after(i)), again(now[i]), sends)
+        screen(now[i], now_text, (0x7E, fixed[i]), again(now[i]))
+        screen(fixed[i], FIX_TEXT, (0x7E, work), (0x7E, after(i)))
+    return fix, regions, lists, copies
+
+
+def device_title(d: _Doc, dev) -> str:
+    """A device's whole name: the title its own screen draws at the top
+    ("TV Panasonic"), where the Devices corner may cut it ("TV Panason..")."""
+    for it in sem.screen_program_path(d.blob, d.mode(dev.mode)["pages"][0]["program"]):
+        if it["opcode"] in (4, 5) and it["operands"][1] == 0:
+            text = "".join(d.alphabet.get(ch, "?") for ch in renderer_string(d, it))
+            if text.strip() and "?" not in text:
+                return text
+    return dev.name.replace("..", "")
+
+
+def _help_questions(d: _Doc, raw: bytes, on: Sequence[str], steps: Sequence,
+                    writes: dict | None = None) -> list:
+    """Help's questions for an activity: each device it switches on (its power
+    state's 0 -> 1 sends), each input it sets through a state variable (what
+    the transition to that value sends, a TV's "Input Hdmi1"), then each
+    command it sends (the step itself)."""
+    power = power_variables(raw)
+    labels = device_commands(raw)
+    devs = devices(raw)
+    full = {x.name: device_title(d, x) for x in devs}
+    by_group = {x.group: full[x.name] for x in devs}
+    out = []
+    s13 = d.S[13]
+    for name in on:
+        record = ir.u24(d.blob, s13 + 8 + 3 * power[name]) - BASE
+        for t in range(ir.u16(d.blob, record + 4)):
+            at = record + 7 + 8 * t
+            frm = int.from_bytes(d.blob[at + 1:at + 3], "little", signed=True)
+            to = int.from_bytes(d.blob[at + 3:at + 5], "little", signed=True)
+            if (frm, to) == (0, 1):
+                send = (d.blob[at + 7], ir.u16(d.blob, at + 5))
+                shown = full[name]
+                out.append((f"Is the {shown} on?", f"Now is the {shown} on?", [send]))
+    power_vars = set(power.values())
+    for var, value in sorted((writes or {}).items()):
+        if var in power_vars:
+            continue
+        record = ir.u24(d.blob, s13 + 8 + 3 * var) - BASE
+        for t in range(ir.u16(d.blob, record + 4)):
+            at = record + 7 + 8 * t
+            if int.from_bytes(d.blob[at + 3:at + 5], "little", signed=True) != value:
+                continue
+            send = (d.blob[at + 7], ir.u16(d.blob, at + 5))
+            stack, first, seen = [send], None, set()
+            while stack and first is None:
+                o, x = stack.pop(0)
+                if o == 0x7D:
+                    first = x
+                elif o == 0x7F and x not in seen:
+                    seen.add(x)
+                    stack = d.ins(x) + stack
+                elif 0x80 <= o < 0x100 and (o, x) not in seen:
+                    # an input set through another variable (input type)
+                    seen.add((o, x))
+                    rec2 = ir.u24(d.blob, s13 + 8 + 3 * (o - 0x80)) - BASE
+                    for t2 in range(ir.u16(d.blob, rec2 + 4)):
+                        at2 = rec2 + 7 + 8 * t2
+                        if int.from_bytes(d.blob[at2 + 3:at2 + 5], "little", signed=True) == x:
+                            stack.append((d.blob[at2 + 7], ir.u16(d.blob, at2 + 5)))
+            if first is None:
+                continue
+            label = labels.get((first >> 8, first & 0xFF), ("", f"command {first & 0xFF}"))[1]
+            dev = by_group.get(first >> 8, f"group {first >> 8}")
+            # Help sends the command itself: writing the variable again would
+            # change nothing and send nothing
+            g = first >> 8
+            delays = [x & 0xFF for i in range(d.n_actions) for o, x in d.ins(i) if o == 0x7C and x >> 8 == g] or [1]
+            again = [(0x7D, first), (0x7C, g << 8 | max(set(delays), key=delays.count))]
+            out.append((f"Is the {dev} on {label}?", f"Now is the {dev} on {label}?", again))
+            break
+    for step in steps:
+        if step[0] == "wait":
+            continue
+        g, cmd = int(step[0]), int(step[1])
+        label = labels.get((g, cmd), ("", f"command {cmd}"))[1]
+        dev = by_group.get(g, f"group {g}")
+        delays = [x & 0xFF for i in range(d.n_actions) for o, x in d.ins(i) if o == 0x7C and x >> 8 == g] or [1]
+        send = [(0x7D, g << 8 | cmd), (0x7C, g << 8 | max(set(delays), key=delays.count))]
+        out.append((f"Is the {dev} on {label}?", f"Now is the {dev} on {label}?", send))
+    return out
 
 
 def add_first_activity(raw: bytes, name: str, on: Sequence[str], show: int,
@@ -3650,16 +3959,24 @@ def add_first_activity(raw: bytes, name: str, on: Sequence[str], show: int,
                        (d.cas_op, value), (0x7F, wait)])
     repick = make_list([*[(0x80 + v, x) for v, x in sorted(writes.items())], (0x7F, event)])
     select = make_list([(0x1F, 0xFF00 | new_set), (flag, 0)])
+
+    # ---- Help: its own tree, with this activity's devices ----
+    help_entry, regs, ls, cs = _help_tree(d, "first_help", work, _help_questions(d, raw, on, steps),
+                                          next_mode, make_list)
+    next_mode += sum(1 for r in regs if r["kind"] == "record_header")
+    new_regions += regs
+    sec8 += ls
+    copies += cs
     action_regions = [fresh_region("action_list", f"first_action_{i}",
                                    instructions=[{"operand": x, "opcode": f"0x{o:02X}"} for o, x in ins])
                       for i, ins in new_actions]
 
-    # ---- the key set: start and re-pick, Devices and Help as when idle ----
+    # ---- the key set: start and re-pick, Devices as when idle, its Help ----
     idle_region = d.region(set_at(off[1] & 0xFF), "tagged_list")
     wide = idle_region.get("wide", False)
     entry = lambda tag, op, x: {**({"flags": 0} if wide else {}), "tag": tag, "operand": x, "opcode": op}
     set_region = fresh_region("tagged_list", "first_key_set", wide=wide, role="section_9_binding", entries=[
-        entry(1, 0x7F, start), entry(0xAF, *idle_set[0xAF]), entry(0xAE, *idle_set[0xAE]),
+        entry(1, 0x7F, start), entry(0xAF, *idle_set[0xAF]), entry(0xAE, 0x7E, help_entry),
         entry(5, 0x7F, repick)])
 
     # ---- section 14: the activity's screen and its key set, by its value ----

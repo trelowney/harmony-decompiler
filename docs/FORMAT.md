@@ -30,6 +30,7 @@ each part, start here:
 | routing any key of an activity, adding letters to a font | 5aj |
 | a first device in an empty configuration, and what a first activity needs | 5ak |
 | 0x72 and the records by activity state; the empty state; a first activity; bands | 5al |
+| Help while an activity runs, and a composed Help tree per activity | 5am |
 | arch 8 and the other protocols | 5, 5j, 5n, 5u |
 
 ---
@@ -5882,6 +5883,33 @@ does this for every draw; the first composed Starting (E1) did not, and the
 remote showed the top half of the word. Our renderer draws whole glyphs, so
 the check is separate: `_check_container` refuses a result with a draw missing
 from a band its glyphs reach.
+
+## 5am. Help while an activity runs - MEASURED ON FILES, NOT YET PRESSED
+
+Help (`0xAE`) in an activity's key set enters a tree of Yes/No screens
+Logitech wrote for that activity. On entry it sends every device's power and
+input again and asks "Did that fix the problem?". No walks the devices one at
+a time ("Is the TV on?"; No sends its power again and asks "Now is the TV
+on?"), then the inputs. Yes anywhere returns to the activity's screen. The
+soft keys are `0x9F` under Yes and `0x9E` under No; event `0x06` is raised
+when a screen is shown, which is where the resends sit.
+
+An activity built "like" another used to inherit that other's tree, so its
+Help asked about the wrong devices and ended on the other activity's screen.
+Now `add_activity` and `add_first_activity` write a tree of their own
+(`_help_tree`): the questions come from the devices it switches on (their
+power state's 0 -> 1 send), the inputs it sets through a state variable (the
+command the transition sends, resent directly), and its own steps. Names are
+the device's whole title from its own screen, not the Devices corner's cut
+one. The screens are copies of the config's Yes/No screen with the most text
+lines, drawn in that screen's font (the 525's wide font 1), wrapped to its
+lines. Letters the wide font lacks come from the 555's same typeface, then
+from glyphs drawn here (`EXTRA_GLYPHS["525-1"]`).
+
+`delete_activity` follows the tree from the key set's `0xAE`, through every
+page list and its pool copy (5ai's twin lists), stopping at device, activity,
+menu and system screens, and removes what nothing else reaches. Deleting an
+activity leaves letters added to a font in place.
 
 ## 6. Prior art
 

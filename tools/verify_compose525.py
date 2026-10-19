@@ -23,6 +23,18 @@ import verify_525_semantics as sem
 from clone_525_device import mode_fields
 
 
+def same_but_glyphs(a: bytes, b: bytes) -> bool:
+    """b is a, or a plus letters added to its fonts (a Help question can need
+    one, and deleting the activity leaves the font as it is)."""
+    if a == b:
+        return True
+    from collections import Counter
+    da, db = c._Doc(a), c._Doc(b)
+    kinds = lambda d: Counter((r["kind"], r.get("role")) for r in d.regions)
+    extra = kinds(db) - kinds(da)
+    return not (kinds(da) - kinds(db)) and set(extra) == {("font_glyph", None)} and         (da.n_modes, da.n_actions) == (db.n_modes, db.n_actions) and         [(x.name, x.work_mode) for x in c.activities(a)] == [(x.name, x.work_mode) for x in c.activities(b)] and         [(x.name, x.mode, x.group) for x in c.devices(a)] == [(x.name, x.mode, x.group) for x in c.devices(b)]
+
+
 def device(n: int):
     address = 0x40 + n
     names = ["Up", "Down", "Left", "Right", "OK", "Exit", "Power"]
@@ -263,7 +275,7 @@ def main() -> int:
                 print(f"FAIL Film's volume keys {pick(vol)} are not the amplifier's {pick(amp)}")
                 return 1
         sent = [s.get("label") for s in c.describe_activity(out, "Film") if s["kind"] == "send"]
-        if sent != ["Input Hdmi2"] or c.delete_activity(out, "Film") != composed:
+        if sent != ["Input Hdmi2"] or not same_but_glyphs(composed, c.delete_activity(out, "Film")):
             print(f"FAIL Film (show {show}, volume {volume}): sends {sent}, or deleting it differs")
             return 1
     print("PASS activities read as steps; one ends on the X96, one sends volume to the amplifier; "
@@ -311,7 +323,7 @@ def main() -> int:
     told = [s_ for s_ in c.describe_activity(out, "Film") if s_["kind"] == "wait"]
     if s["steps"] != [hdmi1, ("wait", hdmi1[0], 150), hdmi2] or \
             waits != [[(0x7C, hdmi1[0] << 8 | 100), (0x7C, hdmi1[0] << 8 | 50)]] or \
-            [t["seconds"] for t in told] != [15] or c.delete_activity(out, "Film") != composed:
+            [t["seconds"] for t in told] != [15] or not same_but_glyphs(composed, c.delete_activity(out, "Film")):
         print(f"FAIL a wait of 15 s: {s['steps']}, {waits}, {told}")
         return 1
     print("PASS a 15 s wait for the TV between two inputs: 100 and 50 tenths, read back, deleted again")
@@ -330,7 +342,7 @@ def main() -> int:
     if (s["show"], s["volume"], s["keys"]) != (modes["X96 Box"], modes["Amplifier Genius"],
                                                {"Red": tv, "ChannelDown": tv, "ChannelUp": tv}) or \
             any(sent[c.KEYS[k]] != theirs[c.KEYS[k]] for k in ("ChannelUp", "ChannelDown", "Red")) or \
-            c.delete_activity(out, "Film") != composed:
+            not same_but_glyphs(composed, c.delete_activity(out, "Film")):
         print(f"FAIL keys routed to the TV: {s}")
         return 1
     print("PASS an activity on the X96's screen sends channels and Red to the TV and volume to the "
