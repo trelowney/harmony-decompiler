@@ -28,6 +28,7 @@ each part, start here:
 | devices, activities, power and what composing them does on the remote | 5af, 5ag, 5ah |
 | the 515 and 555 | 5ab, 5ai |
 | routing any key of an activity, adding letters to a font | 5aj |
+| a first device in an empty configuration, and what a first activity needs | 5ak |
 | arch 8 and the other protocols | 5, 5j, 5n, 5u |
 
 ---
@@ -5779,6 +5780,54 @@ display: an activity named "Kodi Jukebox (Q7)!" drew K, J, Q, 7, brackets and
 the exclamation mark in line with the rest. What is drawn reads back, because
 the drawn shapes join `arch9_glyphs.json`'s at load. A deleted name leaves its
 glyphs in the font; nothing else draws them and nothing minds.
+
+## 5ak. Toward a configuration from nothing: the first device - MEASURED ON FILES
+
+Everything composed before this started from a device or an activity that was
+already there. The empty 555 (issue #42) has neither, so it is the test: what
+does a first one need that a configuration with none cannot supply?
+
+**A first device needs nothing copied.** Four things came from an existing
+device and each has a source that every configuration has:
+
+* **its key list.** Every device mode on the 525's and the 515's lists the same
+  43 tags in the same order, the 39 keys and the four soft keys, unused ones
+  bound to opcode 0 (`DEVICE_KEY_ORDER`).
+* **its page frame.** A device page is the Devices screen's frame of four
+  corners with a title, so the Devices screen's own program is the template.
+  Its title font differs per configuration (3 on the 525, another on the 555
+  that lacks `T`), so a new title is drawn in font 0, where missing letters are
+  added (5aj).
+* **the device flag** (5ai), read off a Devices soft key when there is one.
+  Without one it is the variable of the system list `[flag := 0, 0x72 13]`:
+  list 53 writes 18 on the 525's and 21 on the 515's, and on the 555's list 55
+  writes 15. All three have a maximum of 3 and no transitions, and the 555's
+  list 112, `[0x7E 42, var 15 := 1]`, is the shape a device selection has.
+* **section 5,** a count of zero groups, one zero byte that the decompiler
+  reads as plain data; it becomes the one byte table it is.
+
+The first device goes top left on the first page of every Devices screen.
+Danny's reader finds it and its commands in the result. Not written to a 555.
+
+**A first activity is not done,** and what it needs is written down here so
+it is not guessed. Every activity here was built like another, copying its
+key set, its start chain, its start and status screens and its section 14
+entries. With none to copy:
+
+* the **start chain** ends, on every start and stop seen, in
+  `[0x3F 0xD000] -> [0x1F 0xFB00] -> [0x71 0x8008, 0x7E <battery screen>, ...]`:
+  it waits, and on state variable 8 shows "Replace the batteries" before the
+  next screen. Each chain has its own copy of that screen whose keys continue
+  that chain (the 555's stop chain's battery screen 48 continues to list 90),
+  so a new chain needs a new copy;
+* the **start screen** "Starting" is not in the 555, but its "Stopping
+  Activity" (mode 44) has the same frame and the same three fixed lines;
+* a few **section 14 records** distinguish activities (the activity's screen,
+  its key set, its Devices screen); on the 525 they hold a key per activity,
+  on the empty 555 only the idle value 0. They are not at the same indices in
+  the two files, so they have to be told apart by what their streams do;
+* the **menu** is found in the 525 through its soft keys; the 555's empty one
+  (mode 45, "Choose an activi..") is what section 14's first record enters.
 
 ## 6. Prior art
 
