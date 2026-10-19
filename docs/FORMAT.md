@@ -29,6 +29,7 @@ each part, start here:
 | the 515 and 555 | 5ab, 5ai |
 | routing any key of an activity, adding letters to a font | 5aj |
 | a first device in an empty configuration, and what a first activity needs | 5ak |
+| 0x72 and the records by activity state; the empty state; a first activity; bands | 5al |
 | arch 8 and the other protocols | 5, 5j, 5n, 5u |
 
 ---
@@ -5828,6 +5829,59 @@ entries. With none to copy:
   the two files, so they have to be told apart by what their streams do;
 * the **menu** is found in the 525 through its soft keys; the 555's empty one
   (mode 45, "Choose an activi..") is what section 14's first record enters.
+
+## 5al. 0x72 reads a record by a state variable, the empty state, and a first activity - MEASURED ON THE REMOTE
+
+**0x72's operand is `record << 8 | variable`.** It looks up section 14 record
+`record` by the value of state variable `variable` (4o's search, with the
+variable named by the low byte as @dannybloe's section 277 has it for 0x70 to
+0x72). On the 525: 13 is record 0 by `CurrentLocation`, 271 record 1 by
+`CurrentActivityState` (15), 2063 record 8 by it, 2319 record 9 by it. So the
+records that tell activities apart are the ones looked up by the activity
+state, and they can be found by that, not by their index, which differs
+between the 525 and the 555:
+
+| what the record gives | 525 (idle 3) | empty 555 (idle 0) |
+|---|---|---|
+| the activity's screen | one per activity, idle `0x72 13` (the menu) | record 7, `0x72 13` |
+| the Devices screen of the activity's context | one per activity, idle 82 | record 8, Devices 42 |
+| the activity's key set | one per activity, no idle item | record 5, **no item at all** |
+
+**Every activity deleted** now leaves what the empty 555 has: the activity
+state 0 of 0, the screen record on the menu, Devices on its idle screen, the
+key set record with no item (its count 0, the key cut from the record's
+header), the emptied menu page list with the wide header. The menu is then
+found as the one mode whose only key is `0xB7` through section 14. Written to
+the owner's 525 as E0, from X: no error, an empty "Choose an Activity", every
+device working, Off and Help as before.
+
+**How an activity runs.** Choosing it in the menu selects its key set, and
+the firmware raises event 1 in that set (its start list), event 5 when it is
+chosen again (the re-pick list). Off (`0xB6`, key set 1) selects the idle key
+set, whose event 1 is the stop sequence: "Stopping Activity", the all-off list.
+A start list shows "Starting", switches devices, writes the activity state and
+runs `[0x3F 0xD000] -> [0x1F 0xFB00] -> [0x71 0x8008, 0x7E battery screen,
+0x7E activity screen]`: a wait, an event, and on state variable 8 "Replace the
+batteries" before the activity's screen. Each chain has its own copy of that
+screen, its keys leading on to the chain's screen.
+
+**A first activity, nothing copied** (`add_first_activity`): a key set with
+event 1 to its start, event 5 to its re-pick, Devices and Help as the idle set
+binds them; a Starting screen made from Stopping Activity's (the same frame and
+three fixed lines; the name in place of "Stopping Activity", "Starting" above
+it); a copy of a battery screen leading to the activity's screen; the chain
+above; and an item for its value in the screen record and the key set record.
+It ends on a device's screen, or a copy with keys routed (5aj). Written as E2
+after E0 and pressed: the menu entry, Starting, TV on, HDMI 1, the X96's
+screen and keys, Devices, Help, Off.
+
+**Text crossing a band is drawn in each band.** The panel is sent eight rows
+at a time (opcode 22 picks the band, 4f), so a line of 11 row text at y 0 is
+drawn in band 0 and again in band 1. Every page of the 525, 515 and 555 samples
+does this for every draw; the first composed Starting (E1) did not, and the
+remote showed the top half of the word. Our renderer draws whole glyphs, so
+the check is separate: `_check_container` refuses a result with a draw missing
+from a band its glyphs reach.
 
 ## 6. Prior art
 
