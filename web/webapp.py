@@ -4,6 +4,7 @@ It reads a configuration with the same modules the command line uses
 (tools/), so the page and the tests agree by construction.
 """
 import hashlib
+import re
 
 import compose525
 import flipper_ir
@@ -23,11 +24,32 @@ def set_template(container: bytes) -> None:
     _TEMPLATE = hconfig.split_container(bytes(container))
 
 
+# The arch 9 remotes this page knows, by the skin a configuration states in
+# section 1 (FORMAT 4r): the same firmware runs all three (FORMAT 5ab).
+MODELS = {22: "Harmony 525", 67: "Harmony 515", 48: "Harmony 555"}
+
+
+def skin_of(blob: bytes) -> int:
+    """The skin section 1 states: protocol, protocol again, skin, 0x0D."""
+    blob = bytes(blob)
+    at = sem.section_offsets(blob)[1]
+    if blob[at:at + 2] != bytes((9, 9)) or blob[at + 3] != 0x0D:
+        raise ValueError("section 1 is not an arch 9 protocol and skin record")
+    return blob[at + 2]
+
+
+def model(container: bytes) -> str:
+    skin = skin_of(hconfig.split_container(bytes(container))[2])
+    return MODELS.get(skin, f"an arch 9 remote with skin {skin}")
+
+
 def ezhex_from_blob(blob: bytes) -> bytes:
     """Wrap a blob read off a remote the way concordance --dump-config does: the
-    header with BINARYDATASIZE and CHECKSUM recomputed."""
+    header with BINARYDATASIZE and CHECKSUM recomputed, and the remote's own
+    skin (the template is the 525's)."""
     xml, sep, _ = _TEMPLATE
     blob = bytes(blob)
+    xml = re.sub(rb"<SKIN>\d+</SKIN>", b"<SKIN>%d</SKIN>" % skin_of(blob), xml)
     xml = hconfig._set_tag(xml, "BINARYDATASIZE", len(blob))
     xml = hconfig._set_tag(xml, "CHECKSUM", hconfig.blob_checksum(blob))
     return xml + sep + blob
@@ -40,14 +62,17 @@ def blob_of(container: bytes) -> bytes:
     raw = bytes(container)
     xml, _, blob = hconfig.split_container(raw)
     if blob[:4] != b"AHCM":
-        raise ValueError("not an arch 9 (Harmony 525) configuration")
+        raise ValueError("not an arch 9 (Harmony 515, 525 or 555) configuration")
     if int.from_bytes(blob[-6:-4], "little") != hconfig.trailer_checksum(blob):
         raise ValueError("the configuration's own checksum is wrong")
     if hconfig.compile_config(hconfig.decompile(raw, "write")) != raw:
         raise ValueError("the configuration does not read back byte for byte")
-    for tag in (b"<PROTOCOL>9</PROTOCOL>", b"<SKIN>22</SKIN>"):
+    skin = skin_of(blob)
+    if skin not in MODELS:
+        raise ValueError(f"skin {skin} is not a remote this page knows")
+    for tag in (b"<PROTOCOL>9</PROTOCOL>", b"<SKIN>%d</SKIN>" % skin):
         if tag not in xml:
-            raise ValueError(f"the file is not for this remote: no {tag.decode()}")
+            raise ValueError(f"the file's header does not say what its configuration does: no {tag.decode()}")
     return blob
 
 
@@ -70,6 +95,7 @@ def summary(container: bytes) -> dict:
         "roundtrip_ok": roundtrip_ok,
         "devices": devices,
         "activities": activities,
+        "model": model(raw),
     }
 
 
@@ -329,7 +355,7 @@ def remote_model(container: bytes) -> dict:
                      if it["opcode"] in (4, 5)]
 
             def drawn_label(c):
-                rows = (13, 16, 24) if c < 2 else (35, 46)
+                rows = compose525.TOP_ROWS if c < 2 else compose525.BOTTOM_ROWS
                 lines = {}
                 for x, y, codes in sorted(drawn, key=lambda t: t[1]):
                     if y in rows and (x >= 48) == (c in (1, 3)):
@@ -446,7 +472,7 @@ def device_layout(container: bytes, mode: int) -> dict:
                  for it in compose525.sem.screen_program_path(d.blob, p["program"]) if it["opcode"] in (4, 5)]
 
         def drawn_label(corner):
-            rows = (13, 16, 24) if corner < 2 else (35, 46)
+            rows = compose525.TOP_ROWS if corner < 2 else compose525.BOTTOM_ROWS
             lines = {}
             for x, y, codes in sorted(drawn, key=lambda t: t[1]):
                 if y in rows and (x >= 48) == (corner in (1, 3)):

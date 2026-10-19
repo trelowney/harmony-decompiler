@@ -58,8 +58,27 @@ KEYS = {
 # bottom left, bottom right (FORMAT 5ae, both top-left and bottom-right pressed)
 SOFT = (0xA7, 0xA6, 0x9F, 0x9E)
 # font 4 glyph codes for the page counter, read off a six page device mode
-COUNTER_DIGIT = {1: 0x37, 2: 0x1E, 3: 0x35, 4: 0x3E, 5: 0x40, 6: 0x36}
-COUNTER_OF = bytes((3, 4))
+# "n OF m" under a paged screen, in font set 4. The codes are the
+# configuration's own: 0x37 is "1" on the 525's and ")" on a 515's.
+COUNTER_FONT = 4
+
+
+def _digit(d, n: int) -> int:
+    return _counter_codes(d, str(n))[0]
+
+
+def _of(d) -> bytes:
+    return _counter_codes(d, "OF")
+
+
+def _counter_codes(d, text: str) -> bytes:
+    codes = encode_text(text, d.alphabet)
+    for code in codes:
+        try:
+            d.fonts[COUNTER_FONT].glyph(code)
+        except ValueError:
+            raise ComposeError(f"the page counter's font has no {text!r} here") from None
+    return codes
 HALF_WIDTH = 47              # a name or label gets half the 96 pixel screen
 SYMBOL_LIMIT = enc.IR_SYMBOL_WORD_LIMIT
 
@@ -132,6 +151,93 @@ def _encode(command: Command, base: int) -> tuple[bytes, int]:
 
 # ------------------------------------------------------------ the document ---
 
+# ------------------------------------------------------------- the alphabet ---
+# A glyph code is assigned per configuration, in the order the generator met
+# each character, so the 525's codes mean nothing in a 515's file. A skin's
+# typeface is the same in every configuration of it, so a code is read by its
+# pixels (@dannybloe's method, his section 112): tools/arch9_glyphs.json, built
+# by build_arch9_glyphs.py from one configuration per typeface read by eye.
+
+_GLYPHS: dict | None = None
+
+
+def shape_key(shape) -> str:
+    """A glyph's (height, rows of pixels) as a short stable key."""
+    import hashlib
+    height, rows = shape
+    text = f"{height}:" + "/".join("".join("#" if v == renderer.INK else "." for v in row) for row in rows)
+    return hashlib.sha1(text.encode()).hexdigest()[:16]
+
+
+def _glyph_table() -> dict:
+    global _GLYPHS
+    if _GLYPHS is None:
+        import json
+        from pathlib import Path
+        _GLYPHS = json.loads((Path(__file__).resolve().parent / "arch9_glyphs.json").read_text(encoding="utf-8"))
+    return _GLYPHS
+
+
+def _glyph_shapes(blob: bytes, fonts) -> dict[int, set]:
+    """Every code's pixels, (height, rows), in each font set that draws it."""
+    out: dict[int, set] = {}
+    for font in fonts:
+        for code in range(font.first, font.first + font.count):
+            try:
+                rows = font.glyph(code)
+            except ValueError:
+                continue
+            if any(v == renderer.INK for row in rows for v in row):
+                out.setdefault(code, set()).add((font.height, tuple(map(tuple, rows))))
+    return out
+
+
+def _blank_codes(fonts) -> set[int]:
+    out = set()
+    for font in fonts:
+        for code in range(font.first, font.first + font.count):
+            try:
+                rows = font.glyph(code)
+            except ValueError:
+                continue
+            if not any(v == renderer.INK for row in rows for v in row):
+                out.add(code)
+    return out
+
+
+def config_alphabet(blob: bytes, fonts) -> dict[int, str]:
+    """This configuration's codes, by the characters their pixels draw. A shape
+    two characters share (l and I on the 525) is settled by the rule that one
+    code is one character; a code no known shape explains is left out and
+    reads as '?'. The space draws nothing: it is the code that is drawn blank."""
+    table = _glyph_table()
+    out: dict[int, str] = {}
+    open_: dict[int, set] = {}
+    for code, shapes in _glyph_shapes(blob, fonts).items():
+        candidates = None
+        for shape in shapes:
+            chars = set(table.get(shape_key(shape), ""))
+            if chars:
+                candidates = chars if candidates is None else candidates & chars
+        if candidates and len(candidates) == 1:
+            out[code] = next(iter(candidates))
+        elif candidates:
+            open_[code] = candidates
+    changed = True
+    while changed and open_:
+        changed = False
+        for code, chars in list(open_.items()):
+            left = chars - set(out.values())
+            if len(left) == 1:
+                out[code] = left.pop()
+                del open_[code]
+                changed = True
+    blank = _blank_codes(fonts) - set(out)
+    if " " not in out.values() and len(blank) == 1:
+        out[blank.pop()] = " "
+    return out
+
+
 class _Doc:
     """A decompiled container and what its sections say."""
 
@@ -144,14 +250,59 @@ class _Doc:
         self.at: dict[int, list[dict]] = {}
         for region in self.regions:
             self.at.setdefault(region["offset"], []).append(region)
-        self.alphabet = alphabet_map()
         self.fonts = renderer.fonts(self.blob, self.S)
+        self.alphabet = config_alphabet(self.blob, self.fonts)
         self.actions = ir.action_addresses(self.blob, self.S)
         self.n_modes = ir.u24(self.blob, self.S[sem.MODE_SLOT])
         self.n_actions = len(self.actions)
 
     def ins(self, index: int):
         return sem.instructions(self.blob, self.actions[index])
+
+    # Two state variables every config uses are numbered per config, after the
+    # devices' own: CurrentActivityState is 15 on the 525's, 17 on a 515's, 16
+    # on a 555's; the one a Devices soft key sets to 1 (and the activity menu to
+    # 0) is 18 on the 525's and 21 on a 515's.
+
+    @property
+    def cas_var(self) -> int:
+        """CurrentActivityState, found by its name in the name table."""
+        if not hasattr(self, "_cas_var"):
+            hits = [r["index"] for r in self.region(self.S[0], "name_table")["records"]
+                    if r["parent"] == 1 and r["name"].startswith("CurrentActivityState")]
+            if len(hits) != 1:
+                raise ComposeError(f"{len(hits)} CurrentActivityState variables in the name table")
+            self._cas_var = hits[0]
+        return self._cas_var
+
+    @property
+    def cas_op(self) -> int:
+        """The instruction that writes CurrentActivityState (0x8F on the 525)."""
+        return 0x80 + self.cas_var
+
+    @property
+    def device_flag_op(self) -> int:
+        """The state write a Devices soft key makes after entering its device's
+        mode, `(op, 1)`; the activity menu writes `(op, 0)`. Read off the
+        lists the Devices screens' soft keys run (0x92 on the 525)."""
+        if not hasattr(self, "_device_flag_op"):
+            seen: dict[int, int] = {}
+            for k in range(self.blob[self.S[9]]):
+                at = ir.u24(self.blob, self.S[9] + 1 + 3 * k) - BASE
+                for tag, op, value in cmp.tagged(self.blob, at):
+                    if tag != 0xAF:
+                        continue
+                    modes = [value] if op == 0x7E else [v for o, v in self.ins(value) if o == 0x7E]                         if op == 0x7F else []
+                    for m in modes:
+                        for p in self.mode(m)["pages"]:
+                            for t, o, v in cmp.tagged(self.blob, p["list"]):
+                                ins = self.ins(v) if o == 0x7F else []
+                                if len(ins) >= 2 and ins[0][0] == 0x7E and 0x80 <= ins[1][0] < 0x100                                         and ins[1][1] == 1:
+                                    seen[ins[1][0]] = seen.get(ins[1][0], 0) + 1
+            if not seen:
+                raise ComposeError("no Devices soft key enters a device here, so the device flag is unknown")
+            self._device_flag_op = max(seen, key=seen.get)
+        return self._device_flag_op
 
     def mode(self, index: int) -> dict:
         return mode_fields(self.blob, self.S, index)
@@ -192,7 +343,7 @@ class _Doc:
     def selection_target(self, list_index: int) -> int | None:
         """The device mode a Devices soft key enters, or None."""
         ins = self.ins(list_index)
-        if len(ins) >= 2 and ins[0][0] == 0x7E and ins[1] == (0x92, 1):
+        if len(ins) >= 2 and ins[0][0] == 0x7E and ins[1] == (self.device_flag_op, 1):
             return ins[0][1]
         return None
 
@@ -289,6 +440,13 @@ class _Doc:
         return hconfig.compile_config(self.doc)
 
 
+# Where a corner's name is read from: the 525 draws its two lines at 13 and 24
+# (35 and 46 below), a 515 at 13 and 25 (35 and 47), so a reader takes the band
+# between the title and the page counter rather than exact rows.
+TOP_ROWS = range(10, 34)
+BOTTOM_ROWS = range(34, 56)
+
+
 def _bands(y: int, height: int = 11) -> range:
     return range(y // 8, (y + height) // 8 + 1)
 
@@ -321,17 +479,17 @@ def _set_counters(d: _Doc, programs: dict[int, tuple[int, int]], prefix: str) ->
         if existing:
             for glyphs, x in existing:
                 if x == 65:
-                    glyphs["codes"] = [COUNTER_DIGIT[total]]
+                    glyphs["codes"] = [_digit(d, total)]
                 elif x in (35, 38):
-                    if glyphs["codes"] != [COUNTER_DIGIT[cur]]:
+                    if glyphs["codes"] != [_digit(d, cur)]:
                         raise ComposeError(f"page counter at 0x{root:X} disagrees with its page")
             continue
         x = 38 if cur == 1 else 35
         d.insert_before(d.band_ends(root)[7], [
             opaque(f"{prefix}_{root:x}_font", b"\x10\x04"),
-            _draw(x, 56, bytes((COUNTER_DIGIT[cur],)), f"{prefix}_{root:x}_cur"),
-            _draw(47, 56, COUNTER_OF, f"{prefix}_{root:x}_of"),
-            _draw(65, 56, bytes((COUNTER_DIGIT[total],)), f"{prefix}_{root:x}_total"),
+            _draw(x, 56, bytes((_digit(d, cur),)), f"{prefix}_{root:x}_cur"),
+            _draw(47, 56, _of(d), f"{prefix}_{root:x}_of"),
+            _draw(65, 56, bytes((_digit(d, total),)), f"{prefix}_{root:x}_total"),
         ])
 
 
@@ -454,9 +612,9 @@ def _device_pages(d: _Doc, prefix: str, name: str, lcd, act: dict, donor_root: i
         if len(lcd) > 1:
             per_band.setdefault(7, []).extend([
                 opaque(f"{prefix}_p{k}_cf", b"\x10\x04"),
-                _draw(38 if k == 0 else 35, 56, bytes((COUNTER_DIGIT[k + 1],)), f"{prefix}_p{k}_cc"),
-                _draw(47, 56, COUNTER_OF, f"{prefix}_p{k}_co"),
-                _draw(65, 56, bytes((COUNTER_DIGIT[len(lcd)],)), f"{prefix}_p{k}_ct")])
+                _draw(38 if k == 0 else 35, 56, bytes((_digit(d, k + 1),)), f"{prefix}_p{k}_cc"),
+                _draw(47, 56, _of(d), f"{prefix}_p{k}_co"),
+                _draw(65, 56, bytes((_digit(d, len(lcd)),)), f"{prefix}_p{k}_ct")])
         _insert_in_program(program, per_band)
         entries = [{"tag": SOFT[c], "operand": act[item[1]], "opcode": 0x7F}
                    for c, item in enumerate(page) if item is not None]
@@ -497,6 +655,10 @@ def add_device(raw: bytes, name: str, commands: Sequence[Command],
     """
     d = _Doc(raw)
     blob, S = d.blob, d.S
+    if not _devices_of(raw):
+        # a device is built from an existing one's screen and keys (an empty
+        # 555 setup has none)
+        raise ComposeError("this configuration has no device yet, and a new one is built from an existing one")
     by_name = {c.name: i for i, c in enumerate(commands)}
     if len(by_name) != len(commands):
         raise ComposeError("command names must be unique")
@@ -566,7 +728,7 @@ def add_device(raw: bytes, name: str, commands: Sequence[Command],
                                           {"operand": group << 8 | 1, "opcode": "0x7C"}])
                for n in used]
     select_index = d.n_actions + len(used)
-    select_ins = [{"operand": mode, "opcode": "0x7E"}, {"operand": 1, "opcode": "0x92"}]
+    select_ins = [{"operand": mode, "opcode": "0x7E"}, {"operand": 1, "opcode": f"0x{d.device_flag_op:02X}"}]
     if on_enter:
         select_ins.append({"operand": act[on_enter], "opcode": "0x7F"})
     selection = fresh_region("action_list", f"dev{group}_action_{select_index}", instructions=select_ins)
@@ -636,9 +798,9 @@ def add_device(raw: bytes, name: str, commands: Sequence[Command],
         body = new_devices_regions[:-1]
         _insert_in_program(body, {7: [
             opaque(f"dev{group}_newpage_cf", b"\x10\x04"),
-            _draw(35, 56, bytes((COUNTER_DIGIT[n_pages],)), f"dev{group}_newpage_cc"),
-            _draw(47, 56, COUNTER_OF, f"dev{group}_newpage_co"),
-            _draw(65, 56, bytes((COUNTER_DIGIT[n_pages],)), f"dev{group}_newpage_ct")]})
+            _draw(35, 56, bytes((_digit(d, n_pages),)), f"dev{group}_newpage_cc"),
+            _draw(47, 56, _of(d), f"dev{group}_newpage_co"),
+            _draw(65, 56, bytes((_digit(d, n_pages),)), f"dev{group}_newpage_ct")]})
         new_devices_regions[:-1] = body
 
     # ---- tables and placement ----
@@ -763,7 +925,7 @@ def devices(raw: bytes) -> list[Device]:
             if mode is None:
                 continue
             corner = SOFT.index(tag)
-            rows = (13, 24) if corner < 2 else (35, 46)
+            rows = TOP_ROWS if corner < 2 else BOTTOM_ROWS
             right = corner in (1, 3)
             lines = []
             for y in rows:
@@ -773,6 +935,9 @@ def devices(raw: bytes) -> list[Device]:
             group = max(set(groups), key=groups.count) if groups else None
             out.append(Device(" ".join(lines), mode, group, page_index, corner))
     return out
+
+
+_devices_of = devices        # for functions with a local of that name
 
 
 def renderer_string(d: _Doc, item: dict) -> bytes:
@@ -947,16 +1112,16 @@ def rekey_device(raw: bytes, mode: int, commands: dict, keys: dict,
 # 0x7D and 0x7C an infrared group.
 
 def _remap(op: int, operand: int, actions: dict, modes: dict, groups: dict,
-           sets: dict | None = None, values: dict | None = None):
+           sets: dict | None = None, values: dict | None = None, cas_op: int = 0x8F):
     """The operand after renumbering, or None when it names something deleted.
     `sets` renumbers key sets (0x1F 0xFFnn and 0xE8nn), `values` the
-    CurrentActivityState values written by 0x8F."""
+    CurrentActivityState values written by `cas_op` (0x8F on the 525)."""
     if op == 0x1F and sets and operand >> 8 in (0xFF, 0xE8):
         k = operand & 0xFF
         if k in sets:
             return None if sets[k] is None else (operand & 0xFF00) | sets[k]
         return operand
-    if op == 0x8F and values:
+    if op == cas_op and values:
         if operand in values:
             return values[operand]
         return operand
@@ -999,7 +1164,7 @@ def _apply_maps(d: _Doc, actions: dict, modes: dict, groups: dict, keep,
     """Renumber every reference in the kept regions. A reference to something
     deleted is an error: the caller decided what goes and must have removed it."""
     def fix(op, operand, where):
-        new = _remap(op, operand, actions, modes, groups, sets, values)
+        new = _remap(op, operand, actions, modes, groups, sets, values, d.cas_op)
         if new is None:
             raise ComposeError(f"{where} still names something being deleted (0x{op:02X} {operand})")
         return new
@@ -1356,7 +1521,7 @@ def delete_device(raw: bytes, mode: int) -> bytes:
             twin["entries"] = [e for e in twin["entries"] if e["tag"] not in tags]
             for tag in tags:
                 corner = SOFT.index(tag)
-                rows = (13, 24) if corner < 2 else (35, 46)
+                rows = TOP_ROWS if corner < 2 else BOTTOM_ROWS
                 right = corner in (1, 3)
                 for item in sem.screen_program_path(blob, p["program"]):
                     if item["opcode"] in (4, 5) and item["operands"][1] in rows and \
@@ -1511,7 +1676,7 @@ def _menu_mode(d: _Doc) -> int:
             for tag, op, v in cmp.tagged(d.blob, p["list"]):
                 if op == 0x7F and tag in SOFT:
                     ins = d.ins(v)
-                    if len(ins) == 2 and ins[0][0] == 0x1F and ins[0][1] >> 8 == 0xFF and ins[1] == (0x92, 0):
+                    if len(ins) == 2 and ins[0][0] == 0x1F and ins[0][1] >> 8 == 0xFF and ins[1] == (d.device_flag_op, 0):
                         hits.append(m)
     if not hits:
         raise ComposeError("no activity menu found")
@@ -1554,11 +1719,11 @@ def activities(raw: bytes) -> list[Activity]:
             start = entries[1][1]
             repick = entries[5][1] if 5 in entries and entries[5][0] == 0x7F else None
             start_ins = d.ins(start)
-            values = [x for o, x in start_ins if o == 0x8F]
+            values = [x for o, x in start_ins if o == d.cas_op]
             if len(values) != 1 or start_ins[0][0] != 0x7E:
                 raise ComposeError(f"key set {key_set}'s start list is not the shape this knows")
             corner = SOFT.index(tag)
-            rows = (13, 24) if corner < 2 else (35, 46)
+            rows = TOP_ROWS if corner < 2 else BOTTOM_ROWS
             lines = []
             for y in rows:
                 hits = sorted({c for x, yy, c in drawn if yy == y and (x >= 48) == (corner in (1, 3))})
@@ -1668,7 +1833,7 @@ def device_commands(raw: bytes) -> dict:
                 if op != 0x7F or tag not in SOFT:
                     continue
                 c = SOFT.index(tag)
-                rows = (13, 16, 24) if c < 2 else (35, 46)
+                rows = TOP_ROWS if c < 2 else BOTTOM_ROWS
                 # one line per y: Logitech draws a line again in every band it crosses
                 lines = {}
                 for x, y, codes in sorted(drawn, key=lambda t: t[1]):
@@ -1733,7 +1898,7 @@ def describe_activity(raw: bytes, name: str) -> list:
                 return
             for o, x in ins:
                 run(o, x, depth + 1, seen)
-        elif 0x80 <= op < 0x100 and op != 0x8F:
+        elif 0x80 <= op < 0x100 and op != d.cas_op:
             v = op - 0x80
             if v in power:
                 steps.append({"kind": "power", "device": power[v], "on": bool(operand)})
@@ -1785,14 +1950,13 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
         # the source's own settings, an input most of all: every state write its
         # start list makes that is not a power switch or the activity number
         writes = {o - 0x80: x for o, x in d.ins(src.start)
-                  if 0x80 <= o < 0x100 and o != 0x8F and o - 0x80 not in power.values()}
+                  if 0x80 <= o < 0x100 and o != d.cas_op and o - 0x80 not in power.values()}
     state_writes = [(power[n], 1 if n in on else 0) for n in sorted(power, key=lambda n: power[n])]
     state_writes += sorted(writes.items())
     for var, value in state_writes:
         if not 0 <= var < 0x80 - 0x10 or value > 0xFFFF:
             raise ComposeError(f"state write {var} := {value}")
-    cas = [o - 0x80 for o, x in d.ins(src.start) if o == 0x8F] or [None]
-    cas_var = 0x8F - 0x80
+    cas_var = d.cas_var
     s13 = S[13]
     cas_record = ir.u24(blob, s13 + 8 + 3 * cas_var) - BASE
     idle, top = ir.u16(blob, cas_record), ir.u16(blob, cas_record + 2)
@@ -1990,7 +2154,7 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
         qd = max(set(delays), key=delays.count)
         step_calls.append((0x7F, make_list([(0x7D, g << 8 | cmd), (0x7C, g << 8 | qd)])))
     start_ins = [(0x7E, start_mode)] + [(0x80 + var, val) for var, val in state_writes] + \
-        step_calls + [(0x8F, value), (0x7F, copy_list(tail[1]) if needs_copy(tail[1]) else tail[1])]
+        step_calls + [(d.cas_op, value), (0x7F, copy_list(tail[1]) if needs_copy(tail[1]) else tail[1])]
     start_list = make_list(start_ins)
     repick_list = None
     if src.repick is not None:
@@ -2000,7 +2164,7 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
         re_ins = [(0x80 + var, val) for var, val in sorted(writes.items())]
         re_ins.append((0x7F, copy_list(src_re[-1][1]) if needs_copy(src_re[-1][1]) else src_re[-1][1]))
         repick_list = make_list(re_ins)
-    menu_list_index = make_list([(0x1F, 0xFF00 | new_set), (0x92, 0)])
+    menu_list_index = make_list([(0x1F, 0xFF00 | new_set), (d.device_flag_op, 0)])
 
     def action_region(index, ins):
         return fresh_region("action_list", f"act{value}_action_{index}",
@@ -2100,9 +2264,9 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
         _insert_in_program(program, _corner_draws(d, 0, name, f"act{value}_menu"))
         _insert_in_program(program, {7: [
             opaque(f"act{value}_menu_cf", b"\x10\x04"),
-            _draw(35, 56, bytes((COUNTER_DIGIT[page + 1],)), f"act{value}_menu_cc"),
-            _draw(47, 56, COUNTER_OF, f"act{value}_menu_co"),
-            _draw(65, 56, bytes((COUNTER_DIGIT[page + 1],)), f"act{value}_menu_ct")]})
+            _draw(35, 56, bytes((_digit(d, page + 1),)), f"act{value}_menu_cc"),
+            _draw(47, 56, _of(d), f"act{value}_menu_co"),
+            _draw(65, 56, bytes((_digit(d, page + 1),)), f"act{value}_menu_ct")]})
         mlist = fresh_region("tagged_list", f"act{value}_menu_list", section=8, wide=False,
                              entries=[entry_select])
         record = fresh_region("mode_page", f"act{value}_menu_page",
@@ -2189,7 +2353,7 @@ def _drop_corner(d: _Doc, page: dict, corner: int, gone: set) -> None:
     twin = d.pool_copy(page["list"])
     plist["entries"] = [e for e in plist["entries"] if e["tag"] != tag]
     twin["entries"] = [e for e in twin["entries"] if e["tag"] != tag]
-    rows = (13, 24) if corner < 2 else (35, 46)
+    rows = TOP_ROWS if corner < 2 else BOTTOM_ROWS
     right = corner in (1, 3)
     for item in sem.screen_program_path(d.blob, page["program"]):
         if item["opcode"] in (4, 5) and item["operands"][1] in rows and (item["operands"][0] >= 48) == right:
@@ -2212,7 +2376,7 @@ def delete_activity(raw: bytes, name: str, value: int | None = None) -> bytes:
         raise ComposeError(f"no single activity named {name!r}: {[a.name for a in acts]}")
     act = hit[0]
     menu = _menu_mode(d)
-    cas_var = 0x8F - 0x80
+    cas_var = d.cas_var
     cas_record = ir.u24(blob, S[13] + 8 + 3 * cas_var) - BASE
     idle, top = ir.u16(blob, cas_record), ir.u16(blob, cas_record + 2)
     v, k = act.value, act.key_set
@@ -2419,7 +2583,7 @@ def delete_activity(raw: bytes, name: str, value: int | None = None) -> bytes:
     after = _Doc(out)
     a = after.blob
     for new, old in enumerate(keep_actions):
-        want = [(o, _remap(o, x, actions, modes, {}, sets, values)) for o, x in d.ins(old)]
+        want = [(o, _remap(o, x, actions, modes, {}, sets, values, d.cas_op)) for o, x in d.ins(old)]
         if after.ins(new) != want:
             raise AssertionError(f"action list {old} -> {new}")
     want_acts = sorted((x.name, values.get(x.value, x.value), sets.get(x.key_set, x.key_set))
@@ -2457,7 +2621,7 @@ def activity_settings(raw: bytes, name: str) -> dict:
     start = d.ins(act.start)
     on = sorted(n for n, v in power.items() if (0x80 + v, 1) in start)
     writes = {o - 0x80: x for o, x in start
-              if 0x80 <= o < 0x100 and o != 0x8F and o - 0x80 not in power.values()}
+              if 0x80 <= o < 0x100 and o != d.cas_op and o - 0x80 not in power.values()}
     steps, unread = [], 0
     calls = [x for o, x in start if o == 0x7F]
     for x in calls[:-1]:                # the last one is the chain to its screen
@@ -2556,9 +2720,9 @@ def _apply_corner_layout(d: _Doc, modes: list, layout: list, prefix: str) -> set
         if n > 1:
             draws.setdefault(7, []).extend([
                 opaque(f"{rid}_cf", b"\x10\x04"),
-                _draw(38 if k == 0 else 35, 56, bytes((COUNTER_DIGIT[k + 1],)), f"{rid}_cc"),
-                _draw(47, 56, COUNTER_OF, f"{rid}_co"),
-                _draw(65, 56, bytes((COUNTER_DIGIT[n],)), f"{rid}_ct")])
+                _draw(38 if k == 0 else 35, 56, bytes((_digit(d, k + 1),)), f"{rid}_cc"),
+                _draw(47, 56, _of(d), f"{rid}_co"),
+                _draw(65, 56, bytes((_digit(d, n),)), f"{rid}_ct")])
         _insert_in_program(program, draws)
         return program
 
@@ -2829,7 +2993,7 @@ def add_power(raw: bytes, mode: int, on: int, off: int | None = None,
     starts = sorted({a.start for a in activities(raw)})
     for s in starts:
         r = action_region(s)
-        at = next(k for k, i in enumerate(r["instructions"]) if int(i["opcode"], 16) == 0x8F)
+        at = next(k for k, i in enumerate(r["instructions"]) if int(i["opcode"], 16) == d.cas_op)
         r["instructions"].insert(at, dict(write_off))
 
     d.region(S[sem.ACTION_SLOT], "pointer_table")["targets"].extend({"to": r["id"]} for r in action_regions)
@@ -2851,7 +3015,7 @@ def add_power(raw: bytes, mode: int, on: int, off: int | None = None,
         if i == all_off:
             want = want + [(0x80 + var, 0)]
         elif i in starts:
-            at = next(k for k, (o, _) in enumerate(want) if o == 0x8F)
+            at = next(k for k, (o, _) in enumerate(want) if o == d.cas_op)
             want = want[:at] + [(0x80 + var, 0)] + want[at:]
         if a.ins(i) != want:
             raise AssertionError(f"action list {i} changed beyond the power write")

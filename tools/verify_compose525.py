@@ -59,12 +59,17 @@ def rekey_x96(raw: bytes) -> bytes:
     return c.rekey_device(raw, x96[0].mode, commands, keys, lcd)
 
 
+# the 525's page counter digits in font set 4, as read off its screens; the
+# composer now spells them from the configuration's own alphabet
+COUNTER_DIGIT_525 = {1: 0x37, 2: 0x1E, 3: 0x35, 4: 0x3E, 5: 0x40, 6: 0x36}
+
+
 def counter_text(blob, root) -> str:
     out = []
     for item in sem.screen_program_path(blob, root):
         if item["opcode"] in (4, 5) and item["operands"][1] == 56:
             out.append(item["operands"][2] if item["opcode"] == 5 else None)
-    return " ".join("?" if x is None else {v: str(k) for k, v in c.COUNTER_DIGIT.items()}.get(x, "OF")
+    return " ".join("?" if x is None else {v: str(k) for k, v in COUNTER_DIGIT_525.items()}.get(x, "OF")
                     for x in out)
 
 

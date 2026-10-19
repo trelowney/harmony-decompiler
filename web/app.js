@@ -95,6 +95,8 @@ async function startPython() {
     const source = await (await fetch(`../tools/${name}.py`, { cache: "no-cache" })).text();
     py.FS.writeFile(`${name}.py`, source);
   }
+  // which pixels draw which character, per typeface (tools/build_arch9_glyphs.py)
+  py.FS.writeFile("arch9_glyphs.json", await (await fetch("../tools/arch9_glyphs.json", { cache: "no-cache" })).text());
   py.FS.writeFile("webapp.py", await (await fetch("webapp.py", { cache: "no-cache" })).text());
   const sample = new Uint8Array(await (await fetch("../samples/harmony525/config.EZHex")).arrayBuffer());
   const module = py.pyimport("webapp");
@@ -229,7 +231,7 @@ function show() {
     id.append(row(["firmware", identity.firmware]), row(["architecture", identity.architecture]),
       row(["skin", identity.skin]), row(["flash", identity.flash]));
   }
-  id.append(row(["source", history[0].label]), row(["sha256", s.sha256]),
+  id.append(row(["remote", s.model]), row(["source", history[0].label]), row(["sha256", s.sha256]),
     row(["config", `${s.blob_bytes} bytes`]),
     row(["checksum", s.trailer_ok ? "valid" : "INVALID"]),
     row(["decompiles and recompiles byte for byte", s.roundtrip_ok ? "yes" : "NO"]));
@@ -677,7 +679,7 @@ async function main() {
       await remote.drain();
       identity = await remote.version();
       if (identity.architecture !== 9) {
-        throw new Error(`this is an architecture ${identity.architecture} remote; only the 525 (9) is read`);
+        throw new Error(`this is an architecture ${identity.architecture} remote; only the 515, 525 and 555 (9) are read`);
       }
       $("progress").hidden = false;
       const blob = await remote.readConfig((done, total) => {
@@ -686,7 +688,7 @@ async function main() {
         status(`Reading the configuration: ${done} of ${total} bytes`);
       });
       history = [{ bytes: toJs(webapp.ezhex_from_blob(blob)), label: "read from the remote" }];
-      status("Read. Save a backup before changing anything on this remote.");
+      status(`Read a ${toJs(webapp.model(history[0].bytes))}. Save a backup before changing anything on it.`);
       show();
     } catch (error) {
       status(`${error.message ?? error}`, true);
@@ -1009,6 +1011,12 @@ async function main() {
     const when = keepBackup(backupBytes);
     download(backupBytes, `harmony525-backup-before-write-${new Date().toISOString().slice(0, 19).replace(/:/g, "")}.EZHex`);
     $("write-ok").checked = false;
+    const which = toJs(webapp.model(current().bytes));
+    if (which !== "Harmony 525") {
+      // the same firmware, and writing is Concordance's sequence, but only a 525 has had it
+      status(`Writing to a ${which}: this page has only ever written to a Harmony 525.`);
+      await repaint();
+    }
     await writeBytes(current().bytes, "writing");
     showRestore(when);
   });

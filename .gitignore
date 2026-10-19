@@ -26,3 +26,4 @@ graphify-out/
 blob_strings.txt
 !web/irdb-index.json
 !web/irdb-probonopd-index.json
+!tools/arch9_glyphs.json
