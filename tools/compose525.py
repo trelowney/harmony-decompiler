@@ -1354,6 +1354,17 @@ def _patch_bytes(d: _Doc, at: int, value: bytes) -> None:
     holder[0]["data"] = hconfig._hex_lines(bytes(data))
 
 
+def _cut_bytes(d: _Doc, at: int, n: int) -> None:
+    """Take n bytes out of the data region that holds them."""
+    holder = [r for r in d.regions if r["offset"] <= at and at + n <= r["offset"] + r["length"] and "data" in r]
+    if len(holder) != 1:
+        raise ComposeError(f"no single data region holds 0x{at:X}")
+    data = bytearray(bytes.fromhex("".join(holder[0]["data"])))
+    del data[at - holder[0]["offset"]:at - holder[0]["offset"] + n]
+    holder[0]["data"] = hconfig._hex_lines(bytes(data))
+    holder[0]["length"] = len(data)
+
+
 def _apply_maps(d: _Doc, actions: dict, modes: dict, groups: dict, keep,
                 sets: dict | None = None, values: dict | None = None) -> None:
     """Renumber every reference in the kept regions. A reference to something
@@ -1874,10 +1885,45 @@ def _menu_mode(d: _Doc) -> int:
                     if len(ins) == 2 and ins[0][0] == 0x1F and ins[0][1] >> 8 == 0xFF and ins[1] == (d.device_flag_op, 0):
                         hits.append(m)
     if not hits:
-        raise ComposeError("no activity menu found")
+        # no activity yet: the menu is the one mode whose only key is 0xB7 run
+        # through section 14 (mode 47 on the 525's, 52 on the 515's, 45 on the
+        # 555's, and what section 14's first record enters on all three)
+        hits = [m for m in range(d.n_modes)
+                if [(t, o) for t, o, _ in cmp.tagged(d.blob, d.mode(m)["start"])] == [(0xB7, 0x72)]]
+        if len(hits) != 1:
+            raise ComposeError("no activity menu found")
     if len(set(hits)) != 1:
         raise ComposeError(f"several activity menus: {sorted(set(hits))}")
     return hits[0]
+
+
+def _records_keyed_by(d: _Doc, var: int) -> set[int]:
+    """Section 14 records some 0x72 looks up by state variable `var`: its
+    operand is the record's index over the variable (FORMAT 5al), so 0x72 271
+    on the 525 is record 1 by CurrentActivityState, variable 15."""
+    b, out = d.blob, set()
+    def add(o, x):
+        if o == 0x72 and x & 0xFF == var:
+            out.add(x >> 8)
+    for i in range(d.n_actions):
+        for o, x in d.ins(i):
+            add(o, x)
+    for k in range(b[d.S[9]]):
+        for _, o, x in cmp.tagged(b, ir.u24(b, d.S[9] + 1 + 3 * k) - BASE):
+            add(o, x)
+    for m in range(d.n_modes):
+        f = d.mode(m)
+        for at in [f["start"]] + [p["list"] for p in f["pages"]]:
+            for _, o, x in cmp.tagged(b, at):
+                add(o, x)
+    s11 = d.S[11]
+    for k in range(ir.u16(b, s11)):
+        at = ir.u24(b, s11 + 2 + 3 * k) - BASE
+        if b[at] == 0x11:
+            add(b[at + 3], ir.u16(b, at + 1))
+    for _, o, x in _transition_sites(b, d.S):
+        add(o, x)
+    return out
 
 
 def _chain_end(d: _Doc, index: int) -> tuple[int, ...]:
@@ -2558,6 +2604,9 @@ def _drop_corner(d: _Doc, page: dict, corner: int, gone: set) -> None:
     twin = d.pool_copy(page["list"])
     plist["entries"] = [e for e in plist["entries"] if e["tag"] != tag]
     twin["entries"] = [e for e in twin["entries"] if e["tag"] != tag]
+    if not plist["entries"]:
+        # an empty list carries the wide header, as the empty 555's menu does
+        plist["wide"] = twin["wide"] = True
     rows = TOP_ROWS if corner < 2 else BOTTOM_ROWS
     right = corner in (1, 3)
     for item in sem.screen_program_path(d.blob, page["program"]):
@@ -2651,12 +2700,18 @@ def delete_activity(raw: bytes, name: str, value: int | None = None) -> bytes:
     # the ranges (4o). A record whose first key is v: alone, it covers every
     # value and stays; followed by v + 1, that item's stream moves onto the
     # first and the second goes; followed by more, it still covers v + 1 on.
-    shifted, kept_first = {}, set()
+    # And a record looked up by the activity state that holds the last
+    # activity's value alone is emptied: the 555's, with no activity, has one
+    # such record with no item at all (FORMAT 5al).
+    shifted, kept_first, emptied = {}, set(), set()
+    by_state = _records_keyed_by(d, cas_var)
     for r_i in sorted({r for r, *_ in items}):
         mine = [(key, at, stream) for rr, key, at, stream in items if rr == r_i]
         if mine[0][0] == v:
             if len(mine) > 1 and mine[1][0] == v + 1:
                 shifted[r_i] = mine[1]
+            elif len(mine) == 1 and len(acts) == 1 and r_i in by_state:
+                emptied.add(r_i)
             else:
                 kept_first.add(r_i)
     gone_streams = set()
@@ -2728,7 +2783,11 @@ def delete_activity(raw: bytes, name: str, value: int | None = None) -> bytes:
     for r_i in sorted({r for r, *_ in items}):
         rec = ir.u24(blob, s14 + 1 + 3 * r_i) - BASE
         mine = [(key, at) for rr, key, at, _ in items if rr == r_i]
-        if r_i in shifted:
+        if r_i in emptied:
+            gone.add(next(r for r in d.at[rec + 4] if r["kind"] == "raw_pointer")["id"])
+            _patch_bytes(d, rec + 1, bytes((0,)))
+            _cut_bytes(d, rec + 2, 2)
+        elif r_i in shifted:
             _, at1, _ = shifted[r_i]
             first = next(r for r in d.at[rec + 4] if r["kind"] == "raw_pointer")
             first["targets"] = copy.deepcopy(next(r for r in d.at[at1 + 2] if r["kind"] == "raw_pointer")["targets"])
