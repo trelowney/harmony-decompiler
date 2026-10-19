@@ -5627,6 +5627,36 @@ irdb's Panasonic now go out as three frames at 36.7 kHz, fourteen for a
 command whose name says power. `verify_flipper_ir.py` checks both counts
 against the remote's records.
 
+That was a fixed number for one brand. `flipper_ir.known_presses` reads the
+same thing off any configuration, per device. For each one it records the frame
+header, how many frames most of its records send in one press, how many the
+records its power state sends hold, and the median carrier. On the owner's
+remote:
+
+| device | header (us) | frames | power | carrier |
+|---|---|---|---|---|
+| TV Panasonic | 3500 / 1700 | 3 | 14 | 36.4 kHz |
+| Samsung T200HD | 4500 / 4500 | 2 | - | 38.0 kHz |
+| XBOX 360 (RC6) | 2600 / 900 | 1 | 1 | 36.2 kHz |
+| Amplifier, X96, PC (NEC) | 9000 / 4500 | 1 | 1 or - | 38.0 kHz |
+
+A database code whose header matches a known device's within 15% is sent as
+that device's codes are. The page adds and edits devices this way. Pressed:
+a Panasonic file found by the page's search, Power, Vol and CH all answered.
+
+### Waiting in an activity
+
+`0x7C` is a delay in tenths of a second for one device (@dannybloe, sections
+70 and 235). It holds back that device's next commands and no other device's.
+The queue folds consecutive values to the larger one, except at 100, so a
+longer wait is spelt as 100s and then the remainder. An activity step can now be
+`("wait", group, tenths)`. It goes into a list of its own made of nothing but
+`0x7C`, which `activity_settings` and `describe_activity` read back as a wait.
+The owner's TV already has 9.5 s after it is switched on, Logitech's `0x7C 95`
+in its power-on list. That is why an input sent straight after switching it on
+works. Pressed: TV on, HDMI 2, a 5 s wait, HDMI 1, with the pause visible on
+the television.
+
 ## 6. Prior art
 
 The key thread is
