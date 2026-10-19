@@ -115,6 +115,8 @@ async function startPython() {
   }
   // which pixels draw which character, per typeface (tools/build_arch9_glyphs.py)
   py.FS.writeFile("arch9_glyphs.json", await (await fetch("../tools/arch9_glyphs.json", { cache: "no-cache" })).text());
+  // and glyphs for characters a configuration's font lacks (tools/build_arch9_glyphs.py)
+  py.FS.writeFile("arch9_font_glyphs.json", await (await fetch("../tools/arch9_font_glyphs.json", { cache: "no-cache" })).text());
   py.FS.writeFile("webapp.py", await (await fetch("webapp.py", { cache: "no-cache" })).text());
   const sample = new Uint8Array(await (await fetch("../samples/harmony525/config.EZHex")).arrayBuffer());
   const module = py.pyimport("webapp");

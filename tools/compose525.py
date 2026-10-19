@@ -35,7 +35,7 @@ import render_525_screens as renderer
 import verify_525_semantics as sem
 from clone_525_device import (class5_source, fresh_region, mode_fields, opaque,
                               region_at, render_map, symbol_for_offset)
-from h525_lcd_author import alphabet_map, encode_text
+from h525_lcd_author import alphabet_map, encode_text, install_character_glyph
 
 BASE = hconfig.CONFIG_BASE
 
@@ -175,6 +175,12 @@ def _glyph_table() -> dict:
         import json
         from pathlib import Path
         _GLYPHS = json.loads((Path(__file__).resolve().parent / "arch9_glyphs.json").read_text(encoding="utf-8"))
+        # and the glyphs this module adds, so what it draws reads back
+        for height, glyphs in EXTRA_GLYPHS.items():
+            for ch, rows in glyphs.items():
+                import hashlib
+                key = hashlib.sha1((f"{height}:" + "/".join(rows)).encode()).hexdigest()[:16]
+                _GLYPHS[key] = "".join(sorted(set(_GLYPHS.get(key, "")) | {ch}))
     return _GLYPHS
 
 
@@ -236,6 +242,106 @@ def config_alphabet(blob: bytes, fonts) -> dict[int, str]:
     if " " not in out.values() and len(blank) == 1:
         out[blank.pop()] = " "
     return out
+
+
+# Characters a configuration may not carry. Logitech's compiler put in a font
+# only the characters its own texts used: the 525's font 0 has no K, Q, J, j,
+# 7, 8, 5 or ? among others, so a name with one could not be drawn. These are
+# glyphs for the 11 row typeface of the 525's font 0: K, the comma and the
+# double quote as the 555's fonts draw them, the rest drawn here in the same
+# style (cap height rows 2 to 8, one pixel strokes, a blank right column).
+EXTRA_GLYPHS = {
+    11: {
+        "K": [".......", ".......", ".#...#.", ".#..#..", ".#.#...", ".##.#..", ".#..#..",
+              ".#...#.", ".#...#.", ".......", "......."],
+        ",": ["...", "...", "...", "...", "...", "...", "...", "...", ".#.", ".#.", ".#."],
+        '"': [".....", ".....", ".#.#.", ".#.#.", ".#.#.", ".....", ".....", ".....", ".....",
+              ".....", "....."],
+        "J": ["......", "......", "....#.", "....#.", "....#.", "....#.", "....#.", "#...#.",
+              ".###..", "......", "......"],
+        "Q": ["........", "........", "..####..", ".#....#.", ".#....#.", ".#....#.", ".#..#.#.",
+              ".#...#..", "..###.#.", "........", "........"],
+        "j": ["....", "....", "..#.", "....", "..#.", "..#.", "..#.", "..#.", "..#.", "..#.", "##.."],
+        "5": ["......", "......", "#####.", "#.....", "####..", "....#.", "....#.", "#...#.",
+              ".###..", "......", "......"],
+        "7": ["......", "......", "#####.", "....#.", "...#..", "...#..", "..#...", "..#...",
+              "..#...", "......", "......"],
+        "8": ["......", "......", ".###..", "#...#.", "#...#.", ".###..", "#...#.", "#...#.",
+              ".###..", "......", "......"],
+        "?": ["......", "......", ".###..", "#...#.", "....#.", "...#..", "..#...", "......",
+              "..#...", "......", "......"],
+        "!": ["...", "...", ".#.", ".#.", ".#.", ".#.", ".#.", "...", ".#.", "...", "..."],
+        "'": ["...", "...", ".#.", ".#.", ".#.", "...", "...", "...", "...", "...", "..."],
+        "(": ["....", "....", "..#.", ".#..", ".#..", ".#..", ".#..", ".#..", ".#..", "..#.", "...."],
+        ")": ["....", "....", ".#..", "..#.", "..#.", "..#.", "..#.", "..#.", "..#.", ".#..", "...."],
+        "&": [".......", ".......", ".##....", "#..#...", "#..#...", ".##....", "#..#.#.", "#...#..",
+              ".###.#.", ".......", "......."],
+    },
+    # the 515's 12 row typeface: two pixel strokes, cap height rows 2 to 8,
+    # ascenders and the question mark from row 1
+    12: {
+        "K": [".......", ".......", "##..##.", "##.##..", "####...", "###....", "####...", "##.##..",
+              "##..##.", ".......", ".......", "......."],
+        "J": ["......", "......", "...##.", "...##.", "...##.", "...##.", "...##.", "##.##.", ".###..",
+              "......", "......", "......"],
+        "Q": [".......", ".......", ".####..", "##..##.", "##..##.", "##..##.", "##..##.", "##.###.",
+              ".#####.", "....##.", ".......", "......."],
+        "X": [".......", ".......", "##..##.", "##..##.", ".####..", "..##...", ".####..", "##..##.",
+              "##..##.", ".......", ".......", "......."],
+        "Z": [".......", ".......", "######.", "....##.", "...##..", "..##...", ".##....", "##.....",
+              "######.", ".......", ".......", "......."],
+        "j": ["....", ".##.", ".##.", "....", ".##.", ".##.", ".##.", ".##.", ".##.", ".##.", "##..", "...."],
+        "3": ["......", "......", ".###..", "#..##.", "...##.", "..##..", "...##.", "#..##.", ".###..",
+              "......", "......", "......"],
+        "4": [".......", ".......", "...##..", "..###..", ".#.##..", "#..##..", "######.", "...##..",
+              "...##..", ".......", ".......", "......."],
+        "5": ["......", "......", "#####.", "##....", "####..", "...##.", "...##.", "#..##.", ".###..",
+              "......", "......", "......"],
+        "6": ["......", "......", "..##..", ".##...", "##....", "####..", "##.##.", "##.##.", ".###..",
+              "......", "......", "......"],
+        "7": ["......", "......", "#####.", "...##.", "...##.", "..##..", "..##..", ".##...", ".##...",
+              "......", "......", "......"],
+        "8": ["......", "......", ".###..", "##.##.", "##.##.", ".###..", "##.##.", "##.##.", ".###..",
+              "......", "......", "......"],
+        "9": ["......", "......", ".###..", "##.##.", "##.##.", ".####.", "...##.", "..##..", ".##...",
+              "......", "......", "......"],
+        "&": ["........", "........", ".###....", "##.##...", "##.##...", ".###....", "##.##.#.", "##..##..",
+              ".###.##.", "........", "........", "........"],
+        "'": ["..", "#.", "#.", "..", "..", "..", "..", "..", "..", "..", "..", ".."],
+        "!": ["...", "##.", "##.", "##.", "##.", "##.", "##.", "...", "##.", "...", "...", "..."],
+        "#": [".......", ".......", ".#..#..", ".#..#..", "######.", ".#..#..", "######.", ".#..#..",
+              ".#..#..", ".......", ".......", "......."],
+    },
+}
+
+_FONT_GLYPHS: dict | None = None
+
+
+def _font_glyphs() -> dict:
+    global _FONT_GLYPHS
+    if _FONT_GLYPHS is None:
+        import json
+        from pathlib import Path
+        path = Path(__file__).resolve().parent / "arch9_font_glyphs.json"
+        _FONT_GLYPHS = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    return _FONT_GLYPHS
+
+
+def _same_style(d, a: int, b: int) -> bool:
+    """Font sets a and b draw every code both have identically (on the 515,
+    font 0 and 1 do in 41 of 41; on the 525, 0 and 3 differ in 29 of 39)."""
+    if d.fonts[a].height != d.fonts[b].height:
+        return False
+    shared = 0
+    for code in range(1, max(d.fonts[a].first + d.fonts[a].count, d.fonts[b].first + d.fonts[b].count)):
+        try:
+            ga, gb = d.fonts[a].glyph(code), d.fonts[b].glyph(code)
+        except ValueError:
+            continue
+        if ga != gb:
+            return False
+        shared += 1
+    return shared >= 5
 
 
 class _Doc:
@@ -317,6 +423,7 @@ class _Doc:
         return next(i for i, r in enumerate(self.regions) if r is region)
 
     def text(self, value: str, font: int = 0, limit: int | None = HALF_WIDTH) -> bytes:
+        self._ensure_glyphs(value + "..", font)
         try:
             codes = encode_text(value, self.alphabet)
         except ValueError as error:
@@ -325,9 +432,54 @@ class _Doc:
             codes = self._fit(codes, font, limit)
         return codes
 
-    def width(self, codes: bytes, font: int = 0) -> int:
+    def _has_glyph(self, font: int, code: int) -> bool:
+        if (font, code) in getattr(self, "added_glyphs", {}):
+            return True
         try:
-            return sum(len(self.fonts[font].glyph(c)[0]) for c in codes)
+            self.fonts[font].glyph(code)
+            return True
+        except ValueError:
+            return False
+
+    def _glyph_for(self, font: int, ch: str):
+        """Rows for a character `font` lacks, nearest source first: another font
+        set of this configuration that draws exactly like it, then the same
+        typeface's sample (arch9_font_glyphs.json), then EXTRA_GLYPHS."""
+        height = self.fonts[font].height
+        code = next((k for k, v in self.alphabet.items() if v == ch), None)
+        if code is not None:
+            for i, other in enumerate(self.fonts):
+                if i != font and other.height == height and self._has_glyph(i, code) and \
+                        _same_style(self, font, i):
+                    return ["".join("#" if v == renderer.INK else "." for v in row) for row in other.glyph(code)]
+        return _font_glyphs().get(str(height), {}).get(ch) or EXTRA_GLYPHS.get(height, {}).get(ch)
+
+    def _ensure_glyphs(self, value: str, font: int) -> None:
+        """Give `font` a glyph for each character of `value` it cannot draw yet
+        (_glyph_for): at the character's own code when the configuration has
+        one (the 525's font 0 lacks 5 and ?), else at a new code after the
+        whole alphabet. The new glyphs go in front of section 0."""
+        if not hasattr(self, "added_glyphs"):
+            self.added_glyphs = {}
+        for ch in dict.fromkeys(value):
+            code = next((k for k, v in self.alphabet.items() if v == ch), None)
+            if code is not None and self._has_glyph(font, code):
+                continue
+            rows = self._glyph_for(font, ch)
+            if rows is None or len(rows) != self.fonts[font].height:
+                continue
+            code, region = install_character_glyph(
+                self.blob, self.doc, self.S, font_index=font, character=ch, rows=rows,
+                alphabet=self.alphabet, region_id=f"glyph_f{font}_{ord(ch):x}")
+            s0 = next(i for i, r in enumerate(self.regions) if r.get("section") == 0)
+            self.regions.insert(s0, region)
+            self.added_glyphs[(font, code)] = rows
+
+    def width(self, codes: bytes, font: int = 0) -> int:
+        added = getattr(self, "added_glyphs", {})
+        try:
+            return sum(len(added[(font, c)][0]) if (font, c) in added else len(self.fonts[font].glyph(c)[0])
+                       for c in codes)
         except ValueError as error:
             # the container's alphabet spans its fonts; a font may lack a glyph
             raise ComposeError(f"font {font} cannot draw this text: {error}") from None

@@ -73,6 +73,12 @@ def main() -> int:
           "515 composes: a device, an activity edited, a power state, a rename, a move, a deletion; "
           "an activity added and deleted gives the file back")
 
+    # letters the 515's font 0 lacks come in its own bold style: borrowed
+    # from a font set that draws like it, or drawn for its 12 rows
+    kitchen = c.rename_device(s515, modes["Mini System"], "Kitchen Q7&J")
+    check({x.mode: x.name for x in c.devices(kitchen)}[modes["Mini System"]] == "Kitchen Q7&J",
+          "515 takes a name with K, Q, 7, & and J, none of which its font had")
+
     try:
         c.add_device(s555, "Test Box", cmds, {"VolumeUp": "Vol+"}, [[("Power", "Power"), None, None, None]])
         refused = None

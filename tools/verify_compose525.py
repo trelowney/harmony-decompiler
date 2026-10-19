@@ -339,16 +339,29 @@ def main() -> int:
     # a device renamed: its corner on every Devices screen and its pages' title
     renamed = c.rename_device(composed, modes["X96 Box"], "Android box")
     names = {x.mode: x.name for x in c.devices(renamed)}
-    if names[modes["X96 Box"]] != "Android box" or             {m: n for m, n in names.items() if m != modes["X96 Box"]} !=             {x.mode: x.name for x in c.devices(composed) if x.name != "X96 Box"}:
+    others = {m: n for m, n in names.items() if m != modes["X96 Box"]}
+    if names[modes["X96 Box"]] != "Android box" or \
+            others != {x.mode: x.name for x in c.devices(composed) if x.name != "X96 Box"}:
         print(f"FAIL renaming the X96: {names}")
         return 1
-    if "CurrentActivityState_0_4" not in [r["name"] for r in c._Doc(composed).region(
-            c._Doc(composed).S[0], "name_table")["records"]] or             "CurrentActivityState_0_5" not in [r["name"] for r in c._Doc(out).region(
-                c._Doc(out).S[0], "name_table")["records"]]:
+    name_nodes = lambda raw: [r["name"] for r in c._Doc(raw).region(c._Doc(raw).S[0], "name_table")["records"]]
+    if "CurrentActivityState_0_4" not in name_nodes(composed) or \
+            "CurrentActivityState_0_5" not in name_nodes(out):
         print("FAIL CurrentActivityState's name does not count its values")
         return 1
     print("PASS the X96 renamed on every Devices screen and its own pages; the activity state's "
           "name counts its values")
+
+    # characters the 525's font 0 never had (K, Q, J, j, 5, 7, 8, ?, !, &,
+    # brackets) are added to it, drawn and read back
+    jukebox = c.rename_device(composed, modes["PC"], "Jukebox (Q5)")
+    party = c.add_activity(composed, "Keys & Jukebox 78!", "Watch TV +", ["TV Panason.."], writes={})
+    if {x.mode: x.name for x in c.devices(jukebox)}[modes["PC"]] != "Jukebox (Q5)" or \
+            "Keys & Jukebox.." not in [a.name for a in c.activities(party)]:
+        print("FAIL new letters do not read back")
+        return 1
+    print("PASS letters the remote never had are added to its font: a device named Jukebox (Q5), "
+          "an activity named Keys & Jukebox 78!")
 
     # a power state for the X96 and the Samsung: Off and every activity switch
     # them off, a new activity can switch one on, deleting one takes it out
