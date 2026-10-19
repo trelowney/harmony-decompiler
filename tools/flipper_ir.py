@@ -207,13 +207,20 @@ def _words(frame_us: list[int], gap_us: int) -> tuple:
     return tuple(words) + _spaces(gap_us)
 
 
-def command(name: str, signal: dict, repeat: bool = False, repeat_delay_ms: int = 450) -> Command:
+def command(name: str, signal: dict, repeat: bool = False, repeat_delay_ms: int = 450,
+            like: dict | None = None) -> Command:
     """A 525 command for a Flipper signal, laid out like compose525.nec_command:
     one-shot after Logitech's 500 ms lead; repeating after a 50 ms lead with a
-    pause before the held block, so a normal press sends once."""
+    pause before the held block, so a normal press sends once. `like`, one of
+    known_presses(), sends it as the remote already sends that protocol: its
+    frames per press, its power frames and its carrier."""
     carrier, f, gap, count = durations(signal)
-    if not repeat and _POWER.search(str(signal.get("name") or name)):
+    power = not repeat and _POWER.search(str(signal.get("name") or name))
+    if power:
         count = POWER_FRAMES.get(signal.get("protocol"), count)
+    if like is not None:
+        carrier = like["carrier"]
+        count = like["power"] if power and like.get("power") else like["frames"]
     one = _words(f, gap)
     if repeat:
         first = _spaces(50_000) + one * (count - 1) + _words(f, repeat_delay_ms * 1000) + (1,)
@@ -299,3 +306,89 @@ def label(name: str) -> str:
     if text.isupper():
         text = text.capitalize()
     return text[:20].strip()
+
+
+# ------------------------------------------- as the remote already sends it ---
+
+def _record_us(blob: bytes, address: int) -> list[int]:
+    """A record's first block as alternating mark and space microseconds."""
+    import analyze_525_ir as ir
+    rec = ir.record(blob, address)
+    us: list[int] = []
+    for w in ir.body(blob, rec["pointers"][0])["words"]:
+        mark, v = bool(w & 0x8000), w & 0x7FFF
+        if (len(us) % 2 == 0) == mark:
+            us.append(v)
+        elif us:
+            us[-1] += v
+    return us
+
+
+def _frames(us: list[int], header: tuple[int, int]) -> int:
+    near = lambda a, b: abs(a - b) <= 0.15 * b
+    return sum(1 for k in range(0, len(us) - 1, 2) if near(us[k], header[0]) and near(us[k + 1], header[1]))
+
+
+def known_presses(raw: bytes) -> list[dict]:
+    """How the remote already sends each device's codes, from its own records:
+    [{device, header: (mark, space), frames, power, carrier}]. `frames` is what
+    most of the device's commands send in one press; `power` what its power
+    state sends to switch it on and off, None without one. The owner's
+    Panasonic: three, and fourteen (FORMAT 5ah)."""
+    import analyze_525_ir as ir
+    import compose525
+    import hconfig
+    import verify_525_semantics as sem
+    blob = hconfig.split_container(raw)[2]
+    S = sem.section_offsets(blob)
+    d = compose525._Doc(raw)
+    groups = ir.ir_groups(blob, S)
+    power_sends: dict[int, set] = {}
+    for name, var in compose525.power_variables(raw).items():
+        record = ir.u24(blob, S[13] + 8 + 3 * var) - compose525.BASE
+        for t in range(ir.u16(blob, record + 4)):
+            at = record + 7 + 8 * t
+            stack = [(blob[at + 7], ir.u16(blob, at + 5))]
+            while stack:
+                o, x = stack.pop()
+                if o == 0x7D:
+                    power_sends.setdefault(x >> 8, set()).add(x & 0xFF)
+                elif o == 0x7F:
+                    stack.extend(d.ins(x))
+    out = []
+    for dev in compose525.devices(raw):
+        if dev.group is None:
+            continue
+        heads, counts, power, carriers = {}, {}, {}, []
+        for i, address in enumerate(groups[dev.group]):
+            us = _record_us(blob, address)
+            k = next((k for k in range(0, len(us) - 1, 2) if us[k] > 2000), None)
+            if k is None:
+                continue
+            h = (round(us[k], -2), round(us[k + 1], -2))
+            heads[h] = heads.get(h, 0) + 1
+            carriers.append(ir.record(blob, address)["frequency_hz"])
+            n = _frames(us, (us[k], us[k + 1]))
+            (power if i in power_sends.get(dev.group, ()) else counts)[i] = n
+        if not counts:
+            continue
+        header = max(heads, key=heads.get)
+        mode = lambda xs: max(set(xs), key=list(xs).count)
+        out.append({"device": dev.name, "header": header, "frames": mode(counts.values()),
+                    "power": mode(power.values()) if power else None,
+                    "carrier": round(sorted(carriers)[len(carriers) // 2])})
+    return out
+
+
+def like_known(known: list[dict], signal: dict) -> dict | None:
+    """The device the remote already sends this signal's protocol to, by the
+    frame's header, or None. A raw signal is left as it is."""
+    if signal.get("type") == "raw":
+        return None
+    try:
+        f = durations(signal)[1]
+    except (FlipperError, KeyError, ValueError):
+        return None
+    near = lambda a, b: abs(a - b) <= 0.15 * b
+    hits = [k for k in known if near(f[0], k["header"][0]) and near(f[1], k["header"][1])]
+    return hits[0] if hits else None

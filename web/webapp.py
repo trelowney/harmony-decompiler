@@ -118,12 +118,18 @@ def _py(value):
     return value.to_py() if hasattr(value, "to_py") else value
 
 
+def _steps(steps) -> list:
+    """The page's steps: [group, command] to send, ["wait", group, tenths]."""
+    return [("wait", int(s[1]), int(s[2])) if s[0] == "wait" else (int(s[0]), int(s[1]))
+            for s in (_py(steps) or [])]
+
+
 def op_add_activity(container: bytes, name: str, like: str, on, steps=None,
                     show=None, volume=None) -> bytes:
     """steps: [[group, command], ...] sent after the switching, in order. With
     steps the source activity's own inputs are not copied: the steps say it.
     show: a device's mode to end on; volume: a device's mode for Vol and Mute."""
-    steps = [tuple(int(v) for v in s) for s in (_py(steps) or [])]
+    steps = _steps(steps)
     return compose525.add_activity(bytes(container), str(name), str(like),
                                    [str(x) for x in _py(on)],
                                    writes={} if steps else None, steps=steps,
@@ -143,13 +149,16 @@ def activity_settings(container: bytes, name: str) -> dict:
     def text(g, cmd):
         dev, label = labels.get((g, cmd), (by_group.get(g, f"group {g}"), f"command {cmd}"))
         return f"{dev}: {label}"
-    direct = set(s["steps"])
+    direct = {x for x in s["steps"] if x[0] != "wait"}
     keeps = [_step_text(x) for x in compose525.describe_activity(raw, str(name))
              if x["kind"] == "send" and (x["group"], x["command"]) not in direct]
     if s["writes"] and not keeps:
         keeps = [f"variable {v} = {x}" for v, x in sorted(s["writes"].items())]
     return {"on": s["on"], "show": s["show"], "volume": s["volume"], "unread": s["unread"],
-            "steps": [{"group": g, "command": c, "text": text(g, c)} for g, c in s["steps"]],
+            "steps": [{"wait": x[2], "group": x[1], "text": f"wait {x[2] / 10:g} s before "
+                       f"{by_group.get(x[1], 'that device')}'s next command"}
+                      if x[0] == "wait" else {"group": x[0], "command": x[1], "text": text(*x)}
+                      for x in s["steps"]],
             "keeps": keeps if s["writes"] else []}
 
 
@@ -157,7 +166,7 @@ def op_edit_activity(container: bytes, name: str, new_name: str, like: str, on, 
                      show=None, volume=None, keep_inputs: bool = True) -> bytes:
     """keep_inputs: the activity's own state writes (its TV input, say) stay;
     otherwise only what steps sends."""
-    steps = [tuple(int(v) for v in s) for s in (_py(steps) or [])]
+    steps = _steps(steps)
     return compose525.edit_activity(bytes(container), str(name), str(new_name), str(like),
                                     [str(x) for x in _py(on)],
                                     writes=None if keep_inputs else {}, steps=steps,
@@ -182,6 +191,8 @@ def _step_text(s: dict) -> str:
         return f"{s['device']} {'on' if s['on'] else 'off'}"
     if s["kind"] == "send":
         return f"{s['device']}: {s['label']}"
+    if s["kind"] == "wait":
+        return f"{s['device']}: wait {s['seconds']:g} s"
     return f"variable {s['variable']} = {s['value']}"
 
 
@@ -228,12 +239,13 @@ def op_add_device(container: bytes, name: str, address: int, commands, keys, lcd
     repeat} (a learned capture that is not NEC); keys: {key name: command name};
     lcd: four [label, command name] or null, in reading order."""
     commands, keys, lcd = _py(commands), _py(keys), _py(lcd)
+    known = flipper_ir.known_presses(bytes(container))
     cmds = []
     for c in commands:
         if c.get("pronto"):
             cmds.append(pronto.command(str(c["name"]), str(c["pronto"]), bool(c.get("repeat"))))
         elif c.get("flipper"):
-            cmds.append(flipper_ir.command(str(c["name"]), dict(c["flipper"]), bool(c.get("repeat"))))
+            cmds.append(_database_command(c, known))
         elif c.get("durations"):
             cmds.append(_raw_command(str(c["name"]), int(c.get("carrier") or 0), c["durations"],
                                      bool(c.get("repeat"))))
@@ -451,14 +463,22 @@ def device_layout(container: bytes, mode: int) -> dict:
     return {"name": dev.name, "group": dev.group, "keys": keys, "soft": soft}
 
 
-def _command_of(c: dict):
+def _database_command(c: dict, known: list):
+    """A code from Flipper-IRDB or irdb, sent the way the remote already sends
+    that protocol to a device it knows (frames per press, power, carrier)."""
+    signal = dict(c["flipper"])
+    return flipper_ir.command(str(c["name"]), signal, bool(c.get("repeat")),
+                              like=flipper_ir.like_known(known, signal))
+
+
+def _command_of(c: dict, known: list):
     """A form row's command: an existing record (int), or a new one."""
     if c.get("existing") is not None:
         return int(c["existing"])
     if c.get("pronto"):
         return pronto.command(str(c["name"]), str(c["pronto"]), bool(c.get("repeat")))
     if c.get("flipper"):
-        return flipper_ir.command(str(c["name"]), dict(c["flipper"]), bool(c.get("repeat")))
+        return _database_command(c, known)
     if c.get("durations"):
         return _raw_command(str(c["name"]), int(c.get("carrier") or 0), c["durations"], bool(c.get("repeat")))
     return compose525.nec_command(str(c["name"]), int(c["address"]), int(c["code"]),
@@ -472,10 +492,11 @@ def op_rekey_device(container: bytes, mode: int, commands, keys, lcd) -> bytes:
     out keep what they send; lcd: the soft key pages, [[[label, name] | None] * 4]."""
     commands, keys, lcd = _py(commands), _py(keys), _py(lcd)
     cmds = {}
+    known = flipper_ir.known_presses(bytes(container))
     for c in commands:
         if c.get("existing") is None and not c.get("flipper") and not c.get("durations") and                 not c.get("pronto") and c.get("address") is None:
             raise compose525.ComposeError(f"{c.get('name')}: a typed code needs an NEC address")
-        cmds[str(c["name"])] = _command_of(c)
+        cmds[str(c["name"])] = _command_of(c, known)
     key_map = {str(k): (None if v is None else str(v)) for k, v in dict(keys).items()}
     pages = None                        # None: the soft key pages stay as they are
     if lcd is not None:

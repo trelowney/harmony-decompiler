@@ -294,6 +294,23 @@ def main() -> int:
     print("PASS an activity reads back as its settings, is edited and renamed in its own corner, "
           "and Watch TV + rebuilt from its own settings does the same")
 
+    # a wait in an activity: tenths of a second for one device, 100 at most
+    # per instruction (@dannybloe, sections 70 and 235)
+    hdmi2 = next(k for k, v in c.device_commands(composed).items() if v == ("TV Panason..", "Input Hdmi2"))
+    out = c.add_activity(composed, "Film", "Watch TV +", ["TV Panason.."], writes={},
+                         steps=[hdmi1, ("wait", hdmi1[0], 150), hdmi2])
+    s = c.activity_settings(out, "Film")
+    film = next(a for a in c.activities(out) if a.name == "Film")
+    d = c._Doc(out)
+    waits = [d.ins(x) for o, x in d.ins(film.start) if o == 0x7F and all(p == 0x7C for p, _ in d.ins(x))]
+    told = [s_ for s_ in c.describe_activity(out, "Film") if s_["kind"] == "wait"]
+    if s["steps"] != [hdmi1, ("wait", hdmi1[0], 150), hdmi2] or \
+            waits != [[(0x7C, hdmi1[0] << 8 | 100), (0x7C, hdmi1[0] << 8 | 50)]] or \
+            [t["seconds"] for t in told] != [15] or c.delete_activity(out, "Film") != composed:
+        print(f"FAIL a wait of 15 s: {s['steps']}, {waits}, {told}")
+        return 1
+    print("PASS a 15 s wait for the TV between two inputs: 100 and 50 tenths, read back, deleted again")
+
     # a device renamed: its corner on every Devices screen and its pages' title
     renamed = c.rename_device(composed, modes["X96 Box"], "Android box")
     names = {x.mode: x.name for x in c.devices(renamed)}

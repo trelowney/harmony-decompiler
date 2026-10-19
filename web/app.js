@@ -760,7 +760,7 @@ async function main() {
     const name = $("act-name").value.trim();
     const like = $("act-like").value;
     const on = [...$("act-on").querySelectorAll("input:checked")].map((b) => b.value);
-    const sendSteps = steps.map((s) => [s.group, s.command]);
+    const sendSteps = steps.map((s) => s.wait ? ["wait", s.group, s.wait] : [s.group, s.command]);
     const show = $("act-show").value === "" ? null : Number($("act-show").value);
     const volume = $("act-volume").value === "" ? null : Number($("act-volume").value);
     const editing = $("act-which").value;
@@ -794,6 +794,17 @@ async function main() {
     const tenths = Math.round(Number($("pw-delay").value) * 10);
     change(`keep ${name}'s power state`,
       (bytes) => webapp.op_add_power(bytes, Number(sel.value), Number($("pw-on").value), off, tenths));
+  });
+  $("act-wait-add").addEventListener("click", () => {
+    const device = $("act-step-device").value;
+    const group = commandList.find((c) => c.device === device)?.group;
+    const tenths = Math.round(Number($("act-wait").value) * 10);
+    if (group === undefined || !(tenths > 0 && tenths <= 450)) {
+      status("A wait is 0.1 to 45 seconds, for a device with commands.", true);
+      return;
+    }
+    steps.push({ group, wait: tenths, text: `wait ${tenths / 10} s before ${device}'s next command` });
+    drawSteps();
   });
   $("act-step-add").addEventListener("click", () => {
     const sel = $("act-step-command");

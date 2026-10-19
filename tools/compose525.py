@@ -1726,6 +1726,11 @@ def describe_activity(raw: bytes, name: str) -> list:
             ins = d.ins(operand)
             if any(o in (0x3F, 0x71) for o, _ in ins):
                 return            # the chain to the activity's screen
+            if ins and all(o == 0x7C for o, _ in ins) and len({x >> 8 for _, x in ins}) == 1:
+                g = ins[0][1] >> 8
+                steps.append({"kind": "wait", "device": by_group.get(g, f"group {g}"), "group": g,
+                              "seconds": sum(x & 0xFF for _, x in ins) / 10})
+                return
             for o, x in ins:
                 run(o, x, depth + 1, seen)
         elif 0x80 <= op < 0x100 and op != 0x8F:
@@ -1754,7 +1759,8 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
     chain, but switches on the devices in `on` and every other device with a
     power variable off, then makes the state writes in `writes` (variable ->
     value, e.g. a TV input request); None takes `like`'s own, so the input
-    stays what it was. `show`, a device's mode, makes the activity end on that
+    stays what it was. `steps` are (group, command) to send, in order, or
+    ("wait", group, tenths) to hold that device's next command back. `show`, a device's mode, makes the activity end on that
     device's own screen, its keys then the device's (as KontroLIR does), instead
     of a copy of `like`'s screen. `volume`, a device's mode, sends Vol +, Vol -
     and Mute to that device while the activity's screen is up; with `show` the
@@ -1966,8 +1972,18 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
             if o == 0x7C:
                 queue_delay.setdefault(x >> 8, []).append(x & 0xFF)
     step_calls = []
-    for g, cmd in steps:
-        g, cmd = int(g), int(cmd)
+    for step in steps:
+        if step[0] == "wait":
+            # a wait holds back that device's next commands, not the others'
+            # (@dannybloe, sections 70 and 235): tenths of a second, 100 at
+            # most per instruction, so longer is 100s and the rest
+            g, tenths = int(step[1]), int(step[2])
+            if not 0 <= g < n_groups or not 0 < tenths <= 450:
+                raise ComposeError(f"a wait of {tenths / 10} s for group {g}")
+            parts = [100] * ((tenths - 1) // 100) + [tenths - 100 * ((tenths - 1) // 100)]
+            step_calls.append((0x7F, make_list([(0x7C, g << 8 | t) for t in parts])))
+            continue
+        g, cmd = int(step[0]), int(step[1])
         if not 0 <= g < n_groups or not 0 <= cmd < len(ir.ir_groups(blob, S)[g]):
             raise ComposeError(f"no command {cmd} in group {g}")
         delays = queue_delay.get(g, [1])
@@ -2446,7 +2462,9 @@ def activity_settings(raw: bytes, name: str) -> dict:
     calls = [x for o, x in start if o == 0x7F]
     for x in calls[:-1]:                # the last one is the chain to its screen
         ins = d.ins(x)
-        if ins and all(o in (0x7D, 0x7C) for o, _ in ins):
+        if ins and all(o == 0x7C for o, _ in ins) and len({v >> 8 for _, v in ins}) == 1:
+            steps.append(("wait", ins[0][1] >> 8, sum(v & 0xFF for _, v in ins)))
+        elif ins and all(o in (0x7D, 0x7C) for o, _ in ins):
             steps += [(v >> 8, v & 0xFF) for o, v in ins if o == 0x7D]
         elif ins and all(o - 0x80 in power.values() for o, _ in ins):
             on = sorted(set(on) | {n for n, v in power.items() if (0x80 + v, 1) in ins})

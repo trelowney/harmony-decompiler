@@ -158,6 +158,22 @@ def main() -> int:
     ok = theirs == {"PwrOn": 14, "PwrOff": 14, "Input Hdmi1": 3} and mine == {"Power": 14, "Input": 3}
     failed += not ok
     print(f"{'PASS' if ok else 'FAIL'} Panasonic frames per press: Logitech's {theirs}, ours {mine}")
+
+    # read off the remote instead: a code for a protocol it already sends goes
+    # out as that device's do, frames, power frames and carrier
+    known = {k["device"]: k for k in flipper_ir.known_presses(raw)}
+    pana, sams = known.get("TV Panason.."), known.get("Samsung T200HD")
+    like = flipper_ir.like_known(list(known.values()), signal)
+    sam = {"type": "parsed", "protocol": "Samsung32", "address": 7, "command": 2}
+    got = {n: (heads(_durations(flipper_ir.command(n, {**signal, "name": n}, like=like).streams[0])),
+               flipper_ir.command(n, {**signal, "name": n}, like=like).period_ns) for n in ("Power", "Input")}
+    ok = (pana and (pana["frames"], pana["power"]) == (3, 14) and abs(pana["carrier"] - 36_400) < 300
+          and like is pana and sams and sams["frames"] == 2
+          and flipper_ir.like_known(list(known.values()), sam) is sams
+          and got == {"Power": (14, round(1e9 / pana["carrier"])), "Input": (3, round(1e9 / pana["carrier"]))})
+    failed += not ok
+    print(f"{'PASS' if ok else 'FAIL'} as the remote sends it: {[(k['device'], k['frames'], k['power'], k['carrier']) for k in known.values()]}; "
+          f"a Panasonic code like the TV, {got}")
     return 1 if failed else 0
 
 
