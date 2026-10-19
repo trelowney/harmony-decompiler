@@ -899,7 +899,10 @@ async function main() {
     }
   } catch { /* no storage here: the downloaded file is the backup */ }
   const keepBackup = (bytes) => {
-    const when = new Date().toISOString().slice(0, 16).replace("T", " ");
+    const now = new Date();         // local time, as the person reads a clock
+    const two = (n) => String(n).padStart(2, "0");
+    const when = `${now.getFullYear()}-${two(now.getMonth() + 1)}-${two(now.getDate())} ` +
+      `${two(now.getHours())}:${two(now.getMinutes())}`;
     try {
       let text = "";
       for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
