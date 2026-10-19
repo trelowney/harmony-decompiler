@@ -19,11 +19,15 @@ python tools/manual_layout.py 525_UserManual.pdf 5
 Every other page of the manual was checked; page 5 is the only one carrying a
 labelled diagram.
 
-> **Read this alongside [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md).** This document
-> gives the buttons a human sees. [FORMAT.md §5g](FORMAT.md) gives the 8x7 matrix
-> the config addresses. **Joining those two is the unsolved problem**, and nothing
-> below solves it - a button being named "Guide" here does not tell you which
-> matrix cell it is wired to.
+> **The join is made now.** This document gives the buttons a human sees, and
+> [FORMAT.md §5z](FORMAT.md) the 8 by 7 keypad the config addresses. Which code
+> is which button was read from what the sample's device modes send on each key
+> and then confirmed by pressing every one on the author's 525 (FORMAT 5af); the
+> table is `KEYS` in `tools/compose525.py`. Hash is the one named by elimination.
+> The soft keys beside the screen are `0xA7`, `0xA6`, `0x9F` and `0x9E`, top left
+> to bottom right (5ae). The drawn remote on the page follows the European 525:
+> the colour keys red, green, yellow and blue under the digits, Glow under the
+> navigation disc.
 
 ---
 

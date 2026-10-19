@@ -20,8 +20,8 @@ If you are not sure, pick either. Nobody will mind, and things can be moved.
 
 ## Contributing a config sample
 
-The most useful single thing you can add, especially from a remote that is **not**
-a 525.
+The most useful single thing you can add. Most wanted right now: a **Harmony 555
+with at least one device** on it, and configs from models nobody has posted.
 
 ```sh
 concordance --dump-config my-remote.EZHex
@@ -30,10 +30,10 @@ concordance --dump-config my-remote.EZHex
 Attach the file to an issue using the **Contribute a config sample** form, and say
 which remote it came from.
 
-Before posting, have a look at what is in it. The XML header of the sample in this
+Before posting, have a look at what is in it. The XML header of the samples in this
 repository has `UserId` set to `0` and carries no account data, but the config
-does contain your device brands and your activity names - for example the sample
-here makes it obvious the owner has a Panasonic TV and an XBOX 360. That is
+does contain your device brands and your activity names - for example the 525
+sample here makes it obvious the owner has a Panasonic TV and an XBOX 360. That is
 usually harmless, but it should be your decision rather than a surprise.
 
 Every sample is worth having even if it duplicates a model already present.
@@ -63,7 +63,9 @@ questions already settled, specifically so nobody repeats the work.
 
 There is no build system and no dependencies - the scripts in `tools/` are plain
 Python 3 using only the standard library, and the Windows HID access goes through
-`ctypes` rather than a binding. Keeping it that way means anyone can run a script
+`ctypes` rather than a binding. The page in `web/` is plain HTML and JavaScript
+that runs the same Python in the browser through Pyodide; after changing a file
+in `web/`, run `python tools/stamp_web.py` so browsers load the new one. Keeping it that way means anyone can run a script
 without setting anything up. If something genuinely needs a dependency, say so in
 the PR and it can be discussed.
 
@@ -71,13 +73,15 @@ Style: whatever the surrounding file already does.
 
 ### The safety rule
 
-**Nothing in this repository writes to a remote.**
+**Nothing in `tools/` writes to a remote.** `tools/hid_query.py` carries an
+explicit command whitelist and hard-refuses `0x30 WRITE_FLASH`,
+`0x40 WRITE_FLASH_DATA`, `0xA0 WRITE_MISC` and `0xD0 ERASE_FLASH`. Every other
+script routes through it. Please do not remove or bypass that whitelist.
 
-`tools/hid_query.py` carries an explicit command whitelist and hard-refuses
-`0x30 WRITE_FLASH`, `0x40 WRITE_FLASH_DATA`, `0xA0 WRITE_MISC` and
-`0xD0 ERASE_FLASH`. Every other script routes through it. Please do not remove or
-bypass that whitelist. Writing to a remote is a real and useful thing to work on,
-but it should be a deliberate, separate, clearly-labelled piece of work rather than
+**The page in `web/` writes, and only there.** It follows libconcord's sequence,
+touches only the configuration's own flash, refuses a file that does not read
+back byte for byte or whose checksum is wrong, and saves a backup first. A change
+to that path is a deliberate, separate, clearly-labelled piece of work, never
 something that arrives inside a patch about parsing.
 
 If you are experimenting with writes, do it on a remote you are prepared to lose.

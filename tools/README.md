@@ -113,12 +113,38 @@ example, changing a key-table u16 to a different valid action-list index and
 restamping the checksums can keep every pointer, region count, device count and
 round trip unchanged while making a button perform the wrong action.
 
+## Composing a config
+
+What the page in `../web/` calls, and what every write to the author's 525 was
+built with. Each operation checks its own result (round trip, every other screen
+unchanged, every untouched action list unchanged) and refuses rather than hands
+back something it cannot check.
+
+| script | what it does |
+|---|---|
+| `compose525.py` | **the library**: read devices, activities and what they do; add, rekey, rename, move and delete devices; add, edit, move and delete activities; power states; waits. Arch 9: the 525, and the 515 and 555 (FORMAT 5ai) |
+| `verify_compose525.py` | every operation on the 525 sample and on the composed config the remote ran |
+| `verify_500_series.py` | the same reader and composer on the 515 and 555 samples |
+| `build_arch9_glyphs.py` | builds `arch9_glyphs.json`, which character each glyph's pixels draw, per typeface |
+| `flipper_ir.py` | Flipper-IRDB files as commands, and `known_presses`: how the remote already sends a protocol |
+| `irdb.py` | irdb CSV files as the same signals |
+| `pronto.py` | Pronto hex codes as commands |
+| `verify_flipper_ir.py`, `verify_irdb.py`, `verify_pronto.py` | the encoders against frames the remote is known to send |
+| `build_flipper_index.py`, `build_irdb_index.py` | the file lists the page searches |
+| `stamp_web.py` | stamps the page's scripts with a hash of their contents, so a browser never runs a stale one |
+
+```sh
+python verify_compose525.py               # every operation, checked
+python verify_500_series.py               # the 515 and 555
+python verify_flipper_ir.py <Flipper-IRDB checkout>
+```
+
 ## Offline analysis
 
 | script | what it does |
 |---|---|
 | `split_ezhex.py` | split an .EZHex into XML + blob, verify size and checksum |
-| `sections.py` | parse the 18-section pointer table from the header |
+| `sections.py` | parse the section pointer table from the header (20 entries on arch 9, FORMAT 5u) |
 | `records.py` | parse the 114-record array indexed by section 6 |
 | `keytable.py` | parse the key table in record #0 |
 | `keymatrix.py` | test the keyboard-matrix hypothesis, render the 8x7 grid |
@@ -179,6 +205,10 @@ which you can check against `concordance --get-time` - if those agree, the
 transport is working and everything else it reports can be trusted.
 
 ### These do not write to your remote
+
+Nothing in `tools/` writes. The page in `../web/` does, deliberately and
+separately, behind a ticked box and a backup; it follows libconcord's write
+sequence and touches only the configuration's own flash.
 
 `hid_query.py` carries a whitelist of permitted command bytes and hard-refuses
 `0x30 WRITE_FLASH`, `0x40 WRITE_FLASH_DATA`, `0xA0 WRITE_MISC` and

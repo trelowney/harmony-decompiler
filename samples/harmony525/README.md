@@ -33,7 +33,7 @@ anything.
 | firmware | 3.0, board 2.5.0, skin 22 |
 | flash | 512 KiB external (`FF:12`, 25F040) |
 | config occupies | 77 of 384 KiB (19%) |
-| devices configured | Panasonic TV, Genius amplifier, XBOX 360 |
+| devices configured | Panasonic TV, Genius amplifier, XBOX 360, and an X96 Box learned on the remote (its name exists only as pixels, FORMAT 5i) |
 
 The remote runs on the **native Windows HID stack**. No Zadig or libusb driver
 swap is needed - that requirement applies to the Harmony 900/1000, not this

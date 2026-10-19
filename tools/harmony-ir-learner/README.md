@@ -1,5 +1,9 @@
 # Harmony IR learner for Windows
 
+> The page in `web/` now learns through a 525 in the browser too, key by key
+> with its Learn buttons, on any operating system Chrome or Edge runs on. This
+> script is the Windows command-line route it grew out of.
+
 A capture-only front end to Concordance's IR learning API. It lets a Harmony
 remote be the infrared receiver: point the original equipment remote at the
 Harmony, press a key, get the carrier frequency and the mark/space durations

@@ -7,6 +7,28 @@ when editing.
 
 The sample this document describes is in [`samples/harmony525/`](../samples/harmony525/).
 
+### Reading this document
+
+It is a lab notebook, kept in the order things were found, and a reading that
+turned out wrong is corrected where it stands rather than deleted. So an early
+section can describe a first reading that a later one replaced; the later one
+says so, and so does the early one where it matters. For the current state of
+each part, start here:
+
+| what | where |
+|---|---|
+| the container, its two checksums and the section table | 1, 2, 4m, 5s, 5u |
+| what every section is | 4r, 5v, 5x (the table in 3 is the first reading) |
+| pointers, relocation and how far a length change is safe | 4b, 4s, 5w |
+| screens and text | 4l, 4h, 5ai |
+| actions and instructions | 4i, 4j, 4k, 4p, 5aa |
+| how a key press finds what to do | 4p, 5ad, 5ae, 5ag |
+| the keypad and which key is which | 5z, 5af (5g and 5h are earlier readings) |
+| infrared | 4n, 5q, 5af, 5ah |
+| devices, activities, power and what composing them does on the remote | 5af, 5ag, 5ah |
+| the 515 and 555 | 5ab, 5ai |
+| arch 8 and the other protocols | 5, 5j, 5n, 5u |
+
 ---
 
 ## 1. The .EZHex container - SOLVED
@@ -49,6 +71,13 @@ pointer #0 (`0x02F35B` -> `0x00F35B`) landing immediately before the first
 human-readable record.
 
 ## 3. Sections (18 entries, contiguous, no gaps)
+
+> **The first reading, kept as it was.** The table starts at `0x0B` and has 20
+> entries on arch 9 (5u); sections are where a subsystem's table sits, not
+> fences around its data, so they do not tile the file (5s); and every
+> "unknown" below is named now: 1 protocol and skin, 2 the writeable flash, 3
+> the build time, 4 the firmware's error screens, 5 the infrared groups, 16 an
+> empty pointer table (4r, 5v, 5x).
 
 | # | offset | length | what it is |
 |---|---|---|---|
@@ -2763,6 +2792,11 @@ local to one board, and the three architectures do not even share a matrix
 shape. See 5g and 5n.
 
 ## 5g. Key codes are keyboard-matrix addresses - CONFIRMED FROM THE FIRMWARE
+
+> **Read 5h and 5z with this.** Bit 7 is an event type, not part of the
+> coordinate (5h): the byte is `0x80 | scan code` for a press, and the 8 by 7
+> grid is the scan code split as `code >> 3` and `code & 7` (5z). Which key is
+> which was settled on the remote (5af).
 
 ```
 code = 0x80 | (row << 3) | column        row 0-7, column 1-8

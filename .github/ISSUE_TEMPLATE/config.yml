@@ -9,5 +9,6 @@ contact_links:
   - name: Talking to the remote over USB
     url: https://github.com/jaymzh/concordance/issues
     about: >
-      Transfers, drivers and device detection belong with concordance, which does
-      the USB side. This repository is only about the config format.
+      Concordance's own transfers, drivers and device detection belong with
+      concordance. Problems with this repository's page, including reading and
+      writing a 525, 515 or 555 from it, belong here.

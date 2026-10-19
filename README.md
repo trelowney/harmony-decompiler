@@ -1,50 +1,82 @@
 # harmony-decompiler
 
-Reverse engineering the **Logitech Harmony configuration binary**, with the goal
-of decompiling a config into a readable text format and compiling it back -
-byte for byte.
+Reverse engineering the **Logitech Harmony configuration binary** of the older
+EasyZapper remotes (the 525, 515, 555 and their arch 8 cousins, the 720/785/88x),
+so a remote can be read, understood, changed and written again without the
+service that used to do it.
 
-The service that configured these remotes is gone: `members.harmonyremote.com`
-now serves a discontinuation notice, and the models Logitech named in it are the
-older EasyZapper platform this repository is about. A config that is already on
-such a remote can still be read off it, but nobody can generate a new one. This
-repository is an attempt to change that.
+That service is gone: `members.harmonyremote.com` serves a discontinuation
+notice. The later MyHarmony service still answers for the remotes it serves
+([@dannybloe](https://github.com/dannybloe) measured that on 7 August 2026), but
+not for these.
 
-That sentence used to say "Logitech's servers are gone", flatly, and it was too
-broad. [@dannybloe](https://github.com/dannybloe) measured it on 7 August 2026:
-the later **MyHarmony** service does still answer, and it still compiles configs
-for the remotes it serves. It does not serve these.
+## Where it stands
 
-> **Status: the round trip works.** A 525 config decompiles to JSON and compiles
-> back byte-identical, and a button can be remapped through it - changing exactly
-> one byte of the blob, with both of the file's checksums recomputed. More than
-> 99% of the public 525 blob is emitted non-opaque; the decoded part includes
-> **5,015 pointers**, which the compiler recomputes rather than copies.
->
-> **The menus render.** All 135 screens of the 525 sample draw as bitmaps offline,
-> and a device label on them can be edited and checked without going near a
-> remote.
->
-> **Length-changing edits work too**, as of the pointers becoming symbolic:
-> lengthen a name and every section after it shifts, every known pointer relinks,
-> the file comes back with the same structure, all 135 screens still render
-> pixel-identical and all 200 infrared commands still expand to the same
-> timings. Those last two clauses exist because the pointer check on its own
-> once passed a file in which every IR command was ruined. See the caveat under
-> *Editing*.
->
-> **And on a real Harmony 525 it now does what MyHarmony used to.** On
-> 2026-10-18, with configs composed here and written with Concordance: a fifth
-> and a sixth device on extra `Devices` pages, both answering their equipment;
-> a fourth activity that switches devices on and picks the TV input; page
-> counters on the menus; a device and an activity deleted again; and an existing
-> device re-keyed to match the owner's own programmable handset, volume
-> included. Every write was read back byte identical before a key was pressed,
-> and the original is kept. How each part works, and the one firmware limit that
-> made the first device silent, is in FORMAT 5af.
->
-> See [`docs/FORMAT.md`](docs/FORMAT.md) for what is known and
-> [`docs/OPEN-QUESTIONS.md`](docs/OPEN-QUESTIONS.md) for what is not.
+**On a Harmony 525 this now does what Logitech's software used to, in a browser.**
+The page at **https://trelowney.github.io/harmony-decompiler/web/** reads the
+remote over USB, shows its devices, activities and every screen on a drawn
+remote you can press, and changes it:
+
+* devices: add (learned through the 525 itself, typed, pasted as Pronto, or
+  found in Flipper-IRDB or irdb), edit key by key, rename, move, delete, and
+  keep track of whether a device is on;
+* activities: add, edit, rename, move, delete; switch devices on and off, send
+  any commands in order, wait between them, end on a device's own screen, take
+  the volume from another device;
+* write it back the way Concordance does, with a backup saved first and a button
+  to put the backup back.
+
+Every one of those has been written to the author's 525 and pressed. The
+configurations are composed from the remote's own, not generated from nothing:
+see [FORMAT.md](docs/FORMAT.md) 5af to 5ah.
+
+**The Harmony 515 and 555** run the same firmware. A 515's configuration is read
+and changed the same way, checked against a sample, never written to a real one.
+A 555 is read; the one sample is empty, so nothing can be added to it yet
+(FORMAT 5ai).
+
+**The format** decompiles to JSON and compiles back byte for byte on every arch
+8 and arch 9 sample here, and a length change relinks every pointer the
+decompiler knows. What every section, instruction and infrared record means is
+in [FORMAT.md](docs/FORMAT.md); what is still unknown is in
+[OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md).
+
+> **Experimental, and entirely at your own risk.** Written to one Harmony 525
+> only, the author's own; a 515 or 555 has never been written to. Writing to a
+> remote can leave it not working, with no way back. No warranty, no support,
+> and nobody here is responsible for a remote, or anything else, that it
+> damages. Not affiliated with Logitech.
+
+## In a browser, with nothing installed
+
+Open the page in Chrome or Edge (they have WebHID), press **Read the remote**,
+and save the backup it offers. Or open a saved `.EZHex`. Nothing is sent
+anywhere but to the remote: the page runs the Python in `tools/` in the browser
+(Pyodide). To run it locally, serve the repository and open `web/`:
+
+```sh
+python -m http.server 8525      # then http://127.0.0.1:8525/web/
+```
+
+The USB reading follows [@dannybloe](https://github.com/dannybloe)'s protocol
+work in harmony-explorations (MIT); the write follows libconcord step by step.
+If you write with Concordance instead, close the page first: while it holds the
+remote, Concordance cannot find it again after the restart.
+
+Codes from databases are fetched only when one is picked:
+[Flipper-IRDB](https://github.com/Lucaslhm/Flipper-IRDB) (CC0) and irdb.
+Contains/accesses irdb by Simon Peter and contributors, used under permission.
+For licensing details and for information on how to contribute to the database,
+see https://github.com/probonopd/irdb
+
+A database code is sent the way the remote already sends that protocol to a
+device it knows: the owner's Panasonic wants three frames a press and fourteen
+to switch on, and gets them (FORMAT 5ah). The encoders are checked bit for bit
+against frames the remote is known to send (`tools/verify_flipper_ir.py`,
+`tools/verify_irdb.py`, `tools/verify_pronto.py`); RC5, RC6 and Sony are
+encoded from Flipper's definitions and not yet checked against a device.
+
+## On the command line
 
 ```sh
 cd tools
@@ -53,334 +85,125 @@ python roundtrip.py --resize              # lengthen a name, check it relinks
 python decompile.py --summary             # what is decoded and what is not
 python decompile.py config.EZHex out.json
 python compile.py out.json new.EZHex --against config.EZHex
-python verify_525_semantics.py                # re-check the 525 evidence
-python verify_arch9_relocation.py             # census, relocation and negative check
-python render_525_screens.py --out rendered   # draw all 135 menus as BMPs
-python verify_compose525.py                   # add five devices to the sample, check every step
+python render_525_screens.py --out rendered   # draw every screen as a BMP
+python verify_compose525.py               # every composing operation, checked
+python verify_500_series.py               # the same on the 515 and 555 samples
 ```
 
-## In a browser, with nothing installed
+`tools/compose525.py` is the library the page calls: `add_device`,
+`rekey_device`, `rename_device`, `delete_device`, `place_device`,
+`add_activity`, `edit_activity`, `delete_activity`, `place_activity`,
+`add_power`, and readers for devices, activities and what they do. Each
+operation checks its own result before handing it back. Nothing in `tools/`
+writes to a remote; `tools/README.md` lists the scripts.
 
-> **Experimental, and entirely at your own risk.** Tried on one Harmony 525
-> only, the author's own; a 515 or 555 has never been written to. Writing to a remote can leave it not working, with no
-> way back. No warranty, no support, and nobody here is responsible for a
-> remote, or anything else, that it damages. Not affiliated with Logitech.
+## How the config works, in short
 
-`web/` reads a Harmony 525, 515 or 555 over USB straight from Chrome or Edge
-(WebHID; the three run the same firmware, FORMAT 5ai), or
-opens a saved `.EZHex`, and shows its devices, activities and rendered screens,
-with a backup to save. It runs the same Python as `tools/` in the browser
-(Pyodide) and sends nothing anywhere but to the remote. It also changes the
-configuration (add or delete a device or an activity) and writes it back the
-way Concordance does, only inside the configuration's own flash and only after
-a box is ticked, with a backup saved first. On 2026-10-18 it read the owner's
-525 byte identical to `concordance --dump-config`, and wrote it back, reset it
-and set its clock, after which Concordance read the same bytes. It runs at
-**https://trelowney.github.io/harmony-decompiler/web/** in Chrome or Edge. To
-run it locally instead, serve the repository and open `web/`:
+A config is a program for an interpreter in the remote's firmware, not a table
+to fill in. The parts that matter for changing one:
 
-```sh
-python -m http.server 8525      # then http://127.0.0.1:8525/web/
-```
+* **an action** is three bytes, `<u16 operand><u8 opcode>`, and a key press runs
+  a list of them: send an infrared command (`0x7D`), wait for that device in
+  tenths of a second (`0x7C`), set a state variable (`0x80 | n`), show a screen
+  (`0x7E`), run another list (`0x7F`). FORMAT 4p, 5aa, 5ah;
+* **a key** is looked up through a stack of binding lists: the global map, the
+  screen's own list, the activity's key set, the defaults. FORMAT 5ag;
+* **a device** is an infrared group of commands plus a screen of its own, and its
+  power is a state variable whose transitions send the on and off codes. FORMAT
+  5v, 5ag;
+* **text** is glyph numbers assigned per configuration, drawn by screen programs;
+  a code is read by the pixels it draws. FORMAT 4l, 5ai;
+* **infrared** is stored as carrier, then blocks of duration runs, at most 127
+  words a block. FORMAT 4n, 5af.
 
-The USB reading follows [@dannybloe](https://github.com/dannybloe)'s protocol
-work in harmony-explorations (MIT); the write follows libconcord step by step.
-
-A device can be learned through the 525 itself, typed as NEC, pasted as a
-Pronto code, or looked up in two code databases, whose files the page fetches
-when one is picked:
-[Flipper-IRDB](https://github.com/Lucaslhm/Flipper-IRDB) (CC0) and irdb.
-Contains/accesses irdb by Simon Peter and contributors, used under permission.
-For licensing details and for information on how to contribute to the database,
-see https://github.com/probonopd/irdb
-
-The encoders behind both are checked against what the remote is known to send:
-the Panasonic TV's and the Samsung's frames come out of the databases bit for
-bit (`tools/verify_flipper_ir.py`, `tools/verify_irdb.py`, `tools/verify_pronto.py`).
-
-## Scope
-
-This repository is about **the config format and the toolchain around it**.
-Talking to the remote over USB is already solved by
-[concordance / libconcord](https://github.com/jaymzh/concordance) - please use
-that for transfers. Keeping the two separate was
-[suggested in the thread](https://github.com/jaymzh/concordance/issues/66) this
-work grew out of, on the grounds that the data format and the USB transport are
-logically independent problems.
-
-## The plan
-
-1. **Decompile** a binary config into a semi-human-readable format (JSON or
-   YAML), with an explicit way of saying *"here is a binary blob I do not
-   understand yet"*.
-2. **Compile** that text back into a binary config, asserting at first that the
-   result is the same size as the original, so pointers inside unknown blobs
-   carry through unchanged.
-3. **Assert byte identity** against the original. This is the part that makes the
-   approach worth doing: if a config survives a decompile/recompile round trip
-   unchanged, that is proof the model of the format is complete rather than
-   plausible. Every newly decoded structure gets checked by the same test.
-
-Once every section containing pointers is decoded - even where the rest of that
-section is still opaque - the same-size restriction can be lifted and larger
-changes become possible.
-
-## What is known so far
-
-Verified against a real Harmony 525 config (arch 9, protocol 9). Everything in
-this list survives a decompile/recompile cycle byte-for-byte, which is a stronger
-claim than "it looks right":
-
-- the `.EZHex` container: XML header + binary blob, size and XOR checksum
-- **a second checksum, the one the remote itself checks**: the `u16` immediately
-  before the end marker is a `0x4321`-seeded XOR of the blob's little-endian
-  words. Until this was found it passed through as opaque data, so every *edited*
-  config this project produced carried a stale one and a remote would have
-  refused it. A byte-identical round trip never showed it, and could not have
-- the blob header: `AHCM` magic, a section pointer table of 18 sections and a
-  trailing null. The same container carries arch 8, 12 and 14 under a different
-  four letter cookie, and the table lines up by slot index
-- pointers are **24-bit little-endian absolute flash addresses**;
-  `config_base = 0x20000` - confirmed on arch 8 too
-- **which sections carry pointer tables** - 10 of the 18, holding 685 addresses.
-  Section 10 turns out to be nothing but a 487-entry pointer array
-- the **header of all 114 records** in the region the section table does not
-  cover, carrying another 249 pointers
-- **section 17 is four 96x64 LCD bitmaps** - `tools/show_bitmaps.py` draws them.
-  Three are page backgrounds. The fourth is solid ink, and the only thing ever
-  copied out of it is the one-pixel rule under a menu heading
-- **where the menu text lives.** It is not in the file as text and never was.
-  Section 11 and every mode page hold a screen program; opcode 16 picks one of
-  the five font sets in section 7, and opcodes 4 and 5 draw runs of *font-local
-  glyph numbers*. `tools/render_525_screens.py` walks all 135 pages and draws
-  them, which is how the sample's four devices got their names back
-- **the 525's screen framing, from its firmware**: opcode 22 selects one of eight
-  8-pixel rows, opcode 3 lays down that row's 96x8 strip, text is drawn over it,
-  and opcode 23 transfers the finished row to the panel. Every one of the 135
-  pages is exactly eight of those blocks
-- **section 8 closes to the byte**: one leading action list of 34 bytes, then the
-  packed run of all 135 mode-page binding lists, 1,052 bytes, and nothing else
-- three more action opcodes: `0x75` sounds a tone through a counted GPIO toggle,
-  `0x80 | n` writes state variable `n`, and `0x7C` is Glen Harris's per-device
-  `QueueDelay`; its low-byte delay encoding/unit remains open
-- **arch 8 works too**: all four 720/785/88x samples round-trip byte-identical,
-  and survive a length change. Its markers are not what mirroring arch 9 would
-  suggest, and its section table has a null in the middle
-- the name table, wrapped in `0xFEED ... 0xBEEF` with a length field, whose `index`
-  is the address of a **live state variable readable over USB**
-- the **key table** format, `<u8 code> <u16 target> <0x7F>`, and that there is one
-  overlay table per activity
-- key codes are **keyboard matrix addresses**: `code = 0x80 | (row << 3) | column`
-- **every pointer inside the infrared records**: four groups, 200 record headers,
-  380 bodies, five symbol tables and 43 symbol blocks, on the layout
-  [@dannybloe](https://github.com/dannybloe) published and verified against
-  firmware. Until this was typed, lengthening a config quietly ruined all 200
-  commands while every other check passed
-- the vendor HID protocol, reimplemented and cross-checked against concordance
-
-Two errors in this document's own earlier revisions were caught by the round-trip
-test within an hour of it working, which is roughly the point of having it. Four
-more, listed below, were caught by other people or by a stronger test, which is
-the point of having those.
-
-**Withdrawn, and worth knowing about.** Earlier revisions of this repository
-claimed record bodies were blocks with a twelve-byte header, one per row of the
-keyboard matrix; that records ended with a trailer pointing into section 8; that
-124 references were buried in the bodies; and that `0x7C` carried a quantity
-rather than a delay. All four are wrong. The first three were byte patterns that
-really do occur and really are not structures, and reading the screen programs
-from their roots dissolved all of them. The fourth was corrected by
-[Glen Harris](https://github.com/glenharris), who designed the thing. See
-[`docs/FORMAT.md`](docs/FORMAT.md) sections 4d, 4f, 4g and 4k, which keep the
-old readings visible next to what replaced them.
-
-Full detail, including the negative results worth not repeating, is in
-[`docs/FORMAT.md`](docs/FORMAT.md).
-
-## Editing
-
-Pointers decompile as `region + delta` rather than raw offsets, so the compiler
-recomputes them against wherever things end up. That is what makes a length
-change survivable: `roundtrip.py --resize` lengthens a name, and all 5,015
-symbolic pointers come back referring to the same things they referred to before.
-On arch 9 the resize check also requires all 135 rendered screens to remain
-pixel-identical and all 200 original class-5 IR records to expand exactly.
-
-**This proves internal consistency, not that a remote would accept the result.**
-A pointer hidden inside a region that is still opaque is invisible to this code
-and would be silently left behind by exactly the kind of edit above. That is not
-hypothetical: it has now happened twice, with the trailer checksum and with the
-infrared records, and both times an outside reader found it rather than any test
-here. The public 525 now has 512 opaque bytes, all in the 114-record array, so
-treat length-changing edits as an experiment rather than a feature, and read the
-safety note below before going anywhere near hardware.
-
-## The main thing standing in the way
-
-**Nobody knows which matrix position is which physical button.** The codes are
-matrix coordinates, and the ordering in the config is Logitech's canonical key
-order rather than the visual layout, so it cannot be read off the table. Sniffing
-key presses over USB does not work - the remote locks its UI in USB mode and
-never reports which key was pressed.
-
-Without that map, a decompiler can round-trip a config perfectly and still not be
-able to tell you which button you are remapping. Both halves of the problem are
-written up - the matrix in [`docs/FORMAT.md`](docs/FORMAT.md), the buttons a human
-sees in [`docs/BUTTON-LAYOUT.md`](docs/BUTTON-LAYOUT.md) - and joining them is
-what nobody has done.
-
-If you have any of the following, it would unblock a lot: original Logitech
-documentation, a service manual, a photo of a bare Harmony PCB, or simply the
-patience to buzz out a matrix with a multimeter. Details in
-[`docs/OPEN-QUESTIONS.md`](docs/OPEN-QUESTIONS.md).
+Two of those were found by other people's readers refusing a file every test
+here had passed (the trailer checksum, FORMAT 4m, and the infrared pointers,
+4n), which is why every change is also checked with
+[@dannybloe](https://github.com/dannybloe)'s independent codec.
 
 ## Repository layout
 
 ```
-docs/FORMAT.md          everything known about the format, with evidence
-docs/OPEN-QUESTIONS.md  what is unknown, and what would answer it
-docs/BUTTON-LAYOUT.md   the buttons as Logitech documents them
-samples/harmony525/     a real arch 9 config, with checksums
+web/                    the page: read, try, change and write a remote
+tools/                  the decompiler, the composer, the checks (read-only)
+docs/FORMAT.md          everything known about the format, with the evidence
+docs/OPEN-QUESTIONS.md  what is not known, and what would answer it
+docs/BUTTON-LAYOUT.md   the 525's buttons as Logitech documents them
+samples/harmony525/     the author's 525, as read and as composed
+samples/harmony515/     a 515, and samples/harmony555/ an empty 555
 samples/arch8/          thirteen 720/785/88x configs from two contributors
 samples/harmony890/     two protocol 10 configs, which nothing here reads yet
 samples/harmony650/     one protocol 14 config, same
-patterns/               ImHex patterns, one hand written and the rest generated
-schema/                 @glenharris's sketch of what a decompiled config should
-                        look like, from the person who designed the format
-tools/                  Python scripts used for the analysis (read-only)
+patterns/               ImHex patterns
+schema/                 @glenharris's sketch of a decompiled config
 ```
 
 ## Samples wanted
 
-The single most useful thing you can contribute is **a config dumped off a real
-remote**, especially one from a model nobody has posted yet. What is here now:
-one 525, thirteen 720/785/88x, two 890s and one 650, from four people.
-
-Two of those arrived in August 2026 and immediately paid for themselves. The
-890 and the 650 use protocols nothing here supports, and simply having them
-showed that both are the familiar container with a different base address, which
-is a much smaller gap than "unsupported" sounded like. See
-[FORMAT.md §5j](docs/FORMAT.md).
-
-Better still is a config **plus a note of what the remote actually shows** -
-devices, activities, the labels on the custom buttons, and which button
-positions are blank. [@kkong42](https://github.com/kkong42) did that for an 885
-in [issue #20](https://github.com/trelowney/harmony-decompiler/issues/20), and it
-is the only thing in this repository against which an answer can be checked.
+A config dumped off a real remote is still the most useful thing to send, with
+a note of what the remote shows (devices, activities, button labels).
 
 ```sh
 concordance --dump-config my-remote.EZHex
 ```
 
-That file contains your device brands and your activity names. It does not
-contain account credentials - the `UserId` field in the sample here reads `0` -
-but do have a look before posting, and say which remote it came from.
-
-There is a ready-made issue form for this: **Contribute a config sample**.
+Most wanted now: **a Harmony 555 with at least one device on it**, which is what
+adding to a 555 needs, and anyone with a **515** willing to try a write. The
+file holds your device brands and activity names and no account data (the
+`UserId` in the samples reads `0`); have a look before posting. There is an
+issue form for it: **Contribute a config sample**.
 
 ## Contributing
 
-Questions, half-formed ideas and "I tried X and it did not work" are all welcome -
-negative results genuinely save other people time, and there is a section for them
-in `FORMAT.md`. Use **Discussions** for open-ended thinking, **Issues** for
-specific findings, samples and bugs. See
-[CONTRIBUTING.md](CONTRIBUTING.md).
-
-Nobody here is expected to already know this hardware.
-
-## Safety
-
-Nothing in this repository writes to a remote. The scripts in `tools/` are
-read-only by construction: `hid_query.py` carries a command whitelist that refuses
-`WRITE_FLASH`, `WRITE_FLASH_DATA`, `WRITE_MISC` and `ERASE_FLASH`.
-
-When the time comes to test writing, the current understanding - from the original
-Harmony developer - is that transferring a bad config through concordance should
-confuse the runtime rather than brick the remote: you can usually send a new config
-over USB, and in the worst case boot into safe mode, where the remote ignores the
-config entirely. The caveat he attached is worth repeating, though: a config could
-in principle contain an instruction sequence that drives the runtime to write to
-arbitrary flash addresses, firmware and bootloader included. **Do not do the first
-write experiments on a remote you care about.**
+Questions, half-formed ideas and "I tried X and it did not work" are all
+welcome. Discussions for open-ended thinking, issues for findings, samples and
+bugs. See [CONTRIBUTING.md](CONTRIBUTING.md). Nobody here is expected to already
+know this hardware.
 
 ## Credit and prior work
 
 The format was designed by [@glenharris](https://github.com/glenharris), who has
 been generous with guidance in the concordance thread and in this repository's
-discussions. Neither he nor anyone else credited here is responsible for anything
-claimed here. Two things in this document are his directly: `0x7C` is
-`QueueDelay`, a per-device queued delay rather than the quantity an earlier
-revision called it, and an instruction is 24 bits wide with a fixed pattern that
-can run through all three bytes, which is why this repository no longer talks
-about 59 second-level sub-opcodes.
+discussions: `0x7C` is his `QueueDelay`, and an instruction is 24 bits with a
+fixed pattern that can run through all three bytes. Neither he nor anyone else
+credited here is responsible for anything claimed here.
 
 [@dannybloe](https://github.com/dannybloe)'s
-**[harmony-explorations](https://github.com/dannybloe/harmony-explorations)** is a
-parallel effort, MIT licensed, and further along as a general codec: it covers
-architectures 8, 9, 12 and 14 with one parser. No code has moved between the two
-projects in either direction, and the licence boundary is the reason. These
+**[harmony-explorations](https://github.com/dannybloe/harmony-explorations)**
+(MIT) is a parallel effort and further along on the remotes it covers: it
+composes and writes complete configurations for the Harmony 600, 650 and 700
+and is close on the Harmony One. No code has moved between the projects; these
 findings are his and are used with attribution rather than rediscovered:
 
-- **how a glyph is packed on arch 9** - two bits to a pixel, with run and literal
-  commands - which he published on 7 August 2026 and which the renderer in
-  `tools/render_525_screens.py` implements
-- **that the trailer `u16` is checked at all.** His parser is what showed that
-  this project's first edited configs were internally invalid; the seed and the
-  algorithm were then confirmed against the 525 firmware and all five samples here
-- **the class-5 infrared layout**, header to body to symbol table to symbol
-  block, published and checked against firmware. The relocation closure built on
-  top of it here is this project's, and it exists because his reader refused a
-  file that everything here had passed
-- **one infrared group is one device**, and the shape of the mode and page
-  records this repository's screen walker now reads from
-- **the section 17 picture bank is self-verifying**, which is how an appended
-  label edit here was caught leaving the file without a bank at all
-
-He independently verified this project's arch-9 screen firmware lead against his
-own 525 image, and found that opcode 23 brackets its transfer with `LATE` bit 2
-as well as the `LATA` bit 5 reported here. He then corrected his own first
-reading of the panel, and this repository's copy of it: `0xB0 | page` is shared
-by several controller families and does not identify an SSD1306. The whole
-bring-up sequence puts it in the **ST7565 / UC1701 class**, and the SSD1306's
-mandatory charge-pump command appears nowhere in the firmware. He also measured
-the server claim corrected at the top of this file.
+* how a glyph is packed on arch 9, and that a glyph code is read by its pixels;
+* that the trailer `u16` is checked at all;
+* the class 5 infrared layout, and that a symbol block holds at most 127 words;
+* one infrared group is one device, and the mode and page record shapes;
+* state variables, power transitions and the all-off list;
+* `0x7C` in tenths of a second;
+* the USB read protocol the page uses.
 
 This work leans directly on
 **[concordance / libconcord](https://github.com/jaymzh/concordance)**
 (© Phil Dibowitz 2007, © Kevin Timmerman 2007, maintained by
-[@jaymzh](https://github.com/jaymzh)). Specifically:
+[@jaymzh](https://github.com/jaymzh)): the `.EZHex` container and its checksum,
+the HID framing, and the write sequence the page follows. Where a file here
+reimplements something learned from it, it says so at that point.
 
-- the `.EZHex` container layout - where the blob starts, and that the checksum is
-  an XOR seeded `0x69` - was read out of
-  `libconcord/operationfile.cpp:find_config_binary`
-- the vendor HID framing and the `ReadMisc` command shapes reimplemented in
-  `tools/hid_query.py` were derived from `libconcord/libhidapi.cpp` and
-  `libconcord/remote.cpp`
-- `concordance --dump-config` produced the sample in this repository, and
-  `--get-time` was used to validate that our protocol implementation is correct
-- `specs/protocol.txt` documents the transport
-
-Where a file here documents or reimplements something learned from that codebase,
-it says so at the point it does.
-
-Samples came from people who had no reason to bother:
-[@kkong42](https://github.com/kkong42) posted eleven 880, 885 and 890 configs
-and, for one 885 in daily use, wrote out every device, activity and custom
-button label to go with it, which is the closest thing this repository has to
-ground truth. [@dmrzzz](https://github.com/dmrzzz) offered to press buttons on
-hardware. Earlier samples came out of the
+Samples and measurements came from people who had no reason to bother:
+[@kkong42](https://github.com/kkong42) posted arch 8, 515, 555, 890 and other
+configs, wrote out an 885 in daily use button by button, and buzzed out an 880
+and an 885 board; [@psolyca](https://github.com/psolyca) dumped a 650 three
+times one device apart; [@Rtas-17](https://github.com/Rtas-17) found how the
+base is read out of the file. Earlier samples came out of the
 [concordance thread](https://github.com/jaymzh/concordance/issues/66).
 
-The short version of all of the above: a good deal of what this repository
-documents was worked out by other people first, and where that is the case it
-should say so on the line where the claim is made, not only here.
+A good deal of what this repository documents was worked out by other people
+first, and where that is the case it should say so on the line where the claim
+is made, not only here.
 
 ## Licence
 
-**GPL-3.0-or-later** - see [LICENSE](LICENSE).
-
-This matches libconcord, deliberately. Parts of this work are derived from reading
-that GPLv3 source, so the same licence is the honest and compatible choice, and it
-keeps the door open for code to move in either direction between the two projects.
-
-The sample config in `samples/` is published by its owner for research use.
+**GPL-3.0-or-later**, see [LICENSE](LICENSE). This matches libconcord,
+deliberately: parts of this work are derived from reading that GPLv3 source.
+The sample configs in `samples/` are published by their owners for research use.
