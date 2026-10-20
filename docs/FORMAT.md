@@ -5911,6 +5911,67 @@ page list and its pool copy (5ai's twin lists), stopping at device, activity,
 menu and system screens, and removes what nothing else reaches. Deleting an
 activity leaves letters added to a font in place.
 
+## 5an. Texts, marked letters, the 555's page counter, and what random editing found - MEASURED, PARTLY ON THE REMOTE
+
+**Texts.** A screen's editable text is one of three parts, told by shape: the
+body (a message, or a Help question when the page's only soft keys are Yes and
+No), Help's two soft key labels, or the title (`y = 0`) of a Devices screen or
+the activity menu. Pages with soft key corners keep their names and labels for
+the device and activity forms. The same text on many screens is one text:
+"Yes / No" is on 48 screens of the owner's 525, "Replace the batteries" on 8. A
+line keeps its font and its alignment (left, right, centred on the screen, or
+around its old centre); a Help question is wrapped again, up to the lines of
+the richest Yes/No screen. A font whose typeface is not known (the 555's menu
+title is in a set of ten glyphs) cannot be given letters, so such a line is
+drawn in font 0. Written to the 525 on 2026-10-20 (Ano/Ne, "Pomohlo to?",
+"Zařízení", "Spouštím", a device "Android Žluťák"), read back byte for byte,
+and read on its screen by the owner.
+
+**Letters with marks** are drawn from the font's own base letter: an acute,
+caron, circumflex, ring or dots over a small letter in the rows above it with
+one blank row between, over a capital or a tall letter in the two rows its top
+leaves, touching it; a caron on d, t, l, L is the apostrophe beside the stem.
+They are read back by shape like every other glyph. `ĺ` is left out: an l is
+drawn like an I, so it would read as `Í`.
+
+**The page counter's font.** "n OF m" under a paged screen is drawn in font set
+4, eight rows high. The 525 and 515 have it; an empty 555 has four font sets
+and no set 4, so a 555 cannot show a second Devices page until the set is
+added (copied from the 525's: the same typeface).
+
+**Two key codes only the 555 has**, `0xBA` and `0xBD`: its two small round
+keys over 1 and 3 (Mute and Prev on @kkong42's photo, #42). Which is which is
+not settled. Where the 525 has Mute and Prev the 555 says Sound and Picture,
+and the 515 says Menu and Info, Exit and Guide where the 525 and 555 say Guide
+and Info, Exit and Menu; a key at the same place on the pad sends the same
+code.
+
+**Found by running random sequences of every change the page can make** on the
+525, 515 and 555 samples and the owner's configuration, checking after each
+one that it round trips, every screen draws and the structural checks of
+`verify_525_semantics.py` pass:
+
+- A Logitech activity has a Devices screen of its own (5ae: lists 4, 6 and 7);
+  a composed one shares the screen of the activity it is built like. Deleting
+  it must delete that screen when nothing else enters it, or the screen stays
+  behind still sharing the later Devices pages.
+- The pool holds one copy per page in the order the mode table first shows each
+  page. A shared page first shown by a screen that goes is first shown later,
+  so its copy moves.
+- Section 5 with no group or one is not read as a pointer table (the reader
+  wants two entries), so with one device the group's address is plain bytes
+  and does not follow a move. It is held as a table now.
+- The counts of the mode table (three bytes), fonts, action lists and screen
+  streams (two) are read as one byte and zeros while under 256.
+- A one byte state variable's record is 7 bytes and 8 per transition; on a 515
+  the bytes holding the last one run on into section 14.
+- In a record body a `0x16` followed by three bytes was taken for a reference
+  even inside an action list the index names. Index-known action lists come
+  first now, and no pattern may reach into one. The 880 and 885 samples had
+  four such false references; every arch 9 file reads as before.
+- A section 14 key can be cut over two regions when the pointer after it starts
+  with `0x16`.
+
 ## 6. Prior art
 
 The key thread is
