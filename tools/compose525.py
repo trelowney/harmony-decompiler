@@ -22,7 +22,10 @@ the remote's font cannot draw.
 from __future__ import annotations
 
 import copy
+import functools
+import marshal
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Sequence
 
@@ -78,19 +81,86 @@ def _of(d) -> bytes:
 
 
 def _counter_codes(d, text: str) -> bytes:
-    codes = encode_text(text, d.alphabet)
+    if len(d.fonts) <= COUNTER_FONT:
+        raise NoCounterFont("this configuration has no page counter font")
+    try:
+        codes = encode_text(text, d.alphabet)
+    except ValueError:
+        raise NoCounterFont(f"the page counter's font has no {text!r} here") from None
     for code in codes:
         try:
             d.fonts[COUNTER_FONT].glyph(code)
         except ValueError:
-            raise ComposeError(f"the page counter's font has no {text!r} here") from None
+            raise NoCounterFont(f"the page counter's font has no {text!r} here") from None
     return codes
+
+
+# what a page counter draws: "n OF m" for one to six pages
+COUNTER_TEXT = "123456OF"
+
+
+def counter_font(raw: bytes) -> bytes:
+    """Give a configuration the page counter's font set 4 with the digits 1
+    to 6 and "OF", in the 525's 8 row counter typeface ("525-4"). An empty
+    555 has only fonts 0 to 3, since nothing in it was ever paged; the 525
+    and 515 have set 4 already, and a set 4 that lacks a character gets it."""
+    d = _Doc(raw)
+    glyphs = _font_glyphs().get("525-4", {})
+    if any(ch not in glyphs for ch in COUNTER_TEXT):
+        raise ComposeError("arch9_font_glyphs.json has no page counter typeface")
+    if len(d.fonts) < COUNTER_FONT:
+        raise ComposeError(f"{len(d.fonts)} font sets; the page counter's is number {COUNTER_FONT}")
+    if len(d.fonts) == COUNTER_FONT:
+        table = d.region(d.S[7], "pointer_table")
+        sets = [r for r in d.regions if r["kind"] == "font_set"]
+        new = {"kind": "font_set", "offset": -1, "length": 0, "height": len(glyphs["1"]),
+               "first": sets[-1]["first"], "targets": [None] * len(sets[-1]["targets"]),
+               "section": sets[-1].get("section"), "id": "counter_font_set"}
+        d.regions.insert(d.index_of(sets[-1]) + 1, new)
+        table["targets"].append({"to": new["id"]})
+        d = _Doc(d.compile())
+    d._ensure_glyphs(COUNTER_TEXT, COUNTER_FONT, glyphs)
+    out = d.compile()
+
+    # ---- checks ----
+    after = _Doc(out)
+    if len(after.fonts) != COUNTER_FONT + 1 or after.fonts[COUNTER_FONT].height != len(glyphs["1"]):
+        raise AssertionError("the page counter's font set did not read back")
+    for ch in COUNTER_TEXT:
+        code = next(k for k, v in after.alphabet.items() if v == ch)
+        rows = ["".join("#" if v == renderer.INK else "." for v in row)
+                for row in after.fonts[COUNTER_FONT].glyph(code)]
+        if rows != glyphs[ch]:
+            raise AssertionError(f"the counter's {ch!r} reads back otherwise")
+    r0, r1 = render_map(_Doc(raw).blob), render_map(after.blob)
+    if {k: v[0] for k, v in r0.items()} != {k: v[0] for k, v in r1.items()}:
+        raise AssertionError("a screen changed with the page counter's font added")
+    _check_container(out)
+    return out
+
+
+def _needs_counter_font(op):
+    """An operation that may draw a page counter: on a configuration with no
+    counter font (an empty 555), add it (counter_font) and do it again."""
+    @functools.wraps(op)
+    def run(raw, *args, **kwargs):
+        try:
+            return op(raw, *args, **kwargs)
+        except NoCounterFont:
+            return op(counter_font(raw), *args, **kwargs)
+    return run
+
+
 HALF_WIDTH = 47              # a name or label gets half the 96 pixel screen
 SYMBOL_LIMIT = enc.IR_SYMBOL_WORD_LIMIT
 
 
 class ComposeError(ValueError):
     """The operation cannot be done on this file without guessing."""
+
+
+class NoCounterFont(ComposeError):
+    """A page counter is needed and the configuration has no font for it."""
 
 
 # ---------------------------------------------------------------- infrared ---
@@ -182,11 +252,23 @@ def _glyph_table() -> dict:
         from pathlib import Path
         _GLYPHS = json.loads((Path(__file__).resolve().parent / "arch9_glyphs.json").read_text(encoding="utf-8"))
         # and the glyphs this module adds, so what it draws reads back
+        import hashlib
+        def learn(ch, rows):
+            key = hashlib.sha1((f"{len(rows)}:" + "/".join(rows)).encode()).hexdigest()[:16]
+            _GLYPHS[key] = "".join(sorted(set(_GLYPHS.get(key, "")) | {ch}))
         for glyphs in EXTRA_GLYPHS.values():
             for ch, rows in glyphs.items():
-                import hashlib
-                key = hashlib.sha1((f"{len(rows)}:" + "/".join(rows)).encode()).hexdigest()[:16]
-                _GLYPHS[key] = "".join(sorted(set(_GLYPHS.get(key, "")) | {ch}))
+                learn(ch, rows)
+        # and the letters with marks it draws from each typeface's own (_with_mark)
+        for style, own in _font_glyphs().items():
+            glyphs = {**own, **EXTRA_GLYPHS.get(style, {})}
+            small = glyphs.get("n") or glyphs.get("a")
+            x_top = next(r for r, row in enumerate(small) if "#" in row) if small else 4
+            for ch in ACCENTED:
+                base, mark = unicodedata.normalize("NFD", ch)
+                rows = _with_mark(glyphs[base], MARKS[mark], base, x_top) if base in glyphs else None
+                if rows:
+                    learn(ch, rows)
     return _GLYPHS
 
 
@@ -365,6 +447,73 @@ EXTRA_GLYPHS = {
     },
 }
 
+# Letters with a mark (Czech, Slovak, German...) are drawn from the font's own
+# base letter, the mark above it: for a small letter in the rows over it with
+# one blank row between, for a capital or a tall letter (l, d) in the two rows
+# its top leaves, touching it, as the 11 rows allow. A caron on d, t, l, L is
+# the apostrophe beside the stem that Czech and Slovak print.
+MARKS = {"́": "acute", "̌": "caron", "̊": "ring", "̈": "dots",
+         "̂": "circumflex"}
+# the ones read back by their pixels (_glyph_table): Czech, Slovak, German; not
+# ĺ, drawn as an l is, like an I, so it would read as Í
+ACCENTED = "áčďéěíňóřšťúůýžÁČĎÉĚÍŇÓŘŠŤÚŮÝŽäöüÄÖÜôľŕĽŔ"
+MARK_PIXELS = {      # (row from the mark's top, column from the letter's middle)
+    "acute": [(0, 1), (1, 0)],
+    "caron": [(0, -1), (0, 1), (1, 0)],
+    "circumflex": [(0, 0), (1, -1), (1, 1)],
+    "dots": [(1, -1), (1, 1)],
+    "ring": [(0, 0), (1, -1), (1, 1), (2, 0)],
+}
+
+
+def _with_mark(rows: list[str], mark: str, base: str, x_top: int) -> list[str]:
+    """`rows` (a glyph, '#' ink) with `mark` above it (MARKS)."""
+    grid = [list(r) for r in rows]
+    height, width = len(grid), len(grid[0])
+    ink = lambda r: [x for x, v in enumerate(grid[r]) if v == "#"]
+    if base in "ij":
+        # dotless first: whatever is drawn above the small letters' top goes
+        for r in range(min(x_top, height)):
+            grid[r] = ["."] * width
+    top = next(r for r in range(height) if ink(r))
+    cols = [x for r in range(top, min(top + 5, height)) for x in ink(r)]
+    if mark == "caron" and base in "dtlL":
+        # the apostrophe: right of the stem, at the top, one blank column after
+        x = max(cols) + 2
+        while width < x + 2:
+            grid = [row + ["."] for row in grid]
+            width += 1
+        for r in (top, top + 1):
+            grid[r][x] = "#"
+        return ["".join(row) for row in grid]
+    centre = round((min(cols) + max(cols)) / 2)
+    pixels = MARK_PIXELS[mark]
+    tall = top < x_top
+    if tall and mark == "acute":
+        # touching the letter, so a column right, clear of an A's apex
+        pixels = [(r, c + 1) for r, c in pixels]
+    rows_needed = 1 + max(r for r, _ in pixels)
+    first = top - rows_needed if tall else top - rows_needed - 1
+    if first < 0:
+        # a three row ring over a capital: its top and sides only
+        pixels = [(r, c) for r, c in pixels if r < rows_needed - 1] if tall else pixels
+        first = max(0, first + 1) if tall else 0
+    if first < 0 or not pixels or first + max(r for r, _ in pixels) >= top:
+        return None           # no room above the letter (a font of 8 rows)
+    left = min(centre + c for _, c in pixels)
+    if left < 0:
+        grid = [["."] * -left + row for row in grid]
+        width -= left
+        centre -= left
+    right = max(centre + c for _, c in pixels)
+    while width < right + 2:
+        grid = [row + ["."] for row in grid]
+        width += 1
+    for r, c in pixels:
+        if 0 <= first + r < height:
+            grid[first + r][centre + c] = "#"
+    return ["".join(row) for row in grid]
+
 
 def _style_of(d, font: int):
     """Which typeface a font set draws: the style whose sample glyphs it
@@ -412,6 +561,10 @@ def _same_style(d, a: int, b: int) -> bool:
     return shared >= 5
 
 
+# bytes -> (marshalled decompiled document, font sets, alphabet), the last few read
+_DOCS: dict = {}
+
+
 class _Doc:
     """A decompiled container and what its sections say."""
 
@@ -419,16 +572,49 @@ class _Doc:
         self.raw = raw
         self.blob = hconfig.split_container(raw)[2]
         self.S = sem.section_offsets(self.blob)
-        self.doc = hconfig.symbolise(hconfig.decompile(raw, "input"))
+        # an operation reads the same bytes several times (activities(),
+        # devices(), its checks); the reading is kept and each _Doc gets its
+        # own copy of it, since operations change their document
+        key = bytes(raw)
+        kept = _DOCS.pop(key, None)
+        if kept is None:
+            doc = hconfig.symbolise(hconfig.decompile(raw, "input"))
+            fonts = renderer.fonts(self.blob, self.S)
+            kept = (marshal.dumps(doc), fonts, config_alphabet(self.blob, fonts))
+        _DOCS[key] = kept
+        while len(_DOCS) > 8:
+            _DOCS.pop(next(iter(_DOCS)))
+        self.doc = marshal.loads(kept[0])
         self.regions = self.doc["blob"]["regions"]
         self.at: dict[int, list[dict]] = {}
         for region in self.regions:
             self.at.setdefault(region["offset"], []).append(region)
-        self.fonts = renderer.fonts(self.blob, self.S)
-        self.alphabet = config_alphabet(self.blob, self.fonts)
+        self.fonts = kept[1]
+        self.alphabet = dict(kept[2])
         self.actions = ir.action_addresses(self.blob, self.S)
         self.n_modes = ir.u24(self.blob, self.S[sem.MODE_SLOT])
         self.n_actions = len(self.actions)
+        # Section 5 with no infrared group or one (a 555 before or after its
+        # first device) is read as plain bytes, the decompiler taking a pointer
+        # table from two entries up; held so, the group's address would not
+        # follow when anything before it moves (a letter added to a font did
+        # it, 2026-10-20). So it is held as the table it is, in every document.
+        if self.S[5] is not None and not any(r["kind"] == "pointer_table" for r in self.at.get(self.S[5], [])):
+            _ir_table(self)
+        # Tables whose count is wider than a byte (the mode table's three, the
+        # fonts', the action lists' and the screen streams' two) are read as a
+        # one byte count and zero bytes after it while the count is under 256.
+        # Held so, the 256th entry cannot be written (the 555's action lists,
+        # 2026-10-20); held at their width, the bytes are the same.
+        for slot, width in ((6, 3), (7, 2), (10, 2), (11, 2)):
+            for r in self.at.get(self.S[slot] if slot < len(self.S) and self.S[slot] is not None else -1, []):
+                if r["kind"] != "pointer_table" or r["count_width"] >= width:
+                    continue
+                header = bytes.fromhex(r.get("header", ""))
+                more = width - r["count_width"]
+                if header[:more] == bytes(more):
+                    r["count_width"] = width
+                    r["header"] = header[more:].hex()
 
     def ins(self, index: int):
         return sem.instructions(self.blob, self.actions[index])
@@ -526,22 +712,50 @@ class _Doc:
             for i, other in enumerate(self.fonts):
                 if i != font and other.height == height and self._has_glyph(i, code) and \
                         _same_style(self, font, i):
+                    # one this operation added is not in the file's bytes yet
+                    if (i, code) in getattr(self, "added_glyphs", {}):
+                        return self.added_glyphs[(i, code)]
                     return ["".join("#" if v == renderer.INK else "." for v in row) for row in other.glyph(code)]
         style = _style_of(self, font)
-        return _font_glyphs().get(style, {}).get(ch) or EXTRA_GLYPHS.get(style, {}).get(ch)
+        return _font_glyphs().get(style, {}).get(ch) or EXTRA_GLYPHS.get(style, {}).get(ch) \
+            or self._accented(font, ch)
 
-    def _ensure_glyphs(self, value: str, font: int) -> None:
+    def _rows_of(self, font: int, ch: str):
+        """`ch` as `font` draws it, or as _glyph_for would add it."""
+        code = next((k for k, v in self.alphabet.items() if v == ch), None)
+        if code is not None and (font, code) in getattr(self, "added_glyphs", {}):
+            return self.added_glyphs[(font, code)]
+        if code is not None and self._has_glyph(font, code):
+            return ["".join("#" if v == renderer.INK else "." for v in row) for row in self.fonts[font].glyph(code)]
+        return self._glyph_for(font, ch)
+
+    def _accented(self, font: int, ch: str):
+        """A letter with a mark (č, é, ů, ä, ô...): the font's own base letter
+        with the mark drawn above it (_with_mark)."""
+        parts = unicodedata.normalize("NFD", ch)
+        if len(parts) != 2 or parts[1] not in MARKS or parts[0] == ch:
+            return None
+        base = self._rows_of(font, parts[0])
+        if base is None:
+            return None
+        # where small letters start: the top of an n (or an a)
+        small = self._rows_of(font, "n") or self._rows_of(font, "a")
+        x_top = next(r for r, row in enumerate(small) if "#" in row) if small else 4
+        return _with_mark(base, MARKS[parts[1]], parts[0], x_top)
+
+    def _ensure_glyphs(self, value: str, font: int, source: dict | None = None) -> None:
         """Give `font` a glyph for each character of `value` it cannot draw yet
-        (_glyph_for): at the character's own code when the configuration has
-        one (the 525's font 0 lacks 5 and ?), else at a new code after the
-        whole alphabet. The new glyphs go in front of section 0."""
+        (_glyph_for, or `source`: character -> rows): at the character's own
+        code when the configuration has one (the 525's font 0 lacks 5 and ?),
+        else at a new code after the whole alphabet. The new glyphs go in front
+        of section 0."""
         if not hasattr(self, "added_glyphs"):
             self.added_glyphs = {}
         for ch in dict.fromkeys(value):
             code = next((k for k, v in self.alphabet.items() if v == ch), None)
             if code is not None and self._has_glyph(font, code):
                 continue
-            rows = self._glyph_for(font, ch)
+            rows = source.get(ch) if source is not None else self._glyph_for(font, ch)
             if rows is None or len(rows) != self.fonts[font].height:
                 continue
             code, region = install_character_glyph(
@@ -808,6 +1022,22 @@ def _blank_devices_page(d: _Doc, template_root: int, rid: str,
     return out
 
 
+def _program_fonts(program: list[dict]) -> dict[int, int]:
+    """The font in force where each band of a program held as regions ends:
+    0 on the 525's and 515's Devices pages, the title's font all the way down
+    on the 555's."""
+    font, band, out = 0, -1, {}
+    for r in program:
+        data = bytes.fromhex("".join(r.get("data", []))) if r["kind"] == "opaque" else b""
+        if data[:1] == b"\x10" and len(data) == 2:
+            font = data[1]
+        elif data[:1] == b"\x16":
+            band = data[1]
+        elif data == b"\x17":
+            out[band] = font
+    return out
+
+
 def _insert_in_program(program: list[dict], per_band: dict[int, list[dict]]) -> None:
     """Insert draws before each band's 0x17 in a program held as regions."""
     band = -1
@@ -874,6 +1104,36 @@ class Placement:
     actions: dict = field(default_factory=dict)
 
 
+def _ir_table(d: _Doc) -> dict:
+    """Section 5, the infrared group table. The decompiler reads a pointer
+    table only from two entries up, so with no group or one (a 555 with no
+    device or its first) section 5 is plain bytes; it becomes the table it is,
+    one byte of count."""
+    S = d.S
+    for r in list(d.at[S[5]]):
+        if r["kind"] != "section" or not r.get("data"):
+            continue
+        raw = bytes.fromhex("".join(r["data"]))
+        if raw[:1] == b"\x00":
+            size, targets = 1, []
+        elif raw[:1] == b"\x01" and len(raw) >= 4:
+            size, targets = 4, [{"to": d.region(ir.u24(raw, 1) - BASE, "ir_group")["id"]}]
+        else:
+            continue
+        rest = raw[size:]
+        r.update(kind="pointer_table", count_width=1, header="", targets=targets, length=size)
+        for key in ("data", "part"):
+            r.pop(key, None)
+        if rest:
+            # what followed the table in the same span stays as it was
+            tail = opaque(f"{r['id']}_after", rest)
+            tail.update(offset=r["offset"] + size, length=len(rest))
+            d.regions.insert(d.index_of(r) + 1, tail)
+            d.at.setdefault(tail["offset"], []).append(tail)
+    return d.region(S[5], "pointer_table")
+
+
+@_needs_counter_font
 def add_device(raw: bytes, name: str, commands: Sequence[Command],
                keys: dict, lcd: Sequence[Sequence], *, on_enter: str | None = None,
                ) -> tuple[bytes, Placement]:
@@ -943,12 +1203,28 @@ def add_device(raw: bytes, name: str, commands: Sequence[Command],
         free = [i for i, tag in enumerate(SOFT) if tag not in used]
         if free:
             corner, target_page = free[0], last
+    else:
+        # one page only (a 555 with its first device): a corner free on the
+        # first page of every Devices screen, before a second page
+        for m in devices:
+            if pages[m][0]["address"] not in {p["address"] for p in first_pages}:
+                first_pages.append(pages[m][0])
+        used = {t for p in first_pages for t, _, _ in cmp.tagged(blob, p["list"])}
+        free = [i for i, tag in enumerate(SOFT) if tag not in used]
+        if free:
+            corner, target_page = free[0], first_pages[0]
+        else:
+            first_pages = []
     new_page = target_page is None
     if new_page:
         corner = 0
     n_pages = len(pages[devices[0]]) + (1 if new_page else 0)
     if n_pages > 6:
         raise ComposeError("Devices would get a seventh page")
+    # the Devices page it lands on: a new last one, the first (empty, or with a
+    # free corner, on every Devices screen), or the last shared one
+    on_page = n_pages - 1 if new_page else 0 if first_pages else \
+        next(k for k, p in enumerate(pages[devices[0]]) if p["address"] == target_page["address"])
 
     # ---- infrared ----
     seeds = []
@@ -1010,7 +1286,9 @@ def add_device(raw: bytes, name: str, commands: Sequence[Command],
     if new_page:
         template_root = pages[devices[0]][0]["program"]
         program = _blank_devices_page(d, template_root, f"dev{group}_devices_screen")
-        _insert_in_program(program, draws)
+        fonts_at = _program_fonts(program)
+        _insert_in_program(program, {band: _in_font_0(regs, fonts_at.get(band, 0), f"dev{group}_new_b{band}")
+                                     for band, regs in draws.items()})
         dlist = fresh_region("tagged_list", f"dev{group}_devices_list", section=8, wide=False,
                              entries=[select_entry])
         drecord = fresh_region("mode_page", f"dev{group}_devices_page",
@@ -1055,14 +1333,7 @@ def add_device(raw: bytes, name: str, commands: Sequence[Command],
         new_devices_regions[:-1] = body
 
     # ---- tables and placement ----
-    empty5 = [r for r in d.at[S[5]] if r["kind"] == "section" and r.get("data") == ["00"]]
-    if empty5:
-        # no infrared group yet (an empty 555): section 5 is a count of 0, read
-        # as plain bytes; it becomes the table it is, one byte of count
-        empty5[0].update(kind="pointer_table", count_width=1, header="", targets=[])
-        for key in ("data", "part"):
-            empty5[0].pop(key, None)
-    d.region(S[5], "pointer_table")["targets"].append({"to": group_region["id"]})
+    _ir_table(d)["targets"].append({"to": group_region["id"]})
     d.region(S[sem.MODE_SLOT], "pointer_table")["targets"].append({"to": entry["id"]})
     d.region(S[sem.ACTION_SLOT], "pointer_table")["targets"].extend(
         {"to": a["id"]} for a in [*actions, selection])
@@ -1084,7 +1355,7 @@ def add_device(raw: bytes, name: str, commands: Sequence[Command],
         region["data"] = hconfig._hex_lines(data)
 
     out = d.compile()
-    placement = Placement(group=group, mode=mode, devices_page=n_pages - 1, corner=corner,
+    placement = Placement(group=group, mode=mode, devices_page=on_page, corner=corner,
                           actions=act)
     _check_add_device(raw, out, name, commands, key_tags, lcd, placement, devices, on_enter)
     return out, placement
@@ -1122,16 +1393,18 @@ def _check_add_device(raw, out, name, commands, key_tags, lcd, placement, device
                 raise AssertionError(f"soft key {item[0]!r}")
     for m in devices:
         pages = after.mode(m)["pages"]
-        if len(pages) != placement.devices_page + 1:
+        had = len(before.mode(m)["pages"])
+        if len(pages) != max(had, placement.devices_page + 1):
             raise AssertionError(f"Devices mode {m} has {len(pages)} pages")
-        got = {t: v for t, op, v in cmp.tagged(a, pages[-1]["list"])}
+        got = {t: v for t, op, v in cmp.tagged(a, pages[placement.devices_page]["list"])}
         sel = got.get(SOFT[placement.corner])
         if sel is None or after.selection_target(sel) != placement.mode:
             raise AssertionError(f"Devices mode {m} does not open the new device")
         if on_enter and after.ins(sel)[2:] != [(0x7F, placement.actions[on_enter])]:
             raise AssertionError("on_enter")
     r0, r1 = render_map(b), render_map(a)
-    devices_keys = {(m, k) for m in devices for k in range(placement.devices_page + 1)}
+    # every Devices page: the one it lands on, and the counters of the others
+    devices_keys = {(m, k) for m in devices for k in range(len(after.mode(m)["pages"]))}
     changed = [k for k in r0 if r0[k][0] != r1[k][0] and k not in devices_keys]
     if changed:
         raise AssertionError(f"screens changed that should not have: {changed}")
@@ -1151,9 +1424,33 @@ def _check_container(out: bytes) -> None:
         raise AssertionError("round trip")
     if int.from_bytes(a[-6:-4], "little") != hconfig.trailer_checksum(a):
         raise AssertionError("trailer checksum")
-    clipped = _band_problems(_Doc(out))
+    # the infrared groups read, and every command sent is one its group has: a
+    # one group table held as bytes once pointed elsewhere after a move
+    # (2026-10-20), which every other check here let through
+    S = sem.section_offsets(a)
+    try:
+        ir.ir_groups(a, S)
+        sem.verify_action_closures(a, S, False)
+    except AssertionError as error:
+        raise AssertionError(f"the infrared groups or what is sent to them: {error}") from None
+    # section 14 reads whole: every item's pointer lands in the file. One bad
+    # record makes the reader give up on all of them, and then no pointer in
+    # section 14 follows the next move
+    items = sum(a[ir.u24(a, S[14] + 1 + 3 * k) - BASE + 1] for k in range(a[S[14]]))
+    found = len(hconfig.arch9_value_map_references(a, pointers))
+    if found < items:
+        raise AssertionError(f"section 14 reads {found} pointers of {items} items")
+    d = _Doc(out)
+    clipped = _band_problems(d)
     if clipped:
         raise AssertionError(f"text drawn in one band and cut off in the next: {clipped[:3]}")
+    # every action list the index names reads as one: bytes a pattern claimed
+    # instead (a 0x16 "reference") are what the next relocation rewrites
+    # (an action list after a mode record, 2026-10-20)
+    listed = {r["offset"] for r in d.regions if r["kind"] == "action_list"}
+    misread = [i for i, at in enumerate(d.actions) if at not in listed]
+    if misread:
+        raise AssertionError(f"action lists not read as action lists: {misread[:5]}")
 
 
 def _band_problems(d: "_Doc") -> list:
@@ -1238,6 +1535,7 @@ def renderer_string(d: _Doc, item: dict) -> bytes:
 
 # ------------------------------------------------------------ rekey_device ---
 
+@_needs_counter_font
 def rekey_device(raw: bytes, mode: int, commands: dict, keys: dict,
                  lcd: Sequence[Sequence] | None = None) -> bytes:
     """Change what a device's keys send, add commands to it, and optionally
@@ -1438,24 +1736,69 @@ def _transition_sites(blob: bytes, S) -> list[tuple[int, int, int]]:
 
 
 def _patch_bytes(d: _Doc, at: int, value: bytes) -> None:
-    holder = [r for r in d.regions if r["offset"] <= at and at + len(value) <= r["offset"] + r["length"]
-              and "data" in r]
-    if len(holder) != 1:
-        raise ComposeError(f"no single data region holds 0x{at:X}")
-    data = bytearray(bytes.fromhex("".join(holder[0]["data"])))
-    data[at - holder[0]["offset"]:at - holder[0]["offset"] + len(value)] = value
-    holder[0]["data"] = hconfig._hex_lines(bytes(data))
+    """Write `value` over the bytes at `at`, in whichever data regions hold
+    them: the decompiler may cut a section 14 key in two, when the pointer
+    after it starts with 0x16 and reads as a reference (2026-10-20)."""
+    for k, byte in enumerate(value):
+        pos = at + k
+        holder = [r for r in d.regions if r["offset"] <= pos < r["offset"] + r["length"] and "data" in r]
+        if len(holder) != 1:
+            raise ComposeError(f"no single data region holds 0x{pos:X}")
+        data = bytearray(bytes.fromhex("".join(holder[0]["data"])))
+        data[pos - holder[0]["offset"]] = byte
+        holder[0]["data"] = hconfig._hex_lines(bytes(data))
 
 
-def _cut_bytes(d: _Doc, at: int, n: int) -> None:
-    """Take n bytes out of the data region that holds them."""
-    holder = [r for r in d.regions if r["offset"] <= at and at + n <= r["offset"] + r["length"] and "data" in r]
-    if len(holder) != 1:
-        raise ComposeError(f"no single data region holds 0x{at:X}")
-    data = bytearray(bytes.fromhex("".join(holder[0]["data"])))
-    del data[at - holder[0]["offset"]:at - holder[0]["offset"] + n]
-    holder[0]["data"] = hconfig._hex_lines(bytes(data))
-    holder[0]["length"] = len(data)
+def _drop_span(d: _Doc, at: int, n: int, gone: set) -> None:
+    """Take bytes [at, at + n) out, however the regions divide them: a region
+    wholly inside goes, a data region running across an end keeps the rest."""
+    end = at + n
+    for r in d.regions:
+        start, stop = r["offset"], r["offset"] + r["length"]
+        if r["length"] == 0 or stop <= at or start >= end or r["id"] in gone:
+            continue
+        if at <= start and stop <= end:
+            gone.add(r["id"])
+            continue
+        if "data" not in r:
+            raise ComposeError(f"a {r['kind']} at 0x{start:X} runs across 0x{at:X}-0x{end:X}")
+        data = bytes.fromhex("".join(r["data"]))
+        keep = data[:max(0, at - start)] + data[min(len(data), end - start):]
+        r["data"] = hconfig._hex_lines(keep)
+        r["length"] = len(keep)
+
+
+def _split_at(d: _Doc, at: int) -> dict:
+    """Make a region boundary at byte `at` and return the region that ends
+    there. A data region running across it is cut in two, and what pointed
+    into its second part points into the new one, at the same byte."""
+    for r in d.regions:
+        if r["offset"] < at < r["offset"] + r["length"]:
+            break
+    else:
+        return next(r for r in d.regions if r["offset"] + r["length"] == at and r["length"] > 0)
+    if "data" not in r:
+        raise ComposeError(f"0x{at:X} falls inside a {r['kind']}, which cannot be cut")
+    data = bytes.fromhex("".join(r["data"]))
+    cut = at - r["offset"]
+    tail = {k: v for k, v in r.items() if k not in ("data", "offset", "length", "id")}
+    tail.update(id=f"{r['id']}_from_{at:x}", offset=at, length=len(data) - cut,
+                data=hconfig._hex_lines(data[cut:]))
+    r["data"] = hconfig._hex_lines(data[:cut])
+    r["length"] = cut
+    d.regions.insert(d.index_of(r) + 1, tail)
+    d.at.setdefault(at, []).append(tail)
+    for other in d.regions:
+        refs = list(other.get("targets") or [])
+        if other.get("back_reference"):
+            refs.append(other["back_reference"])
+        for t in refs:
+            if isinstance(t, dict) and t.get("to") == r["id"] and t.get("delta", 0) >= cut:
+                t["to"] = tail["id"]
+                t["delta"] = t.get("delta", 0) - cut
+                if not t["delta"]:
+                    del t["delta"]
+    return r
 
 
 def _apply_maps(d: _Doc, actions: dict, modes: dict, groups: dict, keep,
@@ -1677,6 +2020,7 @@ def _detach_device(raw: bytes, mode: int) -> tuple[bytes, dict]:
                  "emptied": sorted(emptied), "transitions_neutralised": neutralised}
 
 
+@_needs_counter_font
 def delete_device(raw: bytes, mode: int) -> bytes:
     """Delete a device: its entry and name on every Devices screen (each
     activity's first page too), its mode and pages, its action lists and its
@@ -1818,6 +2162,10 @@ def delete_device(raw: bytes, mode: int) -> bytes:
             twin = d.pool_copy(p["list"])
             plist["entries"] = [e for e in plist["entries"] if e["tag"] not in tags]
             twin["entries"] = [e for e in twin["entries"] if e["tag"] not in tags]
+            if not plist["entries"]:
+                # the last device off the page (a 555 again empty): an empty
+                # list carries the wide header, as the empty 555's does
+                plist["wide"] = twin["wide"] = True
             for tag in tags:
                 corner = SOFT.index(tag)
                 rows = TOP_ROWS if corner < 2 else BOTTOM_ROWS
@@ -1873,7 +2221,7 @@ def delete_device(raw: bytes, mode: int) -> bytes:
     del mt["targets"][mode]
     at_ = d.region(S[sem.ACTION_SLOT], "pointer_table")
     at_["targets"] = [t for i, t in enumerate(at_["targets"]) if i not in doomed]
-    gt = d.region(S[5], "pointer_table")
+    gt = _ir_table(d)
     del gt["targets"][group]
 
     _apply_maps(d, actions, modes, groups, keep=lambda r: r["id"] not in gone)
@@ -2187,6 +2535,61 @@ def device_commands(raw: bytes) -> dict:
     return out
 
 
+def input_variables(raw: bytes) -> list[dict]:
+    """The state variables an activity can set that are not power: a TV's
+    input, say. [{variable, device, values: [{value, label}]}], a value's label
+    being the commands its transitions send, by their names; a variable whose
+    transitions send nothing is left out (the activity state)."""
+    d = _Doc(raw)
+    power = set(power_variables(raw).values())
+    labels = device_commands(raw)
+    by_group = {x.group: device_title(d, x) for x in devices(raw)}
+    s13 = d.S[13]
+    transitions: dict[int, list] = {}
+    for v in range(ir.u16(d.blob, s13)):
+        record = ir.u24(d.blob, s13 + 8 + 3 * v) - BASE
+        for t in range(ir.u16(d.blob, record + 4)):
+            at = record + 7 + 8 * t
+            to = int.from_bytes(d.blob[at + 3:at + 5], "little", signed=True)
+            transitions.setdefault(v, []).append((to, d.blob[at + 7], ir.u16(d.blob, at + 5)))
+
+    def sends(o, x, seen):
+        # what reaching a value sends, through action lists and through the
+        # writes to other variables it makes (a TV input request, 5af)
+        if o == 0x7D:
+            return [(x >> 8, x & 0xFF)]
+        if (o, x) in seen or len(seen) > 64:
+            return []
+        seen.add((o, x))
+        if o == 0x7F:
+            return [s for oo, xx in d.ins(x) for s in sends(oo, xx, seen)]
+        if 0x80 <= o < 0x100 and o != d.cas_op and o - 0x80 not in power:
+            return [s for to, oo, xx in transitions.get(o - 0x80, []) if to == x
+                    for s in sends(oo, xx, seen)]
+        return []
+
+    out = []
+    for v in sorted(transitions):
+        if v in power or 0x80 + v == d.cas_op:
+            continue
+        sent: dict[int, list] = {}
+        for to, o, x in transitions[v]:
+            got = sends(o, x, set())
+            if got:
+                sent.setdefault(to, []).extend(got)
+        if not sent:
+            continue
+        groups = {g for s in sent.values() for g, _ in s}
+        values = []
+        for value in sorted(sent):
+            names = list(dict.fromkeys(labels.get(s, (None, f"command {s[1]}"))[1] for s in sent[value]))
+            values.append({"value": value, "label": " + ".join(names)})
+        device = by_group.get(next(iter(groups)), "?") if len(groups) == 1 else \
+            " / ".join(sorted(by_group.get(g, "?") for g in groups))
+        out.append({"variable": v, "device": device, "values": values})
+    return out
+
+
 def describe_activity(raw: bytes, name: str) -> list:
     """What an activity's start does, as steps a person can read: devices
     switched on and off, commands sent, with their names. Follows the state
@@ -2249,6 +2652,7 @@ def describe_activity(raw: bytes, name: str) -> list:
     return steps
 
 
+@_needs_counter_font
 def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
                  writes: dict | None = None, steps: Sequence = (),
                  show: int | None = None, volume: int | None = None,
@@ -2316,7 +2720,11 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
         return any(op == 0x7E and v == target for _, op, v in cmp.tagged(blob, f["start"]))
 
     title = d.text(name, limit=96)
-    fixed = {"Starting", "Please keep the", "remote pointed at", "your system."}
+    # a Starting screen's lines below the name are Stopping Activity's below
+    # its own first line, in whatever words the configuration has them
+    stop_lines = _screen_lines(d, _stop_mode(d))
+    fixed = {"".join(d.alphabet.get(ch, "?") for ch in codes)
+             for y, codes in stop_lines.items() if y != min(stop_lines)}
 
     def name_replace(kind):
         state = {"done": False}
@@ -2617,7 +3025,9 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
         if page >= 6:
             raise ComposeError("the activity menu would get a seventh page")
         program = _blank_devices_page(d, menu_pages[0]["program"], f"act{value}_menu_screen")
-        _insert_in_program(program, _corner_draws(d, 0, name, f"act{value}_menu"))
+        fonts_at = _program_fonts(program)
+        _insert_in_program(program, {band: _in_font_0(regs, fonts_at.get(band, 0), f"act{value}_new_b{band}")
+                                     for band, regs in _corner_draws(d, 0, name, f"act{value}_menu").items()})
         _insert_in_program(program, {7: [
             opaque(f"act{value}_menu_cf", b"\x10\x04"),
             _draw(35, 56, bytes((_digit(d, page + 1),)), f"act{value}_menu_cc"),
@@ -2721,6 +3131,7 @@ def _drop_corner(d: _Doc, page: dict, corner: int, gone: set) -> None:
                 gone.update(r["id"] for r in d.at.get(item["offset"] + 3, []) if r["kind"] == "glyph_string")
 
 
+@_needs_counter_font
 def delete_activity(raw: bytes, name: str, value: int | None = None) -> bytes:
     """Delete an activity: its menu entry and name, key set, start, re-pick and
     menu lists and whatever only they reach, the screens only it shows, and its
@@ -2755,6 +3166,15 @@ def delete_activity(raw: bytes, name: str, value: int | None = None) -> bytes:
     seeds = {menu_select, act.start} | ({act.repick} if act.repick is not None else set())
     if twin_select is not None and twin_select["opcode"] == 0x7F:
         seeds.add(twin_select["operand"])
+    # its Devices screen, which a Logitech activity has of its own (5ae) and a
+    # composed one shares with the activity it was built like: what 0xAF enters
+    # in its key set goes when nothing else enters it, or the screen is left
+    # behind, still sharing the later Devices pages, and the next device added
+    # to one of them changes it (found 2026-10-20: an edited Watch TV +, then
+    # deleted, then a device added)
+    devices_entry = set_entries.get(0xAF)
+    if devices_entry is not None and devices_entry[0] == 0x7F:
+        seeds.add(devices_entry[1])
     # its Help: the screens its key set enters directly (0xAE), and every
     # screen and list those reach, up to a device's, an activity's or the
     # system's own (FORMAT 5am); what something else also reaches stays
@@ -2904,15 +3324,45 @@ def delete_activity(raw: bytes, name: str, value: int | None = None) -> bytes:
 
     # ---- regions that go ----
     gone = set()
+    # a page another screen that stays also shows (the later Devices pages are
+    # one record for every Devices screen) stays with it
+    kept_pages = {p["address"] for m in range(d.n_modes) if m not in doomed_modes for p in d.mode(m)["pages"]}
     for m in doomed_modes:
         f = d.mode(m)
         gone.add(d.region(f["entry"], "record_header")["id"])
         gone.add(d.region(f["start"], "tagged_list")["id"])
         for p in f["pages"]:
+            if p["address"] in kept_pages:
+                continue
             gone.add(d.region(p["address"], "mode_page")["id"])
             gone.add(d.region(p["list"], "tagged_list")["id"])
             gone.add(d.pool_copy(p["list"])["id"])
             _drop_program(d, p["program"], gone)
+    # The pool holds one copy per page in the order the mode table first shows
+    # each page (hconfig.arch9_record_body_regions). A shared page first shown
+    # by a screen that goes is first shown later now, so its copy moves to
+    # follow the copy of the page that comes before it in the new order.
+    def first_shown(modes_):
+        out = []
+        for m in modes_:
+            for p in d.mode(m)["pages"]:
+                if p["address"] not in out:
+                    out.append(p["address"])
+        return out
+    old_order = first_shown(range(d.n_modes))
+    new_order = first_shown(keep_modes)
+    lists_of = {p["address"]: p["list"] for m in range(d.n_modes) for p in d.mode(m)["pages"]}
+    for at_k, page_at in enumerate(new_order):
+        if at_k == 0 or old_order.index(page_at) == 0:
+            continue
+        before_now = new_order[at_k - 1]
+        old_before = [x for x in old_order[:old_order.index(page_at)] if x in new_order]
+        if old_before and old_before[-1] == before_now:
+            continue
+        copy_region = d.pool_copy(lists_of[page_at])
+        after = d.pool_copy(lists_of[before_now])
+        d.regions.remove(copy_region)
+        d.regions.insert(d.index_of(after) + 1, copy_region)
     for r in d.regions:
         if r["kind"] == "action_list" and r.get("section") != 8:
             idx = next((i for i, a in enumerate(d.actions) if a == r["offset"]), None)
@@ -2929,25 +3379,26 @@ def delete_activity(raw: bytes, name: str, value: int | None = None) -> bytes:
     for r_i in sorted({r for r, *_ in items}):
         rec = ir.u24(blob, s14 + 1 + 3 * r_i) - BASE
         mine = [(key, at) for rr, key, at, _ in items if rr == r_i]
+        # the keys above v one lower first: taking an item out shortens the
+        # regions that hold the ones after it
+        for key, at in mine:
+            if key > v and key in values:
+                _patch_bytes(d, at, values[key].to_bytes(2, "little"))
+        # an item is five bytes, a u16 key and a u24 pointer, however the
+        # decompiler divided them into regions
         if r_i in emptied:
-            gone.add(next(r for r in d.at[rec + 4] if r["kind"] == "raw_pointer")["id"])
             _patch_bytes(d, rec + 1, bytes((0,)))
-            _cut_bytes(d, rec + 2, 2)
+            _drop_span(d, rec + 2, 5, gone)
         elif r_i in shifted:
             _, at1, _ = shifted[r_i]
             first = next(r for r in d.at[rec + 4] if r["kind"] == "raw_pointer")
             first["targets"] = copy.deepcopy(next(r for r in d.at[at1 + 2] if r["kind"] == "raw_pointer")["targets"])
-            gone.add(next(r for r in d.at[at1] if r["kind"] == "opaque")["id"])
-            gone.add(next(r for r in d.at[at1 + 2] if r["kind"] == "raw_pointer")["id"])
             _patch_bytes(d, rec + 1, bytes((blob[rec + 1] - 1,)))
+            _drop_span(d, at1, 5, gone)
         elif r_i not in kept_first and any(key == v for key, _ in mine):
             at = next(at for key, at in mine if key == v)
-            gone.add(next(r for r in d.at[at] if r["kind"] == "opaque")["id"])
-            gone.add(next(r for r in d.at[at + 2] if r["kind"] == "raw_pointer")["id"])
             _patch_bytes(d, rec + 1, bytes((blob[rec + 1] - 1,)))
-        for key, at in mine:
-            if key > v and key in values:
-                _patch_bytes(d, at, values[key].to_bytes(2, "little"))
+            _drop_span(d, at, 5, gone)
     # CurrentActivityState: max one lower, idle renumbered with the rest
     new_idle = values.get(idle, idle) if idle != v else None
     if new_idle is None:
@@ -3079,6 +3530,7 @@ def activity_settings(raw: bytes, name: str) -> dict:
             "unread": unread, "page": act.page, "corner": act.corner}
 
 
+@_needs_counter_font
 def edit_activity(raw: bytes, name: str, new_name: str, like: str, on: Sequence[str],
                   writes: dict | None = None, steps: Sequence = (),
                   show: int | None = None, volume: int | None = None,
@@ -3137,11 +3589,14 @@ def _apply_corner_layout(d: _Doc, modes: list, layout: list, prefix: str) -> set
 
     def program_for(k, rid):
         program = _blank_devices_page(d, template, rid)
-        draws: dict = {}
+        fonts_at = _program_fonts(program)
+        names: dict = {}
         for c, item in enumerate(layout[k]):
             if item is not None:
                 for band, regs in _corner_draws(d, c, item[1], f"{rid}_c{c}").items():
-                    draws.setdefault(band, []).extend(regs)
+                    names.setdefault(band, []).extend(regs)
+        draws = {band: _in_font_0(regs, fonts_at.get(band, 0), f"{rid}_b{band}")
+                 for band, regs in names.items()}
         if n > 1:
             draws.setdefault(7, []).extend([
                 opaque(f"{rid}_cf", b"\x10\x04"),
@@ -3398,7 +3853,12 @@ def add_power(raw: bytes, mode: int, on: int, off: int | None = None,
     table["header"] = header.hex()
     table["targets"].insert(var, {"to": rec_region["id"]})
     last = ir.u24(blob, s13 + 8 + 3 * (narrow - 1)) - BASE
-    holder = next(r for r in d.regions if r["offset"] <= last < r["offset"] + r["length"] and "data" in r)
+    # right after the last one byte variable's record: 7 bytes and 8 per
+    # transition. The bytes holding it may run on into what follows (the
+    # start of section 14 on a 515, 2026-10-20), so the new record goes in
+    # exactly there, not after the whole region
+    end = last + 7 + 8 * ir.u16(blob, last + 4)
+    holder = _split_at(d, end)
     d.regions.insert(d.index_of(holder) + 1, rec_region)
 
     # ---- its name, as Logitech's compiler names a power variable: the remote
@@ -3450,9 +3910,11 @@ def add_power(raw: bytes, mode: int, on: int, off: int | None = None,
             raise AssertionError(f"{act.name} does not switch {dev.name} off")
     if render_map(blob) != render_map(a.blob):
         raise AssertionError("a screen changed")
+    _check_container(out)
     return out
 
 
+@_needs_counter_font
 def place_device(raw: bytes, mode: int, page: int, corner: int) -> bytes:
     """Put a device on Devices page `page` (0 based) in `corner` (index into
     SOFT). A device already there takes the moved one's place; `page` one past
@@ -3488,6 +3950,7 @@ def place_device(raw: bytes, mode: int, page: int, corner: int) -> bytes:
     return out
 
 
+@_needs_counter_font
 def place_activity(raw: bytes, name: str, page: int, corner: int) -> bytes:
     """Put an activity on menu page `page` in `corner`; one already there takes
     its place, `page` one past the last opens a new page."""
@@ -3517,6 +3980,7 @@ def place_activity(raw: bytes, name: str, page: int, corner: int) -> bytes:
     return out
 
 
+@_needs_counter_font
 def rename_device(raw: bytes, mode: int, name: str) -> bytes:
     """Give a device a new name: in its corner of every Devices screen, as
     the title of each of its own pages and in every Help question that names
@@ -3551,27 +4015,27 @@ def rename_device(raw: bytes, mode: int, name: str) -> bytes:
         record["targets"][1] = {"to": program[0]["id"]}
     # Help's questions name it by its whole title ("Is the TV Panasonic on?"),
     # Logitech's own and composed ones alike: the new name, wrapped again
-    said = re.compile(rf"\bthe {re.escape(old_title)}(?=[ ?]|$)")
+    said = re.compile(rf"(?<!\w){re.escape(old_title)}(?!\w)")
     most_ys = None
     asked = {}
     for m in range(d.n_modes):
         question = _help_text(d, m)
         if question is None or not said.search(question[2]):
             continue
-        ys, font, text, _ = question
+        ys, font, text, _, row = question
         most_ys = most_ys or _question_template(d)[1]
         # a longer name may need the lines the richest Yes/No screen has
         if len(most_ys) > len(ys) and ys == most_ys[:len(ys)]:
             ys = most_ys
-        lines = _wrap(d, said.sub(f"the {name.strip()}", text), font, len(ys))
+        lines = _wrap(d, said.sub(name.strip(), text), font, len(ys))
         by_y = dict(zip(ys, lines))
         asked[m] = by_y
         p = d.mode(m)["pages"][0]
         record = d.region(p["address"], "mode_page")
         centred = lambda y, by_y=by_y, font=font: ((96 - d.width(by_y[y], font)) // 2, y, by_y[y], font)
 
-        def replace(x, y, t, by_y=by_y, centred=centred):
-            if t in ("Yes", "No"):
+        def replace(x, y, t, by_y=by_y, centred=centred, row=row):
+            if y == row:
                 return None
             return centred(y) if y in by_y else False
         program = _clone_program(d, p["program"], f"rename{mode}_help{m}", replace)
@@ -3626,6 +4090,336 @@ def rename_device(raw: bytes, mode: int, name: str) -> bytes:
     return out
 
 
+# ------------------------------------------------------------ texts on screens ---
+# Every text a screen draws that no other form edits: messages (batteries,
+# Stopping Activity, the firmware's own screens), Starting screens, Help's
+# questions and its Yes and No, and the titles of the Devices screens and the
+# activity menu. Device and activity names, soft key labels and page counters
+# have forms of their own and are left alone. A text is edited once for every
+# screen that draws it the same way.
+
+def _screen_parts(d: _Doc, m: int, k: int, titled: set) -> dict[str, list[tuple]]:
+    """The editable texts of page k of mode m, by part: "body" (a message, or a
+    Help question), "soft" (Help's two labels, left to right) or "title" (of a
+    Devices screen or the menu). Each a list of (y, x, font, codes), one per
+    draw, band copies once. Pages with soft key corners give their title at
+    most, and only when they are in `titled`."""
+    page = d.mode(m)["pages"][k]
+    tags = {t for t, _, _ in cmp.tagged(d.blob, page["list"])}
+    is_help = tags == {HELP_YES, HELP_NO}
+    corners = bool(tags & set(SOFT)) and not is_help
+    font, items = 0, {}
+    for it in sem.screen_program_path(d.blob, page["program"]):
+        if it["opcode"] == 0x10:
+            font = it["operands"][0]
+        elif it["opcode"] in (4, 5) and font != COUNTER_FONT:
+            x, y = it["operands"][0], it["operands"][1]
+            codes = bytes(renderer_string(d, it))
+            if codes and y < 64:
+                items.setdefault((y, x), (y, x, font, codes))
+    lines = sorted(items.values())
+    if corners:
+        top = [line for line in lines if line[0] == 0]
+        return {"title": top} if m in titled and len(top) == 1 else {}
+    if not lines:
+        return {}
+    if is_help:
+        row = max(line[0] for line in lines)
+        soft = [line for line in lines if line[0] == row]
+        if row >= SOFT_ROW and len(soft) == 2:
+            return {"body": [line for line in lines if line[0] != row],
+                    "soft": sorted(soft, key=lambda line: line[1])}
+    return {"body": lines}
+
+
+def _titled(d: _Doc) -> set:
+    titled = set(d.devices_modes())
+    try:
+        titled.add(_menu_mode(d))
+    except ComposeError:
+        pass
+    return titled
+
+
+def _is_help(d: _Doc, m: int) -> bool:
+    return len(d.mode(m)["pages"]) == 1 and _help_text(d, m) is not None
+
+
+def _reference_texts(reference: bytes | None) -> dict:
+    """What Logitech's English says, read off `reference` (the public 525
+    sample): its firmware screens by mode, Stopping Activity, Yes and No, the
+    Devices and menu titles."""
+    if reference is None:
+        return {}
+    d = _Doc(reference)
+    spell = lambda codes: "".join(d.alphabet.get(ch, "?") for ch in codes)
+    out = {"modes": {}}
+    for m in range(min(d.n_modes, FIRMWARE_MODES)):
+        body = _screen_parts(d, m, 0, set()).get("body")
+        if body:
+            out["modes"][m] = [(y, spell(c)) for y, _, _, c in body]
+    out["stop"] = [spell(c) for _, _, _, c in _screen_parts(d, _stop_mode(d), 0, set())["body"]]
+    for m in range(d.n_modes):
+        if _is_help(d, m):
+            out["soft"] = [spell(c) for _, _, _, c in _screen_parts(d, m, 0, set())["soft"]]
+            break
+    titled = _titled(d)
+    out["devices"] = spell(_screen_parts(d, d.idle_devices_mode(), 0, titled)["title"][0][3])
+    out["menu"] = spell(_screen_parts(d, _menu_mode(d), 0, titled)["title"][0][3])
+    return out
+
+
+# the screens a configuration starts with that are the firmware's own
+# vocabulary (FORMAT 5x): the same mode numbers in every arch 9 config read
+FIRMWARE_MODES = 42
+
+
+def _default_text(d: _Doc, part: str, text: str, modes: list, ref: dict, starts: dict) -> str | None:
+    """Logitech's English for a text, or None when it is not known."""
+    if part == "soft":
+        return "\n".join(ref["soft"]) if "soft" in ref else None
+    if part == "title":
+        if d.idle_devices_mode() in modes or set(modes) & set(d.devices_modes()):
+            return ref.get("devices")
+        return ref.get("menu")
+    if any(_is_help(d, m) for m in modes):
+        # a question in one of the sentences in force, said as Logitech would
+        for key in ("fix", "is_on", "now_on", "is_off", "now_off", "is_input", "now_input"):
+            pattern = re.escape(_phrases[key]).replace(r"\{device\}", "(?P<device>.+)") \
+                                                 .replace(r"\{input\}", "(?P<input>.+)")
+            hit = re.fullmatch(pattern, text)
+            if hit:
+                return PHRASES[key].format(**hit.groupdict())
+        return None
+    lines = text.split("\n")
+    try:
+        stop = _stop_mode(d)
+    except ComposeError:
+        stop = None
+    if stop in modes and "stop" in ref:
+        return "\n".join(ref["stop"])
+    start = next((m for m in modes if m in starts), None)
+    if start is not None and "stop" in ref:
+        # "Starting", the name as drawn, then what Stopping Activity says below its own first line
+        rest = ref["stop"][1:]
+        if len(lines) == 2 + len(rest):
+            return "\n".join([PHRASES["starting"], lines[1], *rest])
+        return None
+    for m in modes:
+        theirs = ref.get("modes", {}).get(m)
+        # the same screen if its lines sit where these do
+        if theirs and [y for y, _ in theirs] == [y for y, _, _, _ in _screen_parts(d, m, 0, set()).get("body", [])]:
+            return "\n".join(t for _, t in theirs)
+    return None
+
+
+def screen_texts(raw: bytes, reference: bytes | None = None) -> list[dict]:
+    """The editable texts, each once however many screens draw it the same:
+    [{part, text, screens: [[mode, page]], group: "activity" | "device" |
+    "common", owner: its name, kind, default: Logitech's English or None}].
+    A Help question is one text, wrapped on its screen; anything else is its
+    lines, one per line of the screen."""
+    d = _Doc(raw)
+    spell = lambda codes: "".join(d.alphabet.get(ch, "?") for ch in codes)
+    titled = _titled(d)
+    starts = {a.start_mode: a.name for a in activities(raw)}
+    devs = devices(raw)
+    names = sorted({device_title(d, x): device_title(d, x) for x in devs}.items(), key=lambda kv: -len(kv[0]))
+    ref = _reference_texts(reference)
+    found: dict = {}
+    for m in range(d.n_modes):
+        help_screen = _is_help(d, m)
+        for k in range(len(d.mode(m)["pages"])):
+            for part, lines in _screen_parts(d, m, k, titled).items():
+                if part == "body" and help_screen:
+                    text = " ".join(spell(c) for _, _, _, c in lines)
+                else:
+                    text = "\n".join(spell(c) for _, _, _, c in lines)
+                entry = found.setdefault((part, help_screen, text), {"part": part, "text": text, "screens": []})
+                if [m, k] not in entry["screens"]:
+                    entry["screens"].append([m, k])
+    out = []
+    for (part, help_screen, text), entry in found.items():
+        modes = [m for m, _ in entry["screens"]]
+        start = next((starts[m] for m in modes if m in starts), None)
+        said = next((name for title, name in names
+                     if re.search(rf"(?<!\w){re.escape(title)}(?!\w)", text)), None) if part == "body" else None
+        if start is not None:
+            group, owner, kind = "activity", start, "Starting screen"
+        elif said is not None:
+            group, owner, kind = "device", said, "Help question"
+        else:
+            group, owner = "common", ""
+            kind = {"soft": "Help's Yes and No", "title": "title"}.get(part) or \
+                ("Help question" if help_screen else "message")
+        entry.update(group=group, owner=owner, kind=kind,
+                     default=_default_text(d, part, text, modes, ref, starts))
+        out.append(entry)
+    order = {"activity": 0, "device": 1, "common": 2}
+    out.sort(key=lambda e: (order[e["group"]], e["owner"], min(e["screens"])))
+    return out
+
+
+def _placed(d: _Doc, codes: bytes, font: int, old: tuple) -> int:
+    """Where a line goes that replaces `old` (y, x, font, codes): as the old
+    one was aligned, at the left, the right, the middle of the screen, or
+    around the same centre."""
+    _, x, f, c = old
+    w_old, w = d.width(c, f), d.width(codes, font)
+    if x <= 1:
+        return x
+    if x + w_old >= 95:
+        return max(0, 96 - w)
+    if abs(x + w_old / 2 - 48) <= 2:
+        return max(0, (96 - w) // 2)
+    return min(max(0, round(x + w_old / 2 - w / 2)), max(0, 96 - w))
+
+
+@_needs_counter_font
+def set_screen_text(raw: bytes, screens: Sequence, part: str, text: str) -> bytes:
+    """Give every screen in `screens` ([mode, page]) the text `text` in its
+    `part` (screen_texts): a Help question wrapped to its screen's lines (a
+    longer one may take the lines the richest Yes/No screen has), Yes and No
+    as two lines, a title as one, a message line by line. Each line keeps its
+    font and its alignment; letters a font lacks are added to it."""
+    d = _Doc(raw)
+    titled = _titled(d)
+    screens = [tuple(int(v) for v in s) for s in screens]
+    if not screens:
+        raise ComposeError("no screen to change")
+    if part not in ("body", "soft", "title"):
+        raise ComposeError(f"no part {part!r}")
+    roots: dict[int, list] = {}
+    for m, k in screens:
+        if not 0 <= m < d.n_modes or not 0 <= k < len(d.mode(m)["pages"]):
+            raise ComposeError(f"no page {k + 1} of screen {m}")
+        if part not in _screen_parts(d, m, k, titled):
+            raise ComposeError(f"screen {m} has no {part} to edit")
+        roots.setdefault(d.mode(m)["pages"][k]["program"], []).append((m, k))
+    # every page that draws one of these programs changes with it
+    affected = {(m, k) for m in range(d.n_modes) for k, p in enumerate(d.mode(m)["pages"]) if p["program"] in roots}
+
+    gone: set = set()
+    expected: dict = {}
+    for root, pages in roots.items():
+        m, k = pages[0]
+        old = _screen_parts(d, m, k, titled)[part]
+        help_screen = part == "body" and _is_help(d, m)
+        new: dict = {}       # (y, x) -> (x, y, codes, font) or False
+        extra: list = []     # lines the screen did not have: (x, y, codes, font)
+        if help_screen:
+            words = " ".join(text.split())
+            if not words:
+                raise ComposeError("a Help question cannot be empty")
+            font = old[0][2]
+            ys = [line[0] for line in old]
+            most = _question_template(d)[1]
+            needed = len(_wrap(d, words, font, 99))
+            # a longer question may take the lines the richest Yes/No screen has
+            if needed > len(ys) and len(most) > len(ys) and ys == most[:len(ys)]:
+                ys = most
+            if needed > len(ys):
+                raise ComposeError(f"{words!r} needs {needed} lines; this screen has {len(ys)}")
+            wrapped = _wrap(d, words, font, len(ys))
+            if any(d.width(d.text(w, font, limit=None), font) > 94 for w in words.split()):
+                raise ComposeError(f"a word of {words!r} is wider than the screen")
+            for i, y in enumerate(ys):
+                codes = wrapped[i] if i < len(wrapped) else None
+                at = next((line for line in old if line[0] == y), None)
+                if codes is None:
+                    if at is not None:
+                        new[(y, at[1])] = False
+                    continue
+                place = ((96 - d.width(codes, font)) // 2, y, codes, font)
+                if at is None:
+                    extra.append(place)
+                else:
+                    new[(y, at[1])] = place
+            expected[root] = [w for w in wrapped]
+        else:
+            lines = text.split("\n")
+            if part == "soft" and len(lines) != 2:
+                raise ComposeError("Yes and No are two lines, left then right")
+            if part == "title" and len(lines) != 1:
+                raise ComposeError("a title is one line")
+            if len(lines) > len(old):
+                raise ComposeError(f"this screen has {len(old)} line{'s' if len(old) > 1 else ''} of text, "
+                                   f"not {len(lines)}")
+            want = []
+            for i, line in enumerate(old):
+                value = lines[i].strip() if i < len(lines) else ""
+                if not value:
+                    if part != "body":
+                        raise ComposeError("Yes, No and a title cannot be empty")
+                    new[(line[0], line[1])] = False
+                    continue
+                font = line[2]
+                try:
+                    codes = d.text(value, font, limit=None)
+                    width = d.width(codes, font)
+                except ComposeError:
+                    # a font whose typeface is not known cannot be given the
+                    # letters (the 555's menu title is in a font of ten);
+                    # font 0 is the one letters are added to
+                    font = 0
+                    codes = d.text(value, font, limit=None)
+                    width = d.width(codes, font)
+                if width > 96:
+                    raise ComposeError(f"line {i + 1}, {value!r}, is {width} pixels; the screen is 96")
+                new[(line[0], line[1])] = (_placed(d, codes, font, line), line[0], codes, font)
+                want.append(codes)
+            expected[root] = want
+
+        def replace(x, y, t, new=new):
+            return new.get((y, x))
+        rid = f"text_m{m}_p{k}_{part}"
+        program = _clone_program(d, root, rid, replace)
+        if extra:
+            fonts_at = _fonts_at_band_ends(d, root)
+            per_band: dict = {}
+            for x, y, codes, font in extra:
+                for band in _bands(y, d.fonts[font].height):
+                    b = f"{rid}_y{y}_b{band}"
+                    per_band.setdefault(band, []).extend(
+                        [opaque(f"{b}_f", bytes((0x10, font))), _draw(x, y, codes, b),
+                         opaque(f"{b}_fb", bytes((0x10, fonts_at[band])))])
+            _insert_in_program(program, per_band)
+        first_item = sem.screen_program_path(d.blob, root)[0]
+        anchor = next(r for r in d.at[first_item["offset"]] if r["kind"] != "section")
+        i = d.index_of(anchor)
+        d.regions[i:i] = program
+        _drop_program(d, root, gone)
+        for mm, kk in affected:
+            p = d.mode(mm)["pages"][kk]
+            if p["program"] == root:
+                d.region(p["address"], "mode_page")["targets"][1] = {"to": program[0]["id"]}
+    _keep_shared_strings(d, gone)
+    d.regions[:] = [r for r in d.regions if r["id"] not in gone]
+    dangling = [(r["id"], t["to"]) for r in d.regions for t in (r.get("targets") or []) if t and t["to"] in gone]
+    if dangling:
+        raise ComposeError(f"still referenced after the change: {dangling[:3]}")
+    out = d.compile()
+
+    # ---- checks ----
+    after = _Doc(out)
+    for m, k in affected:
+        root = next(r for r, pages in roots.items() if d.mode(m)["pages"][k]["program"] == r)
+        got = [c for _, _, _, c in _screen_parts(after, m, k, _titled(after)).get(part, [])]
+        if got != [bytes(c) for c in expected[root]]:
+            raise AssertionError(f"screen {m} page {k + 1} reads {got}")
+    if any(d.ins(i) != after.ins(i) for i in range(d.n_actions)) or after.n_actions != d.n_actions:
+        raise AssertionError("an action list changed")
+    if [(a.name, a.page, a.corner) for a in activities(out)] != [(a.name, a.page, a.corner) for a in activities(raw)] \
+            or [(x.name, x.page, x.corner) for x in devices(out)] != [(x.name, x.page, x.corner) for x in devices(raw)]:
+        raise AssertionError("a device or an activity changed")
+    r0, r1 = render_map(d.blob), render_map(after.blob)
+    changed = [key for key in r0 if key not in affected and r0[key][0] != r1.get(key, (None,))[0]]
+    if changed:
+        raise AssertionError(f"screens changed that should not have: {changed}")
+    _check_container(out)
+    return out
+
+
 # ----------------------------------------------------- an activity from nothing ---
 # A configuration with no activity (an empty 555, or a 525 whose activities were
 # all deleted) has nothing to build one like. What a first one needs is read off
@@ -3673,7 +4467,46 @@ def _copy_mode(d: _Doc, old: int, prefix: str, replace=None, entries=None, page_
 
 HELP_YES, HELP_NO = 0x9F, 0x9E          # the bottom soft keys under "Yes" and "No"
 HELP_ENTRY = 0x06                       # the event a screen gets when it is shown
-FIX_TEXT = "Did that fix the problem?"
+
+# The sentences a composed screen is written in, as Logitech's English has
+# them. set_phrases() replaces them (the page keeps a person's own wording), so
+# a new activity speaks the language its configuration was given; {device} is
+# a device's whole title, {input} the input command's label.
+PHRASES = {
+    "starting": "Starting",
+    "fix": "Did that fix the problem?",
+    "is_on": "Is the {device} on?",
+    "now_on": "Now is the {device} on?",
+    "is_off": "Is the {device} off?",
+    "now_off": "Now is the {device} off?",
+    "is_input": "Is the {device} on {input}?",
+    "now_input": "Now is the {device} on {input}?",
+}
+_phrases = dict(PHRASES)
+
+
+def set_phrases(phrases: dict | None) -> dict:
+    """Use `phrases` (key -> sentence) for screens composed from now on; keys
+    left out or empty keep Logitech's. Returns the sentences in force."""
+    new = dict(PHRASES)
+    for key, text in (phrases or {}).items():
+        if key not in PHRASES:
+            raise ComposeError(f"no sentence called {key!r}")
+        text = str(text).strip()
+        if text:
+            try:
+                text.format(device="x", input="y")
+            except (KeyError, IndexError, ValueError):
+                raise ComposeError(f"{key}: only {{device}} and {{input}} can be filled in") from None
+            new[key] = text
+    # all or nothing: a refused one leaves the sentences as they were
+    _phrases.clear()
+    _phrases.update(new)
+    return dict(_phrases)
+
+
+def phrase(key: str, **fill) -> str:
+    return _phrases[key].format(**fill)
 
 
 def _question_template(d: _Doc):
@@ -3689,31 +4522,51 @@ def _question_template(d: _Doc):
     return best
 
 
+def _screen_lines(d: _Doc, mode: int) -> dict[int, bytes]:
+    """A one page screen's text as {y: codes}, the first string drawn at each y."""
+    lines: dict[int, bytes] = {}
+    for it in sem.screen_program_path(d.blob, d.mode(mode)["pages"][0]["program"]):
+        if it["opcode"] in (4, 5):
+            lines.setdefault(it["operands"][1], bytes(renderer_string(d, it)))
+    return lines
+
+
+SOFT_ROW = 45   # the soft key labels: y 49 on the 525 and 555, 50 on the 515
+
+
 def _help_text(d: _Doc, m: int):
     """Mode m as a Help Yes/No screen: (line ys, their font, the question as
-    one text, {y: codes}), or None when it is not one."""
+    one text, {y: codes}, the y of the Yes and No labels), or None when it is
+    not one. Known by its shape, not its words, so it survives a translation:
+    one page whose soft keys are Yes and No and nothing else, their two labels
+    in the soft key row, the question above them in one font."""
     f = d.mode(m)
     if len(f["pages"]) != 1:
         return None
     tags = {t for t, _, _ in cmp.tagged(d.blob, f["pages"][0]["list"])}
-    if not {HELP_YES, HELP_NO} <= tags:
+    if tags != {HELP_YES, HELP_NO}:
         return None
-    font, lines, fonts, words = 0, {}, {}, []
+    font, items = 0, []
     for it in sem.screen_program_path(d.blob, f["pages"][0]["program"]):
         if it["opcode"] == 0x10:
             font = it["operands"][0]
         elif it["opcode"] in (4, 5):
-            codes = bytes(renderer_string(d, it))
-            text = "".join(d.alphabet.get(ch, "?") for ch in codes)
-            words.append(text)
-            if text not in ("Yes", "No"):
-                lines.setdefault(it["operands"][1], codes)
-                fonts.setdefault(it["operands"][1], font)
-    if words[-2:] != ["Yes", "No"] or not lines or len(set(fonts.values())) != 1:
+            items.append((it["operands"][1], it["operands"][0], font, bytes(renderer_string(d, it))))
+    if not items:
+        return None
+    row = max(y for y, _, _, _ in items)
+    if row < SOFT_ROW or len({x for y, x, _, _ in items if y == row}) != 2:
+        return None
+    lines, fonts = {}, {}
+    for y, _, fnt, codes in items:
+        if y != row:
+            lines.setdefault(y, codes)
+            fonts.setdefault(y, fnt)
+    if not lines or len(set(fonts.values())) != 1:
         return None
     ys = sorted(lines)
     text = " ".join("".join(d.alphabet.get(ch, "?") for ch in lines[y]) for y in ys)
-    return ys, fonts[ys[0]], text, lines
+    return ys, fonts[ys[0]], text, lines, row
 
 
 def _wrap(d: _Doc, text: str, font: int, lines: int) -> list[bytes]:
@@ -3758,7 +4611,7 @@ def _help_tree(d: _Doc, prefix: str, work: int, questions: list, first_mode: int
         by_y = dict(zip(ys, lines))
 
         def replace(x, y, t):
-            if t in ("Yes", "No"):
+            if y >= SOFT_ROW:
                 return None
             if y not in by_y:
                 return False
@@ -3772,12 +4625,12 @@ def _help_tree(d: _Doc, prefix: str, work: int, questions: list, first_mode: int
         lists.extend(ls)
         copies.extend(cs)
 
-    screen(fix, FIX_TEXT, (0x7E, work), (0x7E, q[0] if n else work), everything or None)
+    screen(fix, phrase("fix"), (0x7E, work), (0x7E, q[0] if n else work), everything or None)
     for i, (is_text, now_text, sends) in enumerate(questions):
         again = lambda nxt, sends=sends: (0x7F, make_list([*sends, (0x7E, nxt)]))
         screen(q[i], is_text, (0x7E, after(i)), again(now[i]), sends)
         screen(now[i], now_text, (0x7E, fixed[i]), again(now[i]))
-        screen(fixed[i], FIX_TEXT, (0x7E, work), (0x7E, after(i)))
+        screen(fixed[i], phrase("fix"), (0x7E, work), (0x7E, after(i)))
     return fix, regions, lists, copies
 
 
@@ -3814,7 +4667,7 @@ def _help_questions(d: _Doc, raw: bytes, on: Sequence[str], steps: Sequence,
             if (frm, to) == (0, 1):
                 send = (d.blob[at + 7], ir.u16(d.blob, at + 5))
                 shown = full[name]
-                out.append((f"Is the {shown} on?", f"Now is the {shown} on?", [send]))
+                out.append((phrase("is_on", device=shown), phrase("now_on", device=shown), [send]))
     power_vars = set(power.values())
     for var, value in sorted((writes or {}).items()):
         if var in power_vars:
@@ -3850,7 +4703,7 @@ def _help_questions(d: _Doc, raw: bytes, on: Sequence[str], steps: Sequence,
             g = first >> 8
             delays = [x & 0xFF for i in range(d.n_actions) for o, x in d.ins(i) if o == 0x7C and x >> 8 == g] or [1]
             again = [(0x7D, first), (0x7C, g << 8 | max(set(delays), key=delays.count))]
-            out.append((f"Is the {dev} on {label}?", f"Now is the {dev} on {label}?", again))
+            out.append((phrase("is_input", device=dev, input=label), phrase("now_input", device=dev, input=label), again))
             break
     for step in steps:
         if step[0] == "wait":
@@ -3860,10 +4713,35 @@ def _help_questions(d: _Doc, raw: bytes, on: Sequence[str], steps: Sequence,
         dev = by_group.get(g, f"group {g}")
         delays = [x & 0xFF for i in range(d.n_actions) for o, x in d.ins(i) if o == 0x7C and x >> 8 == g] or [1]
         send = [(0x7D, g << 8 | cmd), (0x7C, g << 8 | max(set(delays), key=delays.count))]
-        out.append((f"Is the {dev} on {label}?", f"Now is the {dev} on {label}?", send))
+        out.append((phrase("is_input", device=dev, input=label), phrase("now_input", device=dev, input=label), send))
     return out
 
 
+def _idle_set(d: _Doc) -> dict:
+    """The idle key set, tag -> (opcode, operand): the one Off (0xB6 in key
+    set 1) selects."""
+    blob, S = d.blob, d.S
+    set_at = lambda k: ir.u24(blob, S[9] + 1 + 3 * k) - BASE
+    off = {t: (o, v) for t, o, v in cmp.tagged(blob, set_at(1))}.get(0xB6)
+    if off is None or off[0] != 0x1F or off[1] >> 8 != 0xFF:
+        raise ComposeError("Off does not select a key set here")
+    idle_set = {t: (o, v) for t, o, v in cmp.tagged(blob, set_at(off[1] & 0xFF))}
+    if not {1, 0xAF, 0xAE} <= set(idle_set):
+        raise ComposeError("the idle key set has no stop sequence, Devices or Help")
+    return idle_set
+
+
+def _stop_mode(d: _Doc) -> int:
+    """The "Stopping Activity" screen: the one the idle key set's event 1, the
+    stop sequence, shows."""
+    stop = _idle_set(d)[1]
+    stop_mode = next((v for o, v in d.ins(stop[1]) if o == 0x7E), None) if stop[0] == 0x7F else None
+    if stop_mode is None:
+        raise ComposeError("the stop sequence shows no screen")
+    return stop_mode
+
+
+@_needs_counter_font
 def add_first_activity(raw: bytes, name: str, on: Sequence[str], show: int,
                        writes: dict | None = None, steps: Sequence = (),
                        volume: int | None = None, keys: dict | None = None) -> bytes:
@@ -3899,15 +4777,9 @@ def add_first_activity(raw: bytes, name: str, on: Sequence[str], show: int,
 
     # ---- the idle key set: what Off selects (0xB6 in key set 1) ----
     set_at = lambda k: ir.u24(blob, S[9] + 1 + 3 * k) - BASE
-    off = {t: (o, v) for t, o, v in cmp.tagged(blob, set_at(1))}.get(0xB6)
-    if off is None or off[0] != 0x1F or off[1] >> 8 != 0xFF:
-        raise ComposeError("Off does not select a key set here")
-    idle_set = {t: (o, v) for t, o, v in cmp.tagged(blob, set_at(off[1] & 0xFF))}
-    if not {1, 0xAF, 0xAE} <= set(idle_set):
-        raise ComposeError("the idle key set has no stop sequence, Devices or Help")
-    stop_mode = next((v for o, v in d.ins(idle_set[1][1]) if o == 0x7E), None) if idle_set[1][0] == 0x7F else None
-    if stop_mode is None:
-        raise ComposeError("the stop sequence shows no screen")
+    off = {t: (o, v) for t, o, v in cmp.tagged(blob, set_at(1))}[0xB6]
+    idle_set = _idle_set(d)
+    stop_mode = _stop_mode(d)
     battery = next((ins[1][1] for ins in map(d.ins, range(d.n_actions))
                     if len(ins) >= 2 and ins[0] == (0x71, 0x8008) and ins[1][0] == 0x7E), None)
     if battery is None:
@@ -3947,12 +4819,15 @@ def add_first_activity(raw: bytes, name: str, on: Sequence[str], show: int,
     start_mode = next_mode
     next_mode += 1
     title = d.text(name, limit=96)
-    starting = d.text("Starting", limit=96)
+    starting = d.text(phrase("starting"), limit=96)
+
+    # the name goes where "Stopping Activity" is, the screen's first line
+    header_y = min(_screen_lines(d, stop_mode))
 
     def starting_screen(x, y, text):
         if y == 0:
             return False
-        if "Stopping" in text:
+        if y == header_y:
             return ((96 - d.width(title)) // 2, y, title)
         return None
     regs, ls, cs = _copy_mode(d, stop_mode, f"first_m{start_mode}", starting_screen)
@@ -4150,9 +5025,10 @@ def add_first_activity(raw: bytes, name: str, on: Sequence[str], show: int,
             items = []
             for j in range(b[rec + 1]):
                 at = ir.u24(b, rec + 4 + 5 * j) - BASE
-                if b[at] != 0x11:
-                    raise AssertionError(f"section 14 record {k} item {j} is not a stream")
-                items.append((ir.u16(b, rec + 2 + 5 * j), b[at + 3], ir.u16(b, at + 1)))
+                # a stream (0x11), or on the 555 a screen program that starts
+                # with another instruction: its first bytes, which hold no address
+                items.append((ir.u16(b, rec + 2 + 5 * j), b[at + 3], ir.u16(b, at + 1))
+                             if b[at] == 0x11 else (ir.u16(b, rec + 2 + 5 * j), bytes(b[at:at + 2])))
             found.append(items)
         return found
     for k, (was, now) in enumerate(zip(records(d), records(after))):

@@ -93,7 +93,10 @@ def main() -> int:
              # colon and quote, which the 525 sample never drew in it
              "525-1": font_glyphs(Path(sys.argv[2]).read_bytes(), None, 1,
                                   font_glyphs(s525, H525_OWNER_ALPHABET, 1)),
-             "515-0": font_glyphs(Path(sys.argv[1]).read_bytes(), H515_ALPHABET, 0)}
+             "515-0": font_glyphs(Path(sys.argv[1]).read_bytes(), H515_ALPHABET, 0),
+             # the page counter's 8 row digits, "OF" and more (font set 4), which
+             # an empty 555 has no font set for (compose525.counter_font)
+             "525-4": font_glyphs(s525, H525_OWNER_ALPHABET, 4)}
     FONT_OUT.write_text(json.dumps({str(h): dict(sorted(g.items())) for h, g in fonts.items()},
                                    indent=0, ensure_ascii=False) + "\n", encoding="utf-8")
     print({h: "".join(sorted(g)) for h, g in fonts.items()})

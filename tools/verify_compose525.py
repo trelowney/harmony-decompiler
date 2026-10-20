@@ -430,6 +430,82 @@ def main() -> int:
         return 1
     print("PASS the X96 and the Samsung get power states: in the all-off list and every activity, "
           "an activity can switch one on, a deleted device leaves both")
+
+    # texts: each once for every screen that draws it, grouped by activity,
+    # device or every activity, with Logitech's English from the sample
+    texts = c.screen_texts(sample, sample)
+    by_text = {(t["part"], t["text"]): t for t in texts}
+    fix = by_text[("body", "Did that fix the problem?")]
+    soft = by_text[("soft", "Yes\nNo")]
+    batteries = by_text[("body", "Replace the\nbatteries")]
+    tv_on = by_text[("body", "Is the TV Panasonic on?")]
+    if not (fix["group"] == "common" and len(soft["screens"]) > 10 and len(batteries["screens"]) > 1
+            and (tv_on["group"], tv_on["owner"]) == ("device", "TV Panasonic")
+            and all(t["default"] == t["text"] for t in (fix, soft, batteries, tv_on))):
+        print(f"FAIL the sample's texts {fix} {tv_on}")
+        return 1
+    edited = c.set_screen_text(sample, soft["screens"], "soft", "Ano\nNe")
+    edited = c.set_screen_text(edited, batteries["screens"], "body", "Vyměňte\nbaterie")
+    edited = c.set_screen_text(edited, tv_on["screens"], "body", "Je televize TV Panasonic opravdu zapnutá?")
+    after = {(t["part"], t["text"]): t for t in c.screen_texts(edited, sample)}
+    back = c.set_screen_text(edited, after[("soft", "Ano\nNe")]["screens"], "soft",
+                             after[("soft", "Ano\nNe")]["default"])
+    asked = c._help_text(c._Doc(edited), tv_on["screens"][0][0])
+    if not (after[("soft", "Ano\nNe")]["default"] == "Yes\nNo"
+            and after[("body", "Vyměňte\nbaterie")]["screens"] == batteries["screens"]
+            and asked and len(asked[0]) == 3 and asked[2].endswith("zapnutá?")
+            and ("soft", "Yes\nNo") in {(t["part"], t["text"]) for t in c.screen_texts(back)}
+            and [a.name for a in c.activities(edited)] == [a.name for a in c.activities(sample)]):
+        print(f"FAIL editing texts: {sorted(after)[:5]}, question {asked}")
+        return 1
+    try:
+        c.set_screen_text(sample, batteries["screens"], "body", "a\nb\nc")
+        print("FAIL three lines on a two line message")
+        return 1
+    except c.ComposeError:
+        pass
+    print("PASS texts edited once for every screen: Ano and Ne on every Help screen, Vyměňte baterie, "
+          "a TV question on three lines, read back by their pixels; Logitech's English brings Yes and No back")
+
+    # the sentences new screens are written in
+    try:
+        c.set_phrases({"is_on": "Je {device} zapnuta?", "fix": "Pomohlo to?"})
+        said = c.add_activity(composed, "Film", "Watch TV +", ["TV Panason.."])
+        questions = {t["text"] for t in c.screen_texts(said)}
+        try:
+            c.set_phrases({"is_on": "Je {zarizeni} zapnuta?"})
+            refused = False
+        except c.ComposeError:
+            refused = True
+    finally:
+        c.set_phrases(None)
+    if not ({"Je TV Panasonic zapnuta?", "Pomohlo to?"} <= questions and refused
+            and c.phrase("is_on", device="TV") == "Is the TV on?"):
+        print(f"FAIL sentences for new screens: {sorted(questions)[:8]}")
+        return 1
+    print("PASS a new activity's Help speaks the sentences set for it; an unknown {name} is refused")
+
+    # what the page did on 2026-10-20: Watch TV + edited, a device added (Devices
+    # gets a page 2 every Devices screen shares), the edited activity deleted,
+    # then another device. Deleting it left its own Devices screen behind,
+    # still sharing page 2, and the second device changed that screen.
+    st = c.activity_settings(sample, "Watch TV +")
+    out = c.edit_activity(sample, "Watch TV +", "TV2", "Watch TV +", st["on"], writes=None, steps=st["steps"],
+                          show=st["show"], volume=st["volume"], keys=st["keys"])
+    out, _ = c.add_device(out, "Box A", *device(1))
+    gone_from = len(c._Doc(out).devices_modes())
+    out = c.delete_activity(out, "TV2")
+    d = c._Doc(out)
+    shared = {p["address"] for m in d.devices_modes() for p in d.mode(m)["pages"][1:]}
+    sharing = {m for m in range(d.n_modes) for p in d.mode(m)["pages"] if p["address"] in shared}
+    out, _ = c.add_device(out, "Box B", *device(2))
+    if not (sharing == set(d.devices_modes()) and len(d.devices_modes()) == gone_from - 1
+            and [x.name for x in c.devices(out)][-2:] == ["Box A", "Box B"]):
+        print(f"FAIL an edited Logitech activity deleted: Devices screens {d.devices_modes()}, "
+              f"sharing page 2 {sorted(sharing)}")
+        return 1
+    print("PASS Watch TV + edited, a device added, the edited activity deleted with its own Devices "
+          "screen, and another device added")
     return 0
 
 

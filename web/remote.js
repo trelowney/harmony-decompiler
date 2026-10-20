@@ -29,11 +29,41 @@ const LAYOUT = [
   { cls: "r-colours", keys: [["Red", "", "c-red"], ["Green", "", "c-green"],
     ["Yellow", "", "c-yellow"], ["Blue", "", "c-blue"]] },
 ];
+// The 555, as @kkong42's photo of it beside a 515 shows it (issue #42): black
+// all over, the same pad, but the keys under Exit and Menu say Sound and
+// Picture (they are where the 525's Mute and Prev are, so they send theirs),
+// and two small round keys over 1 and 3 are its Mute and Prev, codes 0xBA and
+// 0xBD that only the 555's configurations have.
+const LAYOUT_555 = LAYOUT.flatMap((row) => {
+  if (row.keys?.some((k) => k[0] === "Mute")) {
+    return [{ cls: "r-two", keys: [["Mute", "Sound", "pill"], ["Prev", "Picture", "pill"]] }];
+  }
+  if (row.cls === "r-digits") {
+    return [{ cls: "r-small555", keys: [["MuteSmall", "", "round small555"], ["PrevSmall", "", "round small555"]] },
+      row];
+  }
+  return [row];
+});
+// The 515, from the same photo: the pad is the 555's, but the upper of the two
+// rows says Menu and Info and the lower Exit and Guide. A key sends what its
+// place on the pad sends, so only the words change: the 515's Menu is where the
+// 555's Guide is.
+const LAYOUT_515 = LAYOUT.map((row) => {
+  if (row.keys?.some((k) => k[0] === "Guide") && row.keys.some((k) => k[0] === "Info")) {
+    return { cls: "r-two", keys: [["Guide", "Menu", "pill"], ["Info", "Info", "pill"]] };
+  }
+  if (row.keys?.some((k) => k[0] === "Exit")) {
+    return { cls: "r-two", keys: [["Exit", "Exit", "pill"], ["Menu", "Guide", "pill"]] };
+  }
+  return row;
+});
+const LAYOUTS = { "Harmony 555": { layout: LAYOUT_555, cls: "m555" },
+  "Harmony 515": { layout: LAYOUT_515, cls: "" } };
 const OWN = ["activities", "devices", "help", "off", "glow", "pagePrev", "pageNext"];
 
 const PRETTY = { VolumeUp: "Vol +", VolumeDown: "Vol −", ChannelUp: "Ch +", ChannelDown: "Ch −",
   FastForward: "Fwd", Rewind: "Rew", SkipBack: "Replay", SkipForward: "Skip", Record: "Rec",
-  Star: "*", Hash: "#" };
+  Star: "*", Hash: "#", MuteSmall: "Mute", PrevSmall: "Prev" };
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -54,16 +84,24 @@ export class RemoteView {
     this.state = null;
     this.saved = null;
     this.keys = new Map();
+    this.rootEl = root;
+    this.drawnAs = null;
     this.build(root);
   }
 
-  build(root) {
+  // the remote drawn as `name` is: the 555 its own way, every other model as
+  // the 525 (the 515's key table is the 525's)
+  build(root, name = null) {
+    const look = LAYOUTS[name] ?? { layout: LAYOUT, cls: "" };
+    this.drawnAs = LAYOUTS[name] ? name : null;
+    this.keys = new Map();
+    this.watch?.disconnect();
     root.replaceChildren();
-    const body = el("div", "remote");
+    const body = el("div", `remote ${look.cls}`.trim());
     this.body = body;
     const top = el("div", "r-black"), bottom = el("div", "r-silver");
-    for (const row of LAYOUT) {
-      const into = row.wheel || row.cls === "r-digits" || row.cls === "r-colours" ? bottom : top;
+    for (const row of look.layout) {
+      const into = row.wheel || ["r-digits", "r-colours", "r-small555"].includes(row.cls) ? bottom : top;
       if (row.screen) into.append(this.buildScreen());
       else if (row.wheel) bottom.append(this.buildWheel());
       else {
@@ -85,9 +123,9 @@ export class RemoteView {
     root.append(this.fitBox);
     // the column it is fitted to: the page's own, or the element it was given
     this.root = root.closest(".remote-col") ?? root;
-    const watch = new ResizeObserver(() => this.fit());
-    watch.observe(this.root);
-    watch.observe(this.fitBox);
+    this.watch = new ResizeObserver(() => this.fit());
+    this.watch.observe(this.root);
+    this.watch.observe(this.fitBox);
   }
 
   buildScreen() {
@@ -145,6 +183,9 @@ export class RemoteView {
     const b = el("button", `rk ${cls}`, label);
     b.type = "button";
     b.dataset.key = name;
+    // a worded key is called what it says (the 515's Menu sends the code the
+    // 525 calls Guide)
+    if (cls.includes("pill") && label) b.dataset.label = label;
     b.addEventListener("click", () => this.press(name));
     this.keys.set(name, b);
     if (!caption) return b;
@@ -157,6 +198,9 @@ export class RemoteView {
 
   load(model) {
     this.model = model;
+    // drawn again only when the model changes between the 555 and the rest
+    const name = LAYOUTS[model.model] ? model.model : null;
+    if (name !== this.drawnAs) this.build(this.rootEl, name);
     this.badge.textContent = model.model ?? "Harmony 525";
     this.go({ mode: model.devices_mode, page: 0 });
     requestAnimationFrame(() => this.fit());
@@ -213,7 +257,7 @@ export class RemoteView {
       if (OWN.includes(k)) continue;
       const what = this.meaning(k);
       b.classList.toggle("dead", !what);
-      b.title = what ? `${PRETTY[k] ?? (k.startsWith("soft") ? CORNERS[+k[4]] : k)}: ${what.text}` : "";
+      b.title = what ? `${b.dataset.label ?? PRETTY[k] ?? (k.startsWith("soft") ? CORNERS[+k[4]] : k)}: ${what.text}` : "";
     }
   }
 
@@ -276,7 +320,8 @@ export class RemoteView {
     }
     const what = this.meaning(key);
     if (!what) {
-      this.say(`${PRETTY[key] ?? (key.startsWith("soft") ? "That soft key" : key)} does nothing here.`);
+      const called = this.keys.get(key)?.dataset.label;
+      this.say(`${called ?? PRETTY[key] ?? (key.startsWith("soft") ? "That soft key" : key)} does nothing here.`);
       this.onEvent({ type: "none" });
       return;
     }

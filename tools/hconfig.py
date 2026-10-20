@@ -1630,12 +1630,27 @@ def _split_references(blob, parent, start, end, bitmaps=None,
 
     found, i = [], start
     while i < end:
+        # an action list the index names is known from the index, not from its
+        # bytes, so it is settled before any pattern here: its count and a
+        # 0x7F instruction's operand can read as a 0x16 reference (a composed
+        # config put two action lists after a mode record, and one became an
+        # address that relocation rewrote)
+        if i in actions:
+            al = parse_action_list(blob, i, end)
+            if al:
+                found.append(_annotate(al, parent))
+                i += al["length"]
+                continue
+        # nor may a pattern reach into one: a page record's last byte 0x16 and
+        # an action list's first three read as a reference too (2026-10-20)
+        def crosses(length):
+            return any(a in actions for a in range(i + 1, i + length))
         bh = parse_block_header(blob, i, end)
-        if bh:
+        if bh and not crosses(12):
             found.append(bh)
             i += 12
             continue
-        if blob[i] == REF_OPCODE and i + 4 <= end:
+        if blob[i] == REF_OPCODE and i + 4 <= end and not crosses(4):
             v = int.from_bytes(blob[i + 1:i + 4], "little") - CONFIG_BASE
             if 0 <= v < len(blob):
                 found.append({

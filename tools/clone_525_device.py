@@ -54,9 +54,37 @@ def fresh_region(kind: str, region_id: str, **fields) -> dict:
     return {"kind": kind, "id": region_id, "offset": -1, "length": 0, **fields}
 
 
+_COVERING: dict = {}
+_SMALL = 256
+
+
+def _covering(regions: list, offset: int) -> list:
+    """The regions of `regions` covering byte `offset`. A decompiled region's
+    offset never changes and one added later starts at -1, so the regions are
+    sorted once per list; which of them are still in it is looked up again
+    whenever the list changes."""
+    if _COVERING.get("list") is not regions:
+        placed = sorted((r for r in regions if r["length"] > 0 and r["offset"] >= 0),
+                        key=lambda r: r["offset"])
+        small = [r for r in placed if r["length"] <= _SMALL]
+        _COVERING.clear()
+        _COVERING.update(list=regions, small=small, starts=[r["offset"] for r in small],
+                         big=[r for r in placed if r["length"] > _SMALL], shape=None)
+    shape = (len(regions), id(regions[0]) if regions else 0, id(regions[-1]) if regions else 0)
+    if _COVERING["shape"] != shape:
+        _COVERING.update(shape=shape, live={id(r) for r in regions})
+    import bisect
+    starts, small = _COVERING["starts"], _COVERING["small"]
+    lo, hi = bisect.bisect_left(starts, offset - _SMALL), bisect.bisect_right(starts, offset)
+    live = _COVERING["live"]
+    return [r for r in (*small[lo:hi], *_COVERING["big"])
+            if id(r) in live and r["offset"] <= offset < r["offset"] + r["length"]]
+
+
 def symbol_for_offset(doc: dict, offset: int) -> dict:
-    matches = [region for region in doc["blob"]["regions"]
-               if region["offset"] <= offset < region["offset"] + region["length"]]
+    # the region covering a byte, from an index of the regions rather than a
+    # walk over all of them for each byte asked about
+    matches = _covering(doc["blob"]["regions"], offset)
     if len(matches) != 1:
         raise SystemExit(f"offset 0x{offset:X} belongs to {len(matches)} regions")
     region = matches[0]
@@ -167,7 +195,25 @@ def build_menu_program(blob: bytes, doc: dict, root: int) -> list[dict]:
     return regions
 
 
+_RENDERED: dict = {}
+
+
 def render_map(blob: bytes) -> dict[tuple[int, int], tuple[list[list[int]], list[dict]]]:
+    """Every page drawn, by (mode, page). The last few are kept: an operation's
+    check draws the file it was given, which the one before drew as its result.
+    Callers only read what comes back."""
+    key = bytes(blob)
+    if key in _RENDERED:
+        _RENDERED[key] = _RENDERED.pop(key)
+        return _RENDERED[key]
+    result = _render_map(key)
+    _RENDERED[key] = result
+    while len(_RENDERED) > 4:
+        _RENDERED.pop(next(iter(_RENDERED)))
+    return result
+
+
+def _render_map(blob: bytes) -> dict[tuple[int, int], tuple[list[list[int]], list[dict]]]:
     sections = semantics.section_offsets(blob)
     fonts = renderer.fonts(blob, sections)
     result = {}

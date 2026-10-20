@@ -52,6 +52,10 @@
 
   #status { color: var(--muted); font-size: 13px; min-height: 1.4em; }
   #status.bad { color: var(--bad); }
+  /* while a change is built: the forms wait, the page itself does not */
+  #working { width: 100%; }
+  body.busy #result form button, body.busy #result .text-item button, body.busy #texts-save-all,
+  body.busy #undo, body.busy #connect, body.busy #write, body.busy #restore { pointer-events: none; opacity: .5; }
   .empty { color: var(--muted); }
 
   /* three columns the height of the window: the remote, the tabs (the only part
@@ -128,6 +132,15 @@
                   border: 2px solid transparent; }
   figure:hover canvas { border-color: var(--accent); }
   figcaption { font-size: 12px; color: var(--muted); }
+
+  .phrases { display: grid; grid-template-columns: max-content 1fr; gap: 6px 10px; align-items: center; }
+  .phrases input { width: 100%; box-sizing: border-box; }
+  .text-item { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start;
+               padding: 10px 0; border-top: 1px solid var(--line); }
+  .text-item:first-of-type { border-top: none; }
+  .text-item figure canvas { width: 144px; height: 96px; }
+  .text-item .text-edit { flex: 1 1 240px; display: flex; flex-direction: column; gap: 6px; }
+  .text-item textarea { font: inherit; width: 100%; box-sizing: border-box; resize: vertical; }
 
   /* the drawn remote: glossy black top, silver bottom, blue screen */
   .remote { --r-lcd: #5cc3ee; --r-ink: #082536; --glow: #7fd3ff;
@@ -219,6 +232,24 @@
   .r-log { text-align: center; color: var(--muted); font-size: 13px; min-height: 2.6em; margin-top: 4px; }
   .r-log.pulse { animation: logpulse .6s ease-out; }
   @keyframes logpulse { 0% { color: var(--accent); } 100% { color: var(--muted); } }
+
+  /* the 555 (only it): black all over, light grey number keys, the wheel in
+     black with a silver disc, two small round keys over 1 and 3 */
+  .remote.m555 { box-shadow: 0 14px 34px rgb(0 0 0 / .35), 0 0 0 2px #4a4e54; }
+  .remote.m555 .r-silver { background: linear-gradient(90deg, #1b1d20 0%, #2b2e33 30%, #33363b 50%, #2b2e33 70%, #1a1c1f 100%);
+                           border-top-color: #3a3e44; }
+  .remote.m555 .r-silver .rk:not(.rock):not(.nav):not(.n-ok) {
+    background: linear-gradient(180deg, #c9ccd0, #9da2a8); color: #26292d; box-shadow: 0 2px 0 #0b0c0e, inset 0 1px 0 #e6e8ea; }
+  .remote.m555 .r-silver .rk:not(.rock):not(.nav):not(.n-ok):hover:not(:disabled) { background: #dfe2e5; }
+  .remote.m555 .r-wheel { background: linear-gradient(180deg, #2a2d32, #3a3d43 50%, #1f2125); }
+  .remote.m555 .rk.rock { background: #2f3237; color: #e6e8ea; box-shadow: 0 2px 0 #000, inset 0 1px 0 rgb(255 255 255 / .1); }
+  .remote.m555 .rk.rock:hover:not(:disabled) { background: #43474d; }
+  .remote.m555 .r-disc { background: radial-gradient(circle at 40% 30%, #f0f1f3, #b8bdc3 70%); }
+  .remote.m555 .rk.nav { color: #2b2e33; }
+  .remote.m555 .rk.n-ok { background: #e3e5e8; color: #2b2e33; box-shadow: 0 0 0 2px #7a6a55; }
+  .remote.m555 .r-wheelcap { color: #b8bcc1; }
+  .r-small555 { display: flex; justify-content: space-between; width: 92%; margin-bottom: -6px; }
+  .remote.m555 .r-silver .rk.small555 { width: 22px; height: 22px !important; border-radius: 50% !important; }
 </style>
 </head>
 <body>
@@ -241,6 +272,7 @@
       <button data-tab="overview" class="on">Overview</button>
       <button data-tab="add-device">Add or edit a device</button>
       <button data-tab="change">Change</button>
+      <button data-tab="texts">Texts</button>
       <button data-tab="screens">All screens</button>
       <button data-tab="details">Details</button>
     </nav>
@@ -361,12 +393,14 @@
             </div>
             <ol id="act-steps"></ol>
           </fieldset>
-          <label class="check" id="act-keep-row" hidden><input type="checkbox" id="act-keep" checked>
-            <span>Keep its own inputs: <span id="act-keeps"></span></span></label>
+          <fieldset id="act-inputs-row" hidden><legend>Inputs it sets</legend>
+            <div id="act-inputs" class="row"></div>
+          </fieldset>
           <p class="hint" id="act-unread" hidden></p>
-          <p class="hint">Everything not switched on is switched off. With no commands to send it also
-            takes the inputs of the activity it is built like (its TV input, say); with commands, those
-            are what it sends. <strong>Then show</strong> picks where the remote ends: the activity's
+          <p class="hint">Everything not switched on is switched off. <strong>Inputs it sets</strong> are
+            the inputs the remote keeps track of (the TV's, say): it sends one only when the input is not
+            already right. A new activity starts with those of the one it is built like; "leave as it is"
+            sends nothing. <strong>Then show</strong> picks where the remote ends: the activity's
             own screen, whose keys are those of the activity it is built like, or a device's screen, so
             the remote then simply works that device. <strong>Volume and Mute</strong> can go to another
             device while the activity runs, the amplifier, say, with the X96 on screen, and so can any other
@@ -391,6 +425,23 @@
           <button>Delete</button>
         </form>
       </div>
+    </section>
+
+    <section class="tab" id="tab-texts" hidden>
+      <div class="card">
+        <h2>Sentences for new screens</h2>
+        <p class="hint">What a new activity's Starting and Help screens say. <code>{device}</code> is
+          the device's name, <code>{input}</code> the input it is set to. Empty is Logitech's English.
+          Kept in this browser; screens already in the configuration are changed below.</p>
+        <div id="phrases" class="phrases"></div>
+      </div>
+      <p class="hint">Every text on the remote that no other form edits, each once however many screens
+        show it. A Help question is wrapped to its screen; anything else is one line of the screen per line
+        here, and an empty line leaves that line out. Device and activity names, soft keys and page
+        numbers are changed in their own forms.</p>
+      <div class="row"><button id="texts-save-all" class="primary" disabled>Save all changed texts</button>
+        <span class="hint" id="texts-pending"></span></div>
+      <div id="texts"></div>
     </section>
 
     <section class="tab gallery" id="tab-screens" hidden>
@@ -446,6 +497,7 @@
 
     <div class="side-block">
       <progress id="progress" value="0" max="1" hidden></progress>
+      <progress id="working" hidden></progress>
       <div id="status">Loading the reader…</div>
     </div>
 
@@ -468,6 +520,6 @@
     </div>
   </aside>
 </div>
-<script type="module" src="app.js?v=379bddea53"></script>
+<script type="module" src="app.js?v=cbed708ffd"></script>
 </body>
 </html>

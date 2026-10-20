@@ -198,7 +198,11 @@ def render_page(blob: bytes, font_sets: list[Font], root: int, image_cache: dict
             # transferred. See docs/FORMAT.md section 4f.
             dx, dy, sx, sy, width, height = operands[:6]
             address = u24(operands, 6)
-            source = image_cache.setdefault(address, picture(blob, address))
+            # decoded once: setdefault(address, picture(...)) would decode it
+            # every time, before looking
+            if address not in image_cache:
+                image_cache[address] = picture(blob, address)
+            source = image_cache[address]
             draw_picture(canvas, source, sx, sy, dx, dy, width, height)
         elif opcode == 16:
             current_font = operands[0]

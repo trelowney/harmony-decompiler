@@ -26,6 +26,7 @@ def stamp(holder: str, name: str) -> None:
 def main() -> int:
     stamp("app.js", "hid525.js")
     stamp("app.js", "remote.js")
+    stamp("app.js", "pyworker.js")
     stamp("index.html", "app.js")        # after app.js has its own stamps
     print("stamped:", digest("app.js"))
     return 0

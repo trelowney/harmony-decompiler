@@ -16,12 +16,15 @@ import verify_525_semantics as sem
 from clone_525_device import mode_fields
 
 _TEMPLATE = None
+_SAMPLE = None
 
 
 def set_template(container: bytes) -> None:
-    """The public sample's .EZHex, whose XML header a dumped blob is wrapped in."""
-    global _TEMPLATE
-    _TEMPLATE = hconfig.split_container(bytes(container))
+    """The public sample's .EZHex, whose XML header a dumped blob is wrapped in,
+    and whose texts are Logitech's English (the Texts tab's defaults)."""
+    global _TEMPLATE, _SAMPLE
+    _SAMPLE = bytes(container)
+    _TEMPLATE = hconfig.split_container(_SAMPLE)
 
 
 # The arch 9 remotes this page knows, by the skin a configuration states in
@@ -113,6 +116,26 @@ def screens(container: bytes, modes) -> list:
     return out
 
 
+def all_screens(container: bytes) -> list:
+    """Every page of every mode, as screens() gives them: the page asks for
+    them all at once, since its Python answers only when asked (it runs in a
+    worker) and the drawn remote needs a screen the moment a key is pressed.
+    A page that does not draw is left out."""
+    blob = hconfig.split_container(bytes(container))[2]
+    S = sem.section_offsets(blob)
+    fonts = renderer.fonts(blob, S)
+    images: dict = {}
+    out = []
+    for entry in renderer.page_roots(blob, S):
+        try:
+            canvas, _ = renderer.render_page(blob, fonts, entry["root"], images)
+        except Exception:
+            continue
+        pixels = bytes(1 if v == renderer.INK else 0 for row in canvas for v in row)
+        out.append((entry["mode"], entry["page"], pixels))
+    return out
+
+
 def key_names() -> list:
     """The 525's keys by name, for the page's key map."""
     return list(compose525.KEYS)
@@ -155,12 +178,35 @@ def _keys(keys) -> dict:
     return {str(k): int(v) for k, v in dict(_py(keys) or {}).items()}
 
 
+def _writes(writes):
+    """The page's inputs: {variable: value}; None leaves the default."""
+    return None if writes is None else {int(k): int(v) for k, v in dict(_py(writes)).items()}
+
+
+def input_choices(container: bytes) -> list:
+    """The inputs an activity can set, as the form offers them: the state
+    variables some activity of this configuration writes, with each value's
+    label (compose525.input_variables). Internal ones (the TV's own input
+    state, which the written request moves) are left out."""
+    raw = bytes(container)
+    written = set()
+    for a in compose525.activities(raw):
+        try:
+            written |= set(compose525.activity_settings(raw, a.name)["writes"])
+        except compose525.ComposeError:
+            pass
+    return [v for v in compose525.input_variables(raw) if v["variable"] in written]
+
+
 def op_add_activity(container: bytes, name: str, like: str, on, steps=None,
-                    show=None, volume=None, keys=None) -> bytes:
+                    show=None, volume=None, keys=None, writes=None) -> bytes:
     """steps: [[group, command], ...] sent after the switching, in order. With
     steps the source activity's own inputs are not copied: the steps say it.
-    show: a device's mode to end on; volume: a device's mode for Vol and Mute."""
+    show: a device's mode to end on; volume: a device's mode for Vol and Mute.
+    writes: {variable: value}, the inputs it sets (input_choices); given, it
+    replaces both rules above."""
     steps = _steps(steps)
+    writes = _writes(writes)
     if not compose525.activities(bytes(container)):
         # nothing to build it like: the first activity, its own screens and Help
         if show is None:
@@ -171,7 +217,8 @@ def op_add_activity(container: bytes, name: str, like: str, on, steps=None,
                                              keys=_keys(keys))
     return compose525.add_activity(bytes(container), str(name), str(like),
                                    [str(x) for x in _py(on)],
-                                   writes={} if steps else None, steps=steps,
+                                   writes=writes if writes is not None else {} if steps else None,
+                                   steps=steps,
                                    show=None if show is None else int(show),
                                    volume=None if volume is None else int(volume),
                                    keys=_keys(keys))
@@ -200,17 +247,22 @@ def activity_settings(container: bytes, name: str) -> dict:
                        f"{by_group.get(x[1], 'that device')}'s next command"}
                       if x[0] == "wait" else {"group": x[0], "command": x[1], "text": text(*x)}
                       for x in s["steps"]],
-            "keeps": keeps if s["writes"] else []}
+            "keeps": keeps if s["writes"] else [],
+            "writes": {int(k): int(v) for k, v in s["writes"].items()}}
 
 
 def op_edit_activity(container: bytes, name: str, new_name: str, like: str, on, steps=None,
-                     show=None, volume=None, keep_inputs: bool = True, keys=None) -> bytes:
+                     show=None, volume=None, keep_inputs: bool = True, keys=None,
+                     writes=None) -> bytes:
     """keep_inputs: the activity's own state writes (its TV input, say) stay;
-    otherwise only what steps sends."""
+    otherwise only what steps sends. writes: {variable: value}, the inputs it
+    sets (input_choices); given, it replaces keep_inputs."""
     steps = _steps(steps)
+    writes = _writes(writes)
     return compose525.edit_activity(bytes(container), str(name), str(new_name), str(like),
                                     [str(x) for x in _py(on)],
-                                    writes=None if keep_inputs else {}, steps=steps,
+                                    writes=writes if writes is not None else None if keep_inputs else {},
+                                    steps=steps,
                                     show=None if show is None else int(show),
                                     volume=None if volume is None else int(volume),
                                     keys=_keys(keys))
@@ -218,6 +270,41 @@ def op_edit_activity(container: bytes, name: str, new_name: str, like: str, on, 
 
 def op_rename_device(container: bytes, mode: int, name: str) -> bytes:
     return compose525.rename_device(bytes(container), int(mode), str(name))
+
+
+def texts(container: bytes) -> list:
+    """The texts the Texts tab edits (compose525.screen_texts), each with
+    Logitech's English as its default where it is known. The public sample is
+    a 525's, so another model's screens are not told what a 525 says (a 515's
+    menu says "Choose an Activity" whole)."""
+    raw = bytes(container)
+    same = skin_of(hconfig.split_container(raw)[2]) == skin_of(hconfig.split_container(_SAMPLE)[2])
+    return compose525.screen_texts(raw, _SAMPLE if same else None)
+
+
+def op_set_text(container: bytes, screens, part: str, text: str) -> bytes:
+    screens = [[int(m), int(k)] for m, k in _py(screens)]
+    return compose525.set_screen_text(bytes(container), screens, str(part), str(text))
+
+
+def op_set_texts(container: bytes, edits) -> bytes:
+    """Several texts at once, [{screens, part, text}], one after another, each
+    checked as op_set_text checks it; one refused refuses them all. Editing a
+    text never renumbers a screen, so each one's screens still hold."""
+    out = bytes(container)
+    for edit in _py(edits):
+        out = op_set_text(out, edit["screens"], edit["part"], edit["text"])
+    return out
+
+
+def set_phrases(phrases=None) -> dict:
+    """The sentences new screens are written in, {key: sentence}; an empty one
+    is Logitech's (compose525.PHRASES). Returns the ones in force."""
+    return compose525.set_phrases({str(k): str(v) for k, v in dict(_py(phrases) or {}).items()})
+
+
+def phrase_defaults() -> dict:
+    return dict(compose525.PHRASES)
 
 
 def commands(container: bytes) -> list:
@@ -334,6 +421,10 @@ def remote_model(container: bytes) -> dict:
     devs = compose525.devices(raw)
     by_group = {x.group: x.name for x in devs}
     key_name = {v: k for k, v in compose525.KEYS.items()}
+    # the 555's two small round keys over 1 and 3, codes the 525's and 515's
+    # configurations never have; which is Mute and which Prev is a guess from
+    # the order Logitech lists them in, not yet pressed
+    key_name.update({0xBA: "MuteSmall", 0xBD: "PrevSmall"})
 
     def send_text(operand, fallback=None):
         g, c = operand >> 8, operand & 0xFF

@@ -1,21 +1,52 @@
-import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.mjs";
 import { Harmony525 } from "./hid525.js?v=e4361e7e64";
-import { RemoteView } from "./remote.js?v=4bf22e8c8f";
+import { RemoteView } from "./remote.js?v=b78ae1249c";
 
-const MODULES = ["_paths", "flipper_ir", "pronto", "irdb", "pic18dis", "hconfig", "analyze_525_ir", "check_525_mode_pages",
-  "class5_ir_encoder", "verify_525_semantics", "render_525_screens", "h525_lcd_author",
-  "clone_525_device", "compose525"];
 const CORNERS = ["top left", "top right", "bottom left", "bottom right"];
 
 const $ = (id) => document.getElementById(id);
-let webapp = null;
+
+// ---- the Python, in a worker (pyworker.js) ----
+// Building and checking a configuration takes seconds; on the page's own thread
+// it froze the page and Chrome offered to close it. py("name", ...args) runs
+// webapp.name in the worker and answers with plain data.
+const worker = new Worker(new URL("./pyworker.js?v=f86c2ffde4", import.meta.url), { type: "module" });
+const calls = new Map();
+let nextCall = 1;
+worker.onmessage = ({ data }) => {
+  const waiting = calls.get(data.id);
+  calls.delete(data.id);
+  if (data.ok) waiting.resolve(data.value);
+  else waiting.reject(new Error(data.error));
+};
+worker.onerror = (event) => {
+  for (const waiting of calls.values()) waiting.reject(new Error(event.message || "the Python worker stopped"));
+  calls.clear();
+};
+function py(fn, ...args) {
+  return new Promise((resolve, reject) => {
+    const id = nextCall++;
+    calls.set(id, { resolve, reject });
+    worker.postMessage({ id, fn, args });
+  });
+}
+
+// While the worker builds a change, nothing else may start one on the same bytes.
+let busy = false;
+function setBusy(on) {
+  busy = on;
+  document.body.classList.toggle("busy", on);
+  $("working").hidden = !on;
+}
+
 let identity = null;
+let keyNames = [];         // the 525's keys by name
 let history = [];          // [{bytes, label}], the last one is on show
 
 const current = () => history[history.length - 1];
 let commandList = [];      // [{device, label, group, command}]
 let steps = [];            // the activity being built: [{group, command, text}]
 let actKeys = {};          // its keys that go to another device: {key name: device mode}
+let inputChoices = [];     // the inputs an activity can set: [{variable, device, values: [{value, label}]}]
 
 function drawActKeys() {
   const names = Object.fromEntries([...$("act-key-device").options].map((o) => [o.value, o.textContent]));
@@ -59,12 +90,39 @@ function drawSteps() {
   }));
 }
 
+// One select per input the remote keeps track of, set to `writes` ({variable: value}).
+function drawInputs(writes) {
+  $("act-inputs").replaceChildren(...inputChoices.map((c) => {
+    const l = document.createElement("label");
+    const sel = document.createElement("select");
+    sel.dataset.variable = c.variable;
+    sel.replaceChildren(option("", "leave as it is"), ...c.values.map((v) => option(v.value, v.label)));
+    sel.value = writes[c.variable] ?? "";
+    l.append(`${c.device}: `, sel);
+    return l;
+  }));
+  $("act-inputs-row").hidden = !inputChoices.length;
+}
+
+function chosenInputs() {
+  const out = {};
+  for (const sel of $("act-inputs").querySelectorAll("select")) {
+    if (sel.value !== "") out[sel.dataset.variable] = Number(sel.value);
+  }
+  return out;
+}
+
+// A new activity starts with the inputs of the one it is built like.
+async function inputsFromLike() {
+  const like = $("act-like").value;
+  drawInputs(like ? (await py("activity_settings", current().bytes, like)).writes : {});
+}
+
 // The add activity form, filled with an existing activity to edit it.
-function loadActivityIntoForm() {
+async function loadActivityIntoForm() {
   const name = $("act-which").value;
   const editing = name !== "";
   $("act-submit").textContent = editing ? "Save the changes" : "Add";
-  $("act-keep-row").hidden = true;
   $("act-unread").hidden = true;
   for (const box of $("act-on").querySelectorAll("input")) box.checked = false;
   if (!editing) {
@@ -75,9 +133,10 @@ function loadActivityIntoForm() {
     drawSteps();
     actKeys = {};
     drawActKeys();
+    await inputsFromLike();
     return;
   }
-  const s = toJs(webapp.activity_settings(current().bytes, name));
+  const s = await py("activity_settings", current().bytes, name);
   $("act-name").value = name;
   $("act-like").value = name;
   for (const box of $("act-on").querySelectorAll("input")) box.checked = s.on.includes(box.value);
@@ -87,11 +146,7 @@ function loadActivityIntoForm() {
   drawSteps();
   actKeys = { ...s.keys };
   drawActKeys();
-  if (s.keeps.length) {
-    $("act-keeps").textContent = s.keeps.join(", ");
-    $("act-keep").checked = true;
-    $("act-keep-row").hidden = false;
-  }
+  drawInputs(s.writes);
   if (s.unread) {
     $("act-unread").textContent = `${s.unread} more thing${s.unread > 1 ? "s" : ""} this activity runs at ` +
       "its start cannot be shown here, and saving drops them.";
@@ -104,27 +159,8 @@ function status(text, bad = false) {
   $("status").className = bad ? "bad" : "";
 }
 
-// Python blocks the page while it works; let the status line paint first.
+// Let the status line paint before a long step.
 const repaint = () => new Promise((resolve) => setTimeout(resolve, 30));
-
-async function startPython() {
-  const py = await loadPyodide();
-  for (const name of MODULES) {
-    const source = await (await fetch(`../tools/${name}.py`, { cache: "no-cache" })).text();
-    py.FS.writeFile(`${name}.py`, source);
-  }
-  // which pixels draw which character, per typeface (tools/build_arch9_glyphs.py)
-  py.FS.writeFile("arch9_glyphs.json", await (await fetch("../tools/arch9_glyphs.json", { cache: "no-cache" })).text());
-  // and glyphs for characters a configuration's font lacks (tools/build_arch9_glyphs.py)
-  py.FS.writeFile("arch9_font_glyphs.json", await (await fetch("../tools/arch9_font_glyphs.json", { cache: "no-cache" })).text());
-  py.FS.writeFile("webapp.py", await (await fetch("webapp.py", { cache: "no-cache" })).text());
-  const sample = new Uint8Array(await (await fetch("../samples/harmony525/config.EZHex")).arrayBuffer());
-  const module = py.pyimport("webapp");
-  module.set_template(sample);
-  return module;
-}
-
-const toJs = (value) => (value && value.toJs ? value.toJs({ dict_converter: Object.fromEntries }) : value);
 
 function cell(tag, text) {
   const el = document.createElement(tag);
@@ -146,20 +182,22 @@ function option(value, text) {
 }
 
 // ---- screens and the drawn remote ----
-let screenCache = new Map();   // "mode:page" -> pixels
+let screenCache = new Map();   // "mode:page" -> pixels, every page of what is on show
 let model = null;              // webapp.remote_model of what is on show
 let remote = null;
 
+// Every page is drawn once per change (webapp.all_screens), so the drawn
+// remote has a screen the moment a key is pressed.
+async function loadScreens(bytes) {
+  const cache = new Map();
+  try {
+    for (const [m, p, pixels] of await py("all_screens", bytes)) cache.set(`${m}:${p}`, pixels);
+  } catch { /* a screen not drawn shows blank */ }
+  screenCache = cache;
+}
+
 function screenOf(mode, page) {
-  const key = `${mode}:${page}`;
-  if (!screenCache.has(key)) {
-    try {
-      for (const [m, p, pixels] of toJs(webapp.screens(current().bytes, [mode]))) {
-        screenCache.set(`${m}:${p}`, pixels);
-      }
-    } catch { screenCache.set(key, null); }
-  }
-  return screenCache.get(key) ?? null;
+  return screenCache.get(`${mode}:${page}`) ?? null;
 }
 
 function paint(canvas, pixels) {
@@ -204,6 +242,178 @@ function drawScreens() {
   }
 }
 
+// ---- texts ----
+// what each text said when the file was opened, through the edits made since:
+// "part|text now" -> text then, for going back where Logitech's English is not known
+let textOrigin = new Map();
+let textOriginOf = null;       // the history[0] that map belongs to
+
+const PHRASE_NAMES = {
+  starting: "Starting screen, above the name",
+  fix: "Help: did that fix it",
+  is_on: "Help: is a device on",
+  now_on: "Help: now is it on",
+  is_off: "Help: is a device off",
+  now_off: "Help: now is it off",
+  is_input: "Help: is it on an input",
+  now_input: "Help: now is it on the input",
+};
+
+function savedPhrases() {
+  try { return JSON.parse(localStorage.getItem("phrases") || "{}"); } catch { return {}; }
+}
+
+async function drawPhrases() {
+  const defaults = await py("phrase_defaults");
+  const mine = savedPhrases();
+  const box = $("phrases");
+  box.replaceChildren();
+  for (const [key, english] of Object.entries(defaults)) {
+    const input = document.createElement("input");
+    input.placeholder = english;
+    input.value = mine[key] ?? "";
+    input.addEventListener("change", async () => {
+      const next = { ...savedPhrases(), [key]: input.value.trim() };
+      if (!next[key]) delete next[key];
+      try {
+        await py("set_phrases", next);
+        try { localStorage.setItem("phrases", JSON.stringify(next)); } catch { /* kept for this visit */ }
+        status(`New screens will say "${input.value.trim() || english}".`);
+      } catch (error) {
+        status(String(error.message ?? error).split("\n").filter(Boolean).pop(), true);
+        input.value = mine[key] ?? "";
+      }
+    });
+    box.append(cell("label", PHRASE_NAMES[key] ?? key), input);
+  }
+}
+
+// the text boxes on show, to save every changed one at once
+let textBoxes = [];            // [{item, area}]
+
+function pendingTexts() {
+  return textBoxes.filter(({ item, area }) => area.value !== item.text);
+}
+
+function updatePending() {
+  const n = pendingTexts().length;
+  $("texts-save-all").disabled = n === 0;
+  $("texts-pending").textContent = n ? `${n} text${n > 1 ? "s" : ""} changed, not saved` : "";
+}
+
+// Remember where a text came from before it is changed to `text`, so its
+// button can go back; returns what undoes that if the change is refused.
+function rememberOrigin(item, text) {
+  const key = `${item.part}|${item.text}`;
+  // what the text will read as afterwards: a question's words, or the lines kept
+  const after = item.kind === "Help question" && item.part === "body"
+    ? text.split(/\s+/).filter(Boolean).join(" ")
+    : text.split("\n").map((l) => l.trim()).filter(Boolean).join("\n");
+  const origin = textOrigin.get(key) ?? item.text;
+  const afterKey = `${item.part}|${after}`;
+  const had = textOrigin.get(afterKey);
+  if (after !== origin) textOrigin.set(afterKey, origin);
+  else textOrigin.delete(afterKey);
+  return () => {
+    if (had === undefined) textOrigin.delete(afterKey);
+    else textOrigin.set(afterKey, had);
+  };
+}
+
+function saveAllTexts() {
+  const edits = pendingTexts();
+  if (!edits.length) return;
+  // set before the change redraws the tab, so its buttons know where to go back to
+  const undo = edits.map(({ item, area }) => rememberOrigin(item, area.value));
+  const list = edits.map(({ item, area }) => ({ screens: item.screens, part: item.part, text: area.value }));
+  change(`${edits.length} text${edits.length > 1 ? "s" : ""}`, (bytes) => py("op_set_texts", bytes, list))
+    .then((ok) => { if (!ok) undo.forEach((f) => f()); });
+}
+
+async function drawTexts() {
+  if (textOriginOf !== history[0]) {
+    textOrigin = new Map();
+    textOriginOf = history[0];
+  }
+  const holder = $("texts");
+  let items;
+  try {
+    items = await py("texts", current().bytes);
+  } catch (error) {
+    textBoxes = [];
+    updatePending();
+    holder.replaceChildren(cell("p", `The texts cannot be read here: ${String(error.message ?? error).split("\n").pop()}`));
+    return;
+  }
+  textBoxes = [];
+  updatePending();
+  holder.replaceChildren();
+  const heads = { activity: "Activity", device: "Device", common: "On every activity" };
+  let card = null, last = null;
+  for (const item of items) {
+    const group = `${item.group}|${item.owner}`;
+    if (group !== last) {
+      last = group;
+      card = document.createElement("div");
+      card.className = "card";
+      card.append(cell("h2", item.group === "common" ? heads.common : `${heads[item.group]}: ${item.owner}`));
+      holder.append(card);
+    }
+    card.append(textItem(item));
+  }
+}
+
+function textItem(item) {
+  const div = document.createElement("div");
+  div.className = "text-item";
+  const [mode, page] = item.screens[0];
+  const canvas = document.createElement("canvas");
+  canvas.width = 96;
+  canvas.height = 64;
+  paint(canvas, screenOf(mode, page));
+  const fig = document.createElement("figure");
+  const n = item.screens.length;
+  fig.append(canvas, cell("figcaption", `${item.kind}${n > 1 ? `, on ${n} screens` : ""}`));
+  fig.addEventListener("click", () => remote.show(mode, page));
+
+  const edit = document.createElement("div");
+  edit.className = "text-edit";
+  const area = document.createElement("textarea");
+  area.value = item.text;
+  area.rows = Math.max(1, item.text.split("\n").length);
+  const key = `${item.part}|${item.text}`;
+  const back = item.default ?? textOrigin.get(key) ?? null;
+  const save = document.createElement("button");
+  save.type = "button";
+  save.textContent = "Save";
+  save.disabled = true;
+  area.addEventListener("input", () => {
+    save.disabled = area.value === item.text;
+    updatePending();
+  });
+  textBoxes.push({ item, area });
+  const reset = document.createElement("button");
+  reset.type = "button";
+  reset.textContent = item.default != null ? "Logitech's English" : "As it was";
+  reset.title = back ?? "";
+  reset.disabled = back == null || back === item.text;
+  const put = (text) => {
+    const short = item.text.replace(/\s+/g, " ").slice(0, 30);
+    // set before the change redraws this tab, so its button knows where to go back to
+    const undo = rememberOrigin(item, text);
+    change(`text "${short}"`, (bytes) => py("op_set_text", bytes, item.screens, item.part, text))
+      .then((ok) => { if (!ok) undo(); });
+  };
+  save.addEventListener("click", () => put(area.value));
+  reset.addEventListener("click", () => put(back));
+  const buttons = document.createElement("div");
+  buttons.className = "row";
+  buttons.append(save, reset);
+  edit.append(area, buttons);
+  div.append(fig, edit);
+  return div;
+}
+
 function flashRow(selector) {
   const tr = document.querySelector(selector);
   if (!tr) return;
@@ -240,11 +450,14 @@ function linkedRow(cells, kind, item) {
   return tr;
 }
 
-function show() {
+async function show() {
   const { bytes } = current();
-  const s = toJs(webapp.summary(bytes));
-  screenCache = new Map();
-  model = toJs(webapp.remote_model(bytes));
+  const s = await py("summary", bytes);
+  model = await py("remote_model", bytes);
+  const powerDevices = await py("power_devices", bytes);
+  commandList = await py("commands", bytes);
+  inputChoices = await py("input_choices", bytes);
+  await loadScreens(bytes);
   const id = $("identity");
   id.replaceChildren();
   if (identity) {
@@ -263,7 +476,7 @@ function show() {
   const byPlace = (x, y) => x.page - y.page || x.corner - y.corner;
   const dv = $("devices");
   dv.replaceChildren(row(["name", "on the remote", "keys", "power state"], true));
-  const kept = new Set(toJs(webapp.power_devices(bytes)));
+  const kept = new Set(powerDevices);
   for (const d of [...s.devices].sort(byPlace)) {
     const soft = (model.modes[d.mode]?.soft ?? []).flat().filter(Boolean).length;
     const keys = Object.keys(model.modes[d.mode]?.keys ?? {}).length;
@@ -287,7 +500,6 @@ function show() {
   if (!model.activities.length) ac.append(row(["No activities."]));
 
   // the commands an activity can send, by device
-  commandList = toJs(webapp.commands(bytes));
   const devs = [...new Set(commandList.map((c) => c.device))];
   $("act-step-device").replaceChildren(...devs.map((n) => option(n, n)));
   fillStepCommands();
@@ -312,7 +524,7 @@ function show() {
   const delA = $("del-activity");
   delA.replaceChildren(...s.activities.map((a) => option(a.name, a.name)));
   // devices the remote keeps no power state for, with their commands
-  const powered = new Set(toJs(webapp.power_devices(bytes)));
+  const powered = new Set(powerDevices);
   const unpowered = s.devices.filter((d) => !powered.has(d.name) && d.group != null);
   $("pw-device").replaceChildren(...unpowered.map((d) => option(d.mode, d.name)));
   $("f-power").querySelector("button").disabled = !unpowered.length;
@@ -323,7 +535,7 @@ function show() {
   which.replaceChildren(option("", "a new device"),
     ...s.devices.filter((d) => d.group != null).map((d) => option(d.mode, d.name)));
   which.value = [...which.options].some((o) => o.value === editingNow) ? editingNow : "";
-  loadDeviceIntoForm();
+  await loadDeviceIntoForm();
 
   const like = $("act-like");
   like.replaceChildren(...(s.activities.length ? s.activities.map((a) => option(a.name, a.name))
@@ -335,12 +547,12 @@ function show() {
     ...byName.map((d) => option(d.mode, d.name)));
   $("act-key-device").replaceChildren(...byName.map((d) => option(d.mode, d.name)));
   if (!$("act-key-name").options.length) {
-    $("act-key-name").replaceChildren(...toJs(webapp.key_names())
+    $("act-key-name").replaceChildren(...keyNames
       .filter((k) => !["VolumeUp", "VolumeDown", "Mute"].includes(k)).map((k) => option(k, k)));
   }
   const on = $("act-on");
   on.replaceChildren();
-  for (const name of toJs(webapp.power_devices(bytes))) {
+  for (const name of powerDevices) {
     const l = document.createElement("label");
     l.className = "check";
     const box = document.createElement("input");
@@ -353,7 +565,8 @@ function show() {
   const actNow = actWhich.value;
   actWhich.replaceChildren(option("", "a new activity"), ...s.activities.map((a) => option(a.name, a.name)));
   actWhich.value = [...actWhich.options].some((o) => o.value === actNow) ? actNow : "";
-  if (actWhich.value !== "" || actNow !== "") loadActivityIntoForm();
+  if (actWhich.value !== "" || actNow !== "") await loadActivityIntoForm();
+  else await inputsFromLike();
 
   const n = history.length - 1;
   $("changes").textContent = n === 0 ? "" :
@@ -364,21 +577,40 @@ function show() {
   $("save").disabled = false;
   remote.load(model);
   drawScreens();
+  if (!$("tab-texts").hidden) await drawTexts();
 }
 
-async function change(label, run) {
-  status(`${label}: building and checking…`);
-  await repaint();
+// Show a file or a change, with the page held while the worker draws it.
+async function showHeld() {
+  setBusy(true);
   try {
-    const bytes = toJs(run(current().bytes));
+    await show();
+  } finally {
+    setBusy(false);
+  }
+}
+
+// `run(bytes)` builds a change in the worker (a promise of the new bytes).
+async function change(label, run) {
+  if (busy) {
+    status("Still working on the last change; try again when it is done.", true);
+    return false;
+  }
+  setBusy(true);
+  status(`${label}: building and checking…`);
+  try {
+    const bytes = await run(current().bytes);
     history.push({ bytes, label });
-    show();
+    status(`${label}: drawing…`);
+    await show();
     status(`${label}: done. Save the file to keep it.`);
     return true;
   } catch (error) {
     const message = String(error.message ?? error).split("\n").filter(Boolean).pop();
     status(`${label}: refused. ${message}`, true);
     return false;
+  } finally {
+    setBusy(false);
   }
 }
 
@@ -422,7 +654,7 @@ async function learnInto(tr) {
     status(`Learning ${name}: point the device's remote at the bottom end of the 525 and tap the key…`);
     const capture = await remote.learnIR();
     if (!capture) throw new Error("nothing was received within five seconds");
-    const decoded = toJs(webapp.decode_capture(capture.durations));
+    const decoded = await py("decode_capture", capture.durations);
     if (decoded.nec) {
       const [a, a2, cmd] = decoded.nec;
       tr.dataset.learned = JSON.stringify({ address: a, address2: a2, code: cmd });
@@ -553,7 +785,7 @@ async function useDatabaseFile(source, path) {
   let plan;
   try {
     const text = await (await fetch(url)).text();
-    plan = toJs(source === "irdb" ? webapp.irdb_device(text) : webapp.flipper_device(text));
+    plan = await py(source === "irdb" ? "irdb_device" : "flipper_device", text);
   } catch (error) {
     status(`${path} could not be read: ${error.message ?? error}`, true);
     return;
@@ -573,8 +805,13 @@ async function useDatabaseFile(source, path) {
   });
   const parts = path.split("/");
   if (!$("dev-name").value.trim()) {
-    $("dev-name").value = (source === "irdb" ? `${parts[1]} ${parts[2]}`
-      : `${parts[1]} ${parts[0].replace(/s$/, "")}`).slice(0, 20);
+    // Flipper-IRDB's converted sets: _Converted_/Pronto/<letter>/<brand>/[<type>/]<file>
+    const conv = parts[0] === "_Converted_";
+    const name = source === "irdb" ? `${parts[1]} ${parts[2]}`
+      : conv ? `${parts[3]} ${(parts.length > 5 ? parts[4] : parts[4].replace(/\.ir$/, ""))}`
+      : `${parts[1]} ${parts[0].replace(/s$/, "")}`;
+    // folder names spell spaces as _ and the remote's fonts have no _
+    $("dev-name").value = name.replace(/[_()]/g, " ").replace(/\s+/g, " ").trim().slice(0, 20);
   }
   const keys = Object.keys(plan.keys).length;
   const left = plan.soft.length - soft.length;
@@ -602,17 +839,17 @@ function setCurrent(tr, item) {
   code.title = `sends command ${item.command} of this device now; Learn or type to change it, × to clear`;
 }
 
-function loadDeviceIntoForm() {
-  clearDeviceRows();
+async function loadDeviceIntoForm() {
   const mode = $("dev-which").value;
   const editing = mode !== "";
+  const layout = editing ? await py("device_layout", current().bytes, Number(mode)) : null;
+  clearDeviceRows();
   $("f-add-device").querySelector("button.primary").textContent = editing ? "Save the changes" : "Add the device";
   softSnapshot = null;
   if (!editing) {
     $("dev-name").value = "";
     return;
   }
-  const layout = toJs(webapp.device_layout(current().bytes, Number(mode)));
   $("dev-name").value = layout.name;
   $("dev-name").dataset.was = layout.name;
   for (const tr of $("dev-keys").querySelectorAll("tbody tr")) {
@@ -641,7 +878,7 @@ function buildDeviceForm() {
   addSoftPage();
   $("dev-soft-page").addEventListener("click", addSoftPage);
   const keys = $("dev-keys").querySelector("tbody");
-  for (const key of toJs(webapp.key_names())) {
+  for (const key of keyNames) {
     const tr = learnRow(key, REPEATING_KEYS.has(key));
     tr.dataset.key = key;
     keys.append(tr);
@@ -669,18 +906,31 @@ function parseNumber(text, what) {
 }
 
 async function main() {
+  $("working").hidden = false;
   try {
-    webapp = await startPython();
+    await py("ready");
+    keyNames = await py("key_names");
   } catch (error) {
-    status(`The reader did not load: ${error}`, true);
+    status(`The reader did not load: ${error.message ?? error}`, true);
     return;
+  } finally {
+    $("working").hidden = true;
   }
+  // the sentences new screens are written in, as this browser keeps them
+  try {
+    await py("set_phrases", savedPhrases());
+  } catch {
+    try { localStorage.removeItem("phrases"); } catch { /* nothing kept */ }
+  }
+  await drawPhrases();
   buildDeviceForm();
   remote = new RemoteView($("remote"), { screen: screenOf, onEvent: onRemote });
+  $("texts-save-all").addEventListener("click", saveAllTexts);
   for (const b of $("tabs").querySelectorAll("button")) {
     b.addEventListener("click", () => {
       for (const o of $("tabs").querySelectorAll("button")) o.classList.toggle("on", o === b);
       for (const t of document.querySelectorAll(".tab")) t.hidden = t.id !== `tab-${b.dataset.tab}`;
+      if (b.dataset.tab === "texts" && history.length) drawTexts();
     });
   }
   // pointing at a key row of the add device form lights that key on the drawn remote
@@ -700,6 +950,7 @@ async function main() {
   $("connect").disabled = !Harmony525.supported();
 
   $("connect").addEventListener("click", async () => {
+    if (busy) return;
     let remote;
     try {
       remote = await Harmony525.connect();
@@ -715,9 +966,10 @@ async function main() {
         $("progress").value = done;
         status(`Reading the configuration: ${done} of ${total} bytes`);
       });
-      history = [{ bytes: toJs(webapp.ezhex_from_blob(blob)), label: "read from the remote" }];
-      status(`Read a ${toJs(webapp.model(history[0].bytes))}. Save a backup before changing anything on it.`);
-      show();
+      history = [{ bytes: await py("ezhex_from_blob", blob), label: "read from the remote" }];
+      status(`Read a ${await py("model", history[0].bytes)}. Drawing it…`);
+      await showHeld();
+      status(`Read a ${await py("model", history[0].bytes)}. Save a backup before changing anything on it.`);
     } catch (error) {
       status(`${error.message ?? error}`, true);
     } finally {
@@ -728,12 +980,13 @@ async function main() {
 
   $("file").addEventListener("change", async (event) => {
     const file = event.target.files[0];
-    if (!file) return;
+    if (!file || busy) return;
     try {
       identity = null;
       history = [{ bytes: new Uint8Array(await file.arrayBuffer()), label: file.name }];
+      status(`Opening ${file.name}…`);
+      await showHeld();
       status(`Opened ${file.name}.`);
-      show();
     } catch (error) {
       status(`${file.name} could not be read: ${error.message ?? error}`, true);
     }
@@ -749,9 +1002,11 @@ async function main() {
     URL.revokeObjectURL(url);
   });
 
-  $("undo").addEventListener("click", () => {
+  $("undo").addEventListener("click", async () => {
+    if (busy) return;
     if (history.length > 1) history.pop();
-    show();
+    status("Undoing…");
+    await showHeld();
     status("Undone.");
   });
 
@@ -759,7 +1014,7 @@ async function main() {
     event.preventDefault();
     const select = $("del-device");
     const name = select.options[select.selectedIndex]?.textContent;
-    change(`delete ${name}`, (bytes) => webapp.op_delete_device(bytes, Number(select.value)));
+    change(`delete ${name}`, (bytes) => py("op_delete_device", bytes, Number(select.value)));
   });
 
   $("f-move-device").addEventListener("submit", (event) => {
@@ -768,7 +1023,7 @@ async function main() {
     const name = sel.options[sel.selectedIndex]?.textContent.replace(/ \(page.*$/, "");
     const page = Number($("mv-device-page").value), corner = Number($("mv-device-corner").value);
     change(`move ${name} to page ${page + 1}, ${CORNERS[corner]}`,
-      (bytes) => webapp.op_place_device(bytes, Number(sel.value), page, corner));
+      (bytes) => py("op_place_device", bytes, Number(sel.value), page, corner));
   });
 
   $("f-move-activity").addEventListener("submit", (event) => {
@@ -776,13 +1031,13 @@ async function main() {
     const name = $("mv-activity").value;
     const page = Number($("mv-activity-page").value), corner = Number($("mv-activity-corner").value);
     change(`move ${name} to page ${page + 1}, ${CORNERS[corner]}`,
-      (bytes) => webapp.op_place_activity(bytes, name, page, corner));
+      (bytes) => py("op_place_activity", bytes, name, page, corner));
   });
 
   $("f-del-activity").addEventListener("submit", (event) => {
     event.preventDefault();
     const name = $("del-activity").value;
-    change(`delete activity ${name}`, (bytes) => webapp.op_delete_activity(bytes, name));
+    change(`delete activity ${name}`, (bytes) => py("op_delete_activity", bytes, name));
   });
 
   $("f-add-activity").addEventListener("submit", (event) => {
@@ -796,9 +1051,9 @@ async function main() {
     const routedKeys = { ...actKeys };
     const editing = $("act-which").value;
     if (editing !== "") {
-      const keep = $("act-keep-row").hidden || $("act-keep").checked;
       change(editing === name ? `edit activity ${name}` : `edit activity ${editing} into ${name}`,
-        (bytes) => webapp.op_edit_activity(bytes, editing, name, like, on, sendSteps, show, volume, keep, routedKeys))
+        (bytes) => py("op_edit_activity", bytes, editing, name, like, on, sendSteps, show, volume, true,
+          routedKeys, inputChoices.length ? chosenInputs() : null))
         .then(() => {
           // renamed: follow it to its new name
           if (editing !== name && [...$("act-which").options].some((o) => o.value === name)) {
@@ -809,7 +1064,8 @@ async function main() {
       return;
     }
     change(`add activity ${name}`,
-      (bytes) => webapp.op_add_activity(bytes, name, like, on, sendSteps, show, volume, routedKeys))
+      (bytes) => py("op_add_activity", bytes, name, like, on, sendSteps, show, volume, routedKeys,
+        inputChoices.length ? chosenInputs() : null))
       .then((ok) => {
         if (!ok) return;            // a refused one keeps what was typed, to fix and try again
         steps = [];
@@ -821,6 +1077,7 @@ async function main() {
 
   $("act-step-device").addEventListener("change", fillStepCommands);
   $("act-which").addEventListener("change", loadActivityIntoForm);
+  $("act-like").addEventListener("change", () => { if ($("act-which").value === "") inputsFromLike(); });
   $("act-key-add").addEventListener("click", () => {
     actKeys[$("act-key-name").value] = Number($("act-key-device").value);
     drawActKeys();
@@ -833,7 +1090,7 @@ async function main() {
     const off = $("pw-off").value === "" ? null : Number($("pw-off").value);
     const tenths = Math.round(Number($("pw-delay").value) * 10);
     change(`keep ${name}'s power state`,
-      (bytes) => webapp.op_add_power(bytes, Number(sel.value), Number($("pw-on").value), off, tenths));
+      (bytes) => py("op_add_power", bytes, Number(sel.value), Number($("pw-on").value), off, tenths));
   });
   $("act-wait-add").addEventListener("click", () => {
     const device = $("act-step-device").value;
@@ -897,7 +1154,7 @@ async function main() {
     const name = $("dev-name").value.trim();
     const editing = $("dev-which").value;
     if (editing === "") {
-      change(`add ${name}`, (bytes) => webapp.op_add_device(bytes, name, address, commands, keys, lcd));
+      change(`add ${name}`, (bytes) => py("op_add_device", bytes, name, address, commands, keys, lcd));
       return;
     }
     // keys: a new command where one was learned or typed, nothing where one was
@@ -922,10 +1179,10 @@ async function main() {
       status("Nothing changed.");
       return;
     }
-    change(name === was ? `edit ${name}` : `edit ${was}, renamed ${name}`, (bytes) => {
+    change(name === was ? `edit ${name}` : `edit ${was}, renamed ${name}`, async (bytes) => {
       // the rename first: it keeps every mode's number, which the rekey goes by
-      const out = name === was ? bytes : webapp.op_rename_device(bytes, Number(editing), name);
-      return rekey ? webapp.op_rekey_device(out, Number(editing), newCommands, editKeys,
+      const out = name === was ? bytes : await py("op_rename_device", bytes, Number(editing), name);
+      return rekey ? py("op_rekey_device", out, Number(editing), newCommands, editKeys,
         softChanged ? lcd : null) : out;
     });
   });
@@ -983,7 +1240,7 @@ async function main() {
     let remote;
     let blob;
     try {
-      blob = toJs(webapp.blob_of(bytes));
+      blob = await py("blob_of", bytes);
     } catch (error) {
       status(`Not written: ${String(error.message ?? error).split("\n").filter(Boolean).pop()}`, true);
       return false;
@@ -1027,11 +1284,11 @@ async function main() {
       status(`${pending.label}: setting the clock…`);
       await remote.setClock();
       status(`${pending.label}: reading the remote back…`);
-      const back = toJs(webapp.ezhex_from_blob(await remote.readConfig()));
+      const back = await py("ezhex_from_blob", await remote.readConfig());
       const same = back.length === pending.bytes.length && back.every((b, i) => b === pending.bytes[i]);
       if (!same) throw new Error("the remote does not read back as what was written");
       history = [{ bytes: back, label: `${pending.label}, read back` }];
-      show();
+      await showHeld();
       status(`${pending.label}: done. The remote reads back byte for byte and its clock is set. Try it.`);
       pending = null;
       $("finish").hidden = true;
@@ -1049,7 +1306,7 @@ async function main() {
     const when = keepBackup(backupBytes);
     download(backupBytes, `harmony525-backup-before-write-${new Date().toISOString().slice(0, 19).replace(/:/g, "")}.EZHex`);
     $("write-ok").checked = false;
-    const which = toJs(webapp.model(current().bytes));
+    const which = await py("model", current().bytes);
     if (which !== "Harmony 525") {
       // the same firmware, and writing is Concordance's sequence, but only a 525 has had it
       status(`Writing to a ${which}: this page has only ever written to a Harmony 525.`);

@@ -1,11 +1,17 @@
 """Verify firmware-backed Harmony 525 semantic claims without private samples.
 
-This is intentionally an evidence check, not a second decompiler. It reads only
-the public 525 config bundled with this repository and, optionally, a local
+This is intentionally an evidence check, not a second decompiler. It reads the
+public 525 config bundled with this repository and, optionally, a local
 firmware image that must never be committed.
+
+Given another arch 9 config (a 515, a 555, one composed by compose525.py), it
+runs the same structural checks, and the counts pinned to the public sample
+(its four infrared groups, the modes of its four devices, its region totals)
+are left out: those are evidence about that one file, not rules.
 
 Usage:
     python tools/verify_525_semantics.py
+    python tools/verify_525_semantics.py path/to/other.EZHex
     python tools/verify_525_semantics.py --firmware path/to/mcu.bin
 """
 from __future__ import annotations
@@ -140,7 +146,7 @@ def all_action_instructions(blob: bytes, sections: list[int | None]):
             for item in instructions(blob, address - CONFIG_BASE)]
 
 
-def verify_action_closures(blob: bytes, sections: list[int | None]) -> dict:
+def verify_action_closures(blob: bytes, sections: list[int | None], pinned: bool = True) -> dict:
     state = sections[STATE_SLOT]
     assert state is not None
     state_count, narrow, wide, narrow_again = (
@@ -150,7 +156,7 @@ def verify_action_closures(blob: bytes, sections: list[int | None]) -> dict:
     actions = all_action_instructions(blob, sections)
     writes = [(opcode & 0x7F, operand) for opcode, operand in actions
               if opcode >= 0x80]
-    assert writes and all(index < state_count for index, _ in writes)
+    assert (writes or not pinned) and all(index < state_count for index, _ in writes)
     assert all(operand < 0x100 for index, operand in writes if index < narrow)
 
     queue_delays = [(operand >> 8, operand & 0xFF) for opcode, operand in actions
@@ -161,14 +167,16 @@ def verify_action_closures(blob: bytes, sections: list[int | None]) -> dict:
     group_addresses = [u24(blob, ir + 1 + 3 * k) - CONFIG_BASE
                        for k in range(ir_groups)]
     group_sizes = [u16(blob, address + 1) for address in group_addresses]
-    assert queue_delays and all(group < ir_groups for group, _ in queue_delays)
+    assert (queue_delays or not pinned) and all(group < ir_groups for group, _ in queue_delays)
 
     sends = [(operand >> 8, operand & 0xFF) for opcode, operand in actions
              if opcode == 0x7D]
-    assert sends and all(group < ir_groups for group, _ in sends)
+    assert (sends or not ir_groups) and all(group < ir_groups for group, _ in sends)
     for group, size in enumerate(group_sizes):
         commands = {command for found, command in sends if found == group}
-        assert commands == set(range(size))
+        # the public sample sends every record of every group; a composed
+        # config may hold a record nothing sends yet
+        assert commands == set(range(size)) if pinned else commands <= set(range(size))
 
     return {
         "action_instructions": len(actions),
@@ -186,7 +194,7 @@ def verify_action_closures(blob: bytes, sections: list[int | None]) -> dict:
     }
 
 
-def verify_device_page_groups(blob: bytes, sections: list[int | None]) -> dict:
+def verify_device_page_groups(blob: bytes, sections: list[int | None], pinned: bool = True) -> dict:
     """Tie each known device mode to one base-slot-5 infrared group.
 
     The human-readable names are established by rendering these modes; this
@@ -208,8 +216,9 @@ def verify_device_page_groups(blob: bytes, sections: list[int | None]) -> dict:
         group_sizes.append(u16(blob, address + 1))
     # The public sample has these four groups. Offline authoring experiments
     # may append groups, but must never alter or reorder the original four.
-    assert group_sizes[:4] == [8, 67, 61, 64]
-    assert len(group_sizes) >= 4
+    if pinned:
+        assert group_sizes[:4] == [8, 67, 61, 64]
+        assert len(group_sizes) >= 4
 
     action_count = u16(blob, action)
     action_addresses = [u24(blob, action + 2 + 3 * k) - CONFIG_BASE
@@ -271,6 +280,16 @@ def verify_device_page_groups(blob: bytes, sections: list[int | None]) -> dict:
         }
 
     result = {}
+    mode_count = u24(blob, mode)
+    if not pinned:
+        # any other config: each group has a mode whose bindings send to it
+        # alone, every command inside the group's record count
+        for expected_group in range(group_count):
+            found = [d for d in (inspect_mode(m, expected_group, require_every_entry=False,
+                                              include_physical=True) for m in range(mode_count)) if d]
+            assert found, f"no mode sends to infrared group {expected_group} alone"
+            result[f"group {expected_group}"] = max(found, key=lambda d: d["commands_used"])
+        return result
     for name, (mode_index, expected_group) in device_modes.items():
         details = inspect_mode(mode_index, expected_group)
         assert details is not None
@@ -279,7 +298,6 @@ def verify_device_page_groups(blob: bytes, sections: list[int | None]) -> dict:
     # For appended groups, discover the mode that reaches every command in the
     # group. This makes the verifier useful for fifth-device candidates without
     # weakening the pinned checks for the original public sample.
-    mode_count = u24(blob, mode)
     for expected_group in range(4, group_count):
         candidates = []
         for mode_index in range(mode_count):
@@ -352,7 +370,7 @@ def screen_program_path(blob: bytes, offset: int) -> list[dict]:
     raise AssertionError(f"screen jump cycle reaches 0x{offset:X}")
 
 
-def verify_screen_programs(blob: bytes, sections: list[int | None]) -> dict:
+def verify_screen_programs(blob: bytes, sections: list[int | None], pinned: bool = True) -> dict:
     """Close slot-11 wrappers and every mode-page program on the public 525."""
     table = sections[SCREEN_SLOT]
     mode = sections[MODE_SLOT]
@@ -362,7 +380,9 @@ def verify_screen_programs(blob: bytes, sections: list[int | None]) -> dict:
     table_roots = [u24(blob, table + 2 + 3 * k) - CONFIG_BASE
                    for k in range(table_count)]
     wrappers = [screen_program_path(blob, root) for root in table_roots]
-    assert all([item["opcode"] for item in program] == [17, 0]
+    # the empty 555 also has a wrapper that is only the terminator
+    shapes = ([17, 0],) if pinned else ([17, 0], [0])
+    assert all([item["opcode"] for item in program] in shapes
                for program in wrappers)
 
     mode_count = u24(blob, mode)
@@ -455,7 +475,7 @@ def verify_screen_programs(blob: bytes, sections: list[int | None]) -> dict:
 
 
 def verify_record_array_coverage(blob: bytes,
-                                 sections: list[int | None]) -> dict:
+                                 sections: list[int | None], pinned: bool = True) -> dict:
     """Pin the rooted record-list overlays and complete screen instructions."""
     regions = hconfig.decompile(blob)["blob"]["regions"]
     role_counts = collections.Counter(
@@ -475,21 +495,22 @@ def verify_record_array_coverage(blob: bytes,
         "page_binding_copy": 1052,
         "section_9_binding": 745,
     }
-    assert dict(role_counts) == expected_counts, role_counts
-    assert dict(role_bytes) == expected_bytes, role_bytes
+    if pinned:
+        assert dict(role_counts) == expected_counts, role_counts
+        assert dict(role_bytes) == expected_bytes, role_bytes
 
     instructions = [region for region in regions
                     if region["kind"] == "screen_instruction"]
     opcodes = collections.Counter(int(region["opcode"], 16)
                                   for region in instructions)
-    assert opcodes == {0: 157, 5: 179, 16: 244, 17: 22, 22: 1080, 23: 1080}
     instruction_bytes = sum(hconfig.region_length(region)
                             for region in instructions)
-    assert instruction_bytes == 4510
-
     opaque = [region for region in regions if region["kind"] == "opaque"]
     opaque_bytes = sum(hconfig.region_length(region) for region in opaque)
-    assert (len(opaque), opaque_bytes) == (25, 512)
+    if pinned:
+        assert opcodes == {0: 157, 5: 179, 16: 244, 17: 22, 22: 1080, 23: 1080}
+        assert instruction_bytes == 4510
+        assert (len(opaque), opaque_bytes) == (25, 512)
 
     # The positive counts are not enough: make each independent constraint
     # disagree once and require the complete overlay to fail closed.
@@ -567,7 +588,7 @@ def verify_record_array_coverage(blob: bytes,
         "screen_instruction_bytes": instruction_bytes,
         "opaque_regions": len(opaque),
         "opaque_bytes": opaque_bytes,
-        "bytes_moved_from_opaque": 8513 - opaque_bytes,
+        **({"bytes_moved_from_opaque": 8513 - opaque_bytes} if pinned else {}),
         "negative_mutations_refused": len(negative_cases),
     }
 
@@ -631,11 +652,16 @@ def main() -> int:
     if blob[:4] != hconfig.MAGIC:
         raise SystemExit("this verifier currently pins the public arch-9 525 evidence")
     sections = section_offsets(blob)
+    # the counts below are pinned to the public sample; any other config gets
+    # the structural checks alone
+    pinned = blob == _paths.get_blob(_paths.SAMPLE_BLOB)
+    if not pinned:
+        print("NOTE not the public sample: structural checks only, its pinned counts left out")
     slot8 = verify_slot8(blob, sections)
-    action = verify_action_closures(blob, sections)
-    devices = verify_device_page_groups(blob, sections)
-    screen = verify_screen_programs(blob, sections)
-    record_array = verify_record_array_coverage(blob, sections)
+    action = verify_action_closures(blob, sections, pinned)
+    devices = verify_device_page_groups(blob, sections, pinned)
+    screen = verify_screen_programs(blob, sections, pinned)
+    record_array = verify_record_array_coverage(blob, sections, pinned)
 
     print("PASS slot 8 closes exactly")
     print("  " + ", ".join(f"{k}={v}" for k, v in slot8.items()))

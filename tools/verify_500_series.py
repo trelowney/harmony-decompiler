@@ -78,6 +78,10 @@ def main() -> int:
     kitchen = c.rename_device(s515, modes["Mini System"], "Kitchen Q7&J")
     check({x.mode: x.name for x in c.devices(kitchen)}[modes["Mini System"]] == "Kitchen Q7&J",
           "515 takes a name with K, Q, 7, & and J, none of which its font had")
+    # and Czech letters, each drawn from the font's own base letter with its mark
+    czech = c.rename_device(s515, modes["Mini System"], "Rádio Žluťoučký")
+    check({x.mode: x.name for x in c.devices(czech)}[modes["Mini System"]].startswith("Rádio"),
+          "515 takes Czech letters: " + {x.mode: x.name for x in c.devices(czech)}[modes["Mini System"]])
 
     # the empty 555 takes a first device with nothing to copy: every key as
     # Logitech lists them, the Devices screen's frame, section 5 grown from 0
@@ -87,6 +91,53 @@ def main() -> int:
     check(not c.devices(s555) and [(x.name, x.page, x.corner) for x in c.devices(first)] == [("TV Box", 0, 0)]
           and {"Power", "VolumeUp"} <= names,
           f"555 starts empty and takes a first device, top left of Devices, its keys named {sorted(names)}")
+
+    # more devices fill the first Devices page's free corners (section 5 read
+    # back with one group is plain bytes); the fifth opens a second page, and
+    # the 555, which never paged anything, gets the page counter's font set 4
+    full = first
+    for name in ("Amp", "DVD", "Box", "Fifth", "Sixth"):
+        full, _ = c.add_device(full, name, cmds, {"VolumeUp": "Vol+"}, [[("Power", "Power"), None, None, None]])
+    d = c._Doc(full)
+    counter = [c.renderer.INK in row for row in
+               c.render_map(d.blob)[(d.devices_modes()[0], 1)][0][56:64]]
+    check([(x.name, x.page, x.corner) for x in c.devices(full)]
+          == [("TV Box", 0, 0), ("Amp", 0, 1), ("DVD", 0, 2), ("Box", 0, 3), ("Fifth", 1, 0), ("Sixth", 1, 1)]
+          and len(c._Doc(first).fonts) == 4 and len(d.fonts) == 5 and any(counter),
+          "555 takes six devices: the fifth opens Devices page 2 and brings the page counter's font")
+
+    # activities on the 555: the first from nothing, a fifth on menu page 2,
+    # one edited and moved (names drawn in font 0 where the 555's pages are
+    # in the title's font), and everything deleted again
+    tv, box = c.devices(full)[0], c.devices(full)[1]
+    acts = c.add_first_activity(full, "A1", [], tv.mode, steps=[(tv.group, 0)])
+    for name in ("A2", "A3", "A4", "A5"):
+        acts = c.add_activity(acts, name, "A1", [], writes={}, steps=[(box.group, 0)], show=box.mode)
+    acts = c.edit_activity(acts, "A5", "A5 edited", "A5", [], writes={}, steps=[(tv.group, 0)], show=tv.mode)
+    acts = c.place_activity(acts, "A5 edited", 0, 0)
+    placed = [(a.name, a.page, a.corner) for a in c.activities(acts)]
+    empty = acts
+    for a in c.activities(acts):
+        empty = c.delete_activity(empty, a.name)
+    while c.devices(empty):
+        empty = c.delete_device(empty, c.devices(empty)[-1].mode)
+    check(placed == [("A5 edited", 0, 0), ("A2", 0, 1), ("A3", 0, 2), ("A4", 0, 3), ("A1", 1, 0)]
+          and not c.activities(empty) and not c.devices(empty)
+          and c.add_device(empty, "TV", cmds, {}, [[("Power", "Power"), None, None, None]])[0],
+          "555 takes five activities over two menu pages, one edited and moved; all deleted, "
+          "with every device, it takes a device again")
+
+    # texts on the 515 and the 555: Yes and No, and the activity menu's title
+    ok = True
+    for raw in (s515, acts):
+        texts = {(t["part"], t["text"]): t for t in c.screen_texts(raw)}
+        soft = texts[("soft", "Yes\nNo")]
+        menu = next(t for (part, _), t in texts.items() if part == "title" and t["text"].startswith("Choose"))
+        out = c.set_screen_text(raw, soft["screens"], "soft", "Ano\nNe")
+        out = c.set_screen_text(out, menu["screens"], "title", "Aktivity")
+        after = {(t["part"], t["text"]) for t in c.screen_texts(out)}
+        ok = ok and {("soft", "Ano\nNe"), ("title", "Aktivity")} <= after and ("soft", "Yes\nNo") not in after
+    check(ok, "515 and 555 take Ano and Ne on every Help screen, and a menu titled Aktivity")
     return 1 if failed else 0
 
 
