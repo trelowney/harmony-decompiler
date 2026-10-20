@@ -5972,6 +5972,36 @@ one that it round trips, every screen draws and the structural checks of
 - A section 14 key can be cut over two regions when the pointer after it starts
   with `0x16`.
 
+**Found on the owner's own configuration, which refused to delete any
+activity.** Two more, found by an edit on the page rather than by the random
+runs:
+
+- The pool copy of a menu page names lists of its own, twins of the page's
+  (5ai): the same "pick key set k, then `0x92`" a second time. Moving an
+  activity on the menu rewrote the copy with the page's own entries and
+  orphaned the twins. Nothing reached them any more, but they still named the
+  key set, so deleting that activity was refused. A rewrite keeps each twin
+  now, and deleting an activity also takes an orphaned list that picks its key
+  set.
+- The idle value of CurrentActivityState need not be the last. After Watch
+  TV + was deleted and added again it sits between two activities (0, 1,
+  idle 2, 3), and the value-keyed section 14 record covers it with the item
+  below it, which picks an activity's key set. Deleting that activity now moves
+  the next item's stream onto the first. When the last activity's value is
+  above the idle one, its lone item is emptied as 5al's is.
+- With the idle value first (0, the activity 1) one item keyed 0 covers both.
+  `add_activity` copied only an item keyed by the source's own value, so an
+  activity added there took no item and ran the other activity's key set. It
+  gets an item of its own now when the covering item runs the source's own key
+  set or screen, and a delete moves the next item's stream onto the covering
+  one.
+
+The random runs, rerun with "still names something being deleted" counted as a
+bug rather than a refusal, then found one more: deleting a Logitech activity
+whose Devices screen first showed Devices pages 2 and 3 moved page 2's pool
+copy and left page 3's behind, because the check compared with the old order
+and not with where the copies were. It compares with the copies' places now.
+
 ## 6. Prior art
 
 The key thread is

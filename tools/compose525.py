@@ -2967,9 +2967,23 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
         record = ir.u24(blob, s14 + 1 + 3 * k) - BASE
         n = blob[record + 1]
         keys = {ir.u16(blob, record + 2 + 5 * j): ir.u24(blob, record + 4 + 5 * j) - BASE for j in range(n)}
-        if src.value not in keys or value in keys:
+        if value in keys:
             continue
-        target = keys[src.value]
+        if src.value in keys:
+            target = keys[src.value]
+        else:
+            # an item keyed below covers the source's value too (the idle
+            # value first, 0, and the source 1): when what it runs is the
+            # source's own, the new value needs an item of its own, or it
+            # runs the source's (found 2026-10-20)
+            below = [x for x in keys if x < src.value]
+            if not below:
+                continue
+            target = keys[max(below)]
+            if not (blob[target] == 0x11 and (
+                    (blob[target + 3] == 0x1F and ir.u16(blob, target + 1) == 0xFF00 | src.key_set)
+                    or (blob[target + 3] == 0x7E and ir.u16(blob, target + 1) in mode_map))):
+                continue
         op, operand = blob[target + 3], ir.u16(blob, target + 1)
         if blob[target] != 0x11:
             raise ComposeError(f"section 14 record {k} points at something that is not a stream")
@@ -3082,7 +3096,9 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
     for k in range(a[after_doc.S[14]]):
         record = ir.u24(a, after_doc.S[14] + 1 + 3 * k) - BASE
         keys = {ir.u16(a, record + 2 + 5 * j) for j in range(a[record + 1])}
-        if (src.value in keys) != (value in keys):
+        # the new value may have an item where the source is covered by one
+        # keyed below it (that item runs the source's own)
+        if src.value in keys and value not in keys:
             raise AssertionError(f"section 14 record {k} knows one value and not the other")
     old = {x.value: x for x in acts}
     for x in activities(out):
@@ -3215,6 +3231,21 @@ def delete_activity(raw: bytes, name: str, value: int | None = None) -> bytes:
         for p in f["pages"]:
             help_own |= {p["list"], d.pool_copy(p["list"])["offset"]}
     seeds |= help_lists
+    # a list that selects its key set and that nothing names: the twins of
+    # the menu page's pool copy, orphaned by a menu rewrite before
+    # _apply_corner_layout kept them (2026-10-20, the owner's own config)
+    named = {x for j in range(d.n_actions) for o, x in d.ins(j) if o == 0x7F}
+    for r in d.regions:
+        if r["kind"] == "tagged_list":
+            named |= {e["operand"] for e in r["entries"] if e["opcode"] == 0x7F}
+        elif r["kind"] == "action_list" and r.get("section") == 8:
+            named |= {x["operand"] for x in r["instructions"] if int(x["opcode"], 16) == 0x7F}
+    named |= {x for at, o, x in _transition_sites(blob, S) if o == 0x7F}
+    for j in range(n_sets):
+        named |= {x for t, o, x in cmp.tagged(blob, ir.u24(blob, S[9] + 1 + 3 * j) - BASE) if o == 0x7F}
+    named |= {a.start for a in acts} | {a.repick for a in acts if a.repick is not None}
+    seeds |= {j for j in range(d.n_actions) if j not in named and any(
+        o == 0x1F and x >> 8 in (0xFF, 0xE8) and x & 0xFF == k for o, x in d.ins(j))}
     doomed = set(seeds)
     grow = True
     while grow:
@@ -3268,21 +3299,44 @@ def delete_activity(raw: bytes, name: str, value: int | None = None) -> bytes:
     # And a record looked up by the activity state that holds the last
     # activity's value alone is emptied: the 555's, with no activity, has one
     # such record with no item at all (FORMAT 5al).
-    shifted, kept_first, emptied = {}, set(), set()
+    shifted, kept_first, emptied, replaced = {}, set(), set(), set()
     by_state = _records_keyed_by(d, cas_var)
+    def own_set(stream):
+        """The stream picks this activity's key set."""
+        return blob[stream + 3] == 0x1F and blob[stream + 2] in (0xFF, 0xE8) and blob[stream + 1] == k
     for r_i in sorted({r for r, *_ in items}):
         mine = [(key, at, stream) for rr, key, at, stream in items if rr == r_i]
-        if mine[0][0] == v:
-            if len(mine) > 1 and mine[1][0] == v + 1:
-                shifted[r_i] = mine[1]
+        below = [j for j, x in enumerate(mine) if x[0] < v]
+        cover = below[-1] if below and not any(x[0] == v for x in mine) else None
+        if len(mine) == 1 and len(acts) == 1 and r_i in by_state and own_set(mine[0][2]):
+            # the last activity, whose value is above an idle one the item is
+            # keyed by (the owner's config, idle 0 and the activity 1)
+            emptied.add(r_i)
+        elif cover is not None and own_set(mine[cover][2]) and cover + 1 < len(mine):
+            # no item of its own: one keyed below covers it (the idle value
+            # first, 0, and this activity 1) and picks its key set; the next
+            # item's stream moves onto that one, as below
+            shifted[r_i] = (mine[cover][1], mine[cover + 1])
+            replaced.add((r_i, mine[cover][0]))
+        elif mine[0][0] == v:
+            # followed by more, but its stream picks this activity's key set:
+            # the values up to the next key are the idle one, not another
+            # activity (an idle value between two activities, the owner's
+            # config after Watch TV + was deleted and added again), so the
+            # next item's stream moves onto the first as well
+            if len(mine) > 1 and (mine[1][0] == v + 1 or own_set(mine[0][2])):
+                shifted[r_i] = (mine[0][1], mine[1])
             elif len(mine) == 1 and len(acts) == 1 and r_i in by_state:
                 emptied.add(r_i)
             else:
                 kept_first.add(r_i)
     gone_streams = set()
+
+    def item_goes(rr, kk):
+        return (kk == v or rr in emptied or (rr, kk) in replaced) and rr not in kept_first
     for r_i, key, at, stream in items:
-        if key == v and r_i not in kept_first and not any(
-                s == stream and (kk != v or rr in kept_first) for rr, kk, _, s in items):
+        if item_goes(r_i, key) and not any(
+                s == stream and not item_goes(rr, kk) for rr, kk, _, s in items):
             gone_streams.add(stream)
     for stream in gone_streams:
         if blob[stream + 3] == 0x7E:
@@ -3352,15 +3406,20 @@ def delete_activity(raw: bytes, name: str, value: int | None = None) -> bytes:
     old_order = first_shown(range(d.n_modes))
     new_order = first_shown(keep_modes)
     lists_of = {p["address"]: p["list"] for m in range(d.n_modes) for p in d.mode(m)["pages"]}
+    # Compared with where the copies are now, not with the old order: a run of
+    # shared pages (Devices pages 2 and 3) moves as a whole, and the second
+    # follows the first to its new place (found 2026-10-20, three pages)
+    def copy_before(region):
+        i = d.index_of(region)
+        return next((r for r in reversed(d.regions[:i])
+                     if r.get("role") == "page_binding_copy" and r["id"] not in gone), None)
     for at_k, page_at in enumerate(new_order):
         if at_k == 0 or old_order.index(page_at) == 0:
             continue
-        before_now = new_order[at_k - 1]
-        old_before = [x for x in old_order[:old_order.index(page_at)] if x in new_order]
-        if old_before and old_before[-1] == before_now:
-            continue
         copy_region = d.pool_copy(lists_of[page_at])
-        after = d.pool_copy(lists_of[before_now])
+        after = d.pool_copy(lists_of[new_order[at_k - 1]])
+        if copy_before(copy_region) is after:
+            continue
         d.regions.remove(copy_region)
         d.regions.insert(d.index_of(after) + 1, copy_region)
     for r in d.regions:
@@ -3390,8 +3449,8 @@ def delete_activity(raw: bytes, name: str, value: int | None = None) -> bytes:
             _patch_bytes(d, rec + 1, bytes((0,)))
             _drop_span(d, rec + 2, 5, gone)
         elif r_i in shifted:
-            _, at1, _ = shifted[r_i]
-            first = next(r for r in d.at[rec + 4] if r["kind"] == "raw_pointer")
+            at0, (_, at1, _) = shifted[r_i]
+            first = next(r for r in d.at[at0 + 2] if r["kind"] == "raw_pointer")
             first["targets"] = copy.deepcopy(next(r for r in d.at[at1 + 2] if r["kind"] == "raw_pointer")["targets"])
             _patch_bytes(d, rec + 1, bytes((blob[rec + 1] - 1,)))
             _drop_span(d, at1, 5, gone)
@@ -3610,6 +3669,19 @@ def _apply_corner_layout(d: _Doc, modes: list, layout: list, prefix: str) -> set
         return [{"tag": SOFT[c], "operand": item[0], "opcode": 0x7F}
                 for c, item in enumerate(layout[k]) if item is not None]
 
+    # Logitech's pool copy of a menu page names twin lists of its own (5ai):
+    # an entry that moves keeps its twin, or the twin is orphaned and the
+    # activity can no longer be deleted (2026-10-20)
+    twin_of: dict = {}
+    for address, (k, p) in records.items():
+        mine = {e["tag"]: e for e in d.region(p["list"], "tagged_list")["entries"]}
+        for e in d.pool_copy(p["list"])["entries"]:
+            if e["tag"] in mine and mine[e["tag"]]["opcode"] == e["opcode"] == 0x7F:
+                twin_of.setdefault(mine[e["tag"]]["operand"], e["operand"])
+
+    def twin_entries_for(k):
+        return [dict(e, operand=twin_of.get(e["operand"], e["operand"])) for e in entries_for(k)]
+
     for address, (k, p) in records.items():
         record = d.region(address, "mode_page")
         plist = d.region(p["list"], "tagged_list")
@@ -3626,7 +3698,7 @@ def _apply_corner_layout(d: _Doc, modes: list, layout: list, prefix: str) -> set
             raise ComposeError(f"page {k + 1} would be empty but is not the last")
         plist["entries"] = entries
         plist["wide"] = not entries
-        twin["entries"] = copy.deepcopy(entries)
+        twin["entries"] = twin_entries_for(k)
         twin["wide"] = not entries
         program = program_for(k, f"{prefix}_p{k}_{address:x}")
         first_item = sem.screen_program_path(d.blob, p["program"])[0]
@@ -3649,7 +3721,7 @@ def _apply_corner_layout(d: _Doc, modes: list, layout: list, prefix: str) -> set
                               targets=[{"to": plist["id"]}, {"to": program[0]["id"]}])
         d.regions.insert(insert_copy_at, fresh_region(
             "tagged_list", f"{prefix}_new{k}_copy", wide=False, role="page_binding_copy",
-            entries=copy.deepcopy(entries)))
+            entries=twin_entries_for(k)))
         insert_copy_at += 1
         s9 = next(i for i, r in enumerate(d.regions) if r.get("section") == 9)
         d.regions.insert(s9, plist)

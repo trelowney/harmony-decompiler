@@ -12,6 +12,7 @@ accounts for every page, the file round-trips).
 from __future__ import annotations
 
 import argparse
+import itertools
 import sys
 from pathlib import Path
 
@@ -506,6 +507,54 @@ def main() -> int:
         return 1
     print("PASS Watch TV + edited, a device added, the edited activity deleted with its own Devices "
           "screen, and another device added")
+
+    # the owner's config of 2026-10-20: Watch TV + deleted and added again,
+    # so the idle value sits between two activities, and an activity moved on
+    # the menu. Deleting any activity was refused: the move orphaned the
+    # menu page's pool copy twins, and the idle value took the deleted
+    # activity's key set (2026-10-20)
+    owner = c.delete_activity(sample, "Watch TV +")
+    owner = c.add_activity(owner, "Watch TV +", "Watch DVD -", ["TV Panason.."])
+    owner = c.place_activity(owner, "Watch TV +", 0, 1)
+    orders = []
+    for order in itertools.permutations([a.name for a in c.activities(owner)]):
+        out = owner
+        for name in order:
+            out = c.delete_activity(out, name)
+        orders.append(not c.activities(out))
+    if not all(orders):
+        print(f"FAIL every activity deleted, in every order, with the idle value between two: {orders}")
+        return 1
+    print("PASS an activity added again and moved (idle value between two): every activity deleted, "
+          "in all six orders")
+
+    # and with the idle value first: one item keyed 0 covers idle and the
+    # activity, 1, and picks its key set. An activity added like it took no
+    # item of its own and ran the other's key set; deleting it or the other,
+    # or editing it, was refused (random runs, 2026-10-20)
+    first = c.delete_activity(c.delete_activity(owner, "Watch DVD -"), "Play on XBOX")
+    added = c.add_activity(first, "Nova", "Watch TV +", ["TV Panason.."])
+    nova = next(a for a in c.activities(added) if a.name == "Nova")
+    d = c._Doc(added)
+    blob, s14 = d.blob, d.S[14]
+    picks = set()
+    for r_i in c._records_keyed_by(d, d.cas_var):
+        rec = c.ir.u24(blob, s14 + 1 + 3 * r_i) - c.BASE
+        items = {c.ir.u16(blob, rec + 2 + 5 * j): c.ir.u24(blob, rec + 4 + 5 * j) - c.BASE
+                 for j in range(blob[rec + 1])}
+        s = items[max(x for x in items if x <= nova.value)]
+        if blob[s + 3] == 0x1F and blob[s + 2] == 0xFF:
+            picks.add(blob[s + 1])
+    gone = [not c.activities(c.delete_activity(c.delete_activity(added, a), b))
+            for a, b in (("Nova", "Watch TV +"), ("Watch TV +", "Nova"))]
+    st = c.activity_settings(first, "Watch TV +")
+    edited = c.edit_activity(first, "Watch TV +", "TV2", "Watch TV +", st["on"], writes=None,
+                             steps=st["steps"], show=st["show"], volume=st["volume"], keys=st["keys"])
+    if not (picks == {nova.key_set} and all(gone) and [a.name for a in c.activities(edited)] == ["TV2"]):
+        print(f"FAIL the idle value first: Nova picks key sets {picks}, not {nova.key_set}; deleted {gone}")
+        return 1
+    print("PASS the idle value first: an activity added picks its own key set, both delete in either "
+          "order, and the other edits")
     return 0
 
 
