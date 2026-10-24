@@ -958,7 +958,7 @@ async function main() {
       await remote.drain();
       identity = await remote.version();
       if (identity.architecture !== 9) {
-        throw new Error(`this is an architecture ${identity.architecture} remote; only the 515, 525 and 555 (9) are read`);
+        throw new Error(`this is an architecture ${identity.architecture} remote; only the 515, 520, 525 and 555 (9) are read`);
       }
       $("progress").hidden = false;
       const blob = await remote.readConfig((done, total) => {

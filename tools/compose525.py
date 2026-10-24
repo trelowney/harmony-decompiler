@@ -837,6 +837,56 @@ class _Doc:
                 stack[0:0] = self.ins(operand)
         return self.devices_modes()[0]
 
+    def companion_modes(self, mode: int) -> list[int]:
+        """Modes that belong to a device mode alone: reached from its keys,
+        directly or through each other, and named by nothing else. Logitech's
+        7.x compile of a 555 gives every device one or two (issue #46): keys
+        0xA5 and 0xA4 go round the device and them, each a page with no soft
+        keys."""
+        def lists(m):
+            g = self.mode(m)
+            return {g["start"]} | {p["list"] for p in g["pages"]}
+        # which mode enters which, by the keys and soft keys of its own lists;
+        # followed both ways, since an edit of the device's keys can leave
+        # them entering the device with nothing entering them any more
+        enters = {m: {c for off in lists(m) for _, op, c in cmp.tagged(self.blob, off)
+                      if op == 0x7E and 40 < c < self.n_modes}
+                  for m in range(41, self.n_modes)}
+        def component(allowed):
+            found, todo = {mode}, [mode]
+            while todo:
+                m = todo.pop()
+                for c in enters.get(m, set()) | {k for k, v in enters.items() if m in v}:
+                    if c in allowed and c not in found:
+                        found.add(c)
+                        todo.append(c)
+            return found
+        group = component(set(enters))
+        # what names a mode from outside the group keeps it out, and with it
+        # what only it reached
+        named = set()
+        for r in self.regions:
+            if r["kind"] == "action_list" and r.get("section") == 8:
+                named |= {i["operand"] for i in r["instructions"] if int(i["opcode"], 16) == 0x7E}
+            elif r["kind"] == "screen_instruction" and r.get("opcode") == "0x11":
+                raw3 = bytes.fromhex(r["operands"])
+                if len(raw3) == 3 and raw3[2] == 0x7E:
+                    named.add(raw3[0] | raw3[1] << 8)
+        named |= {v for i in range(self.n_actions) for o, v in self.ins(i) if o == 0x7E}
+        named |= {v for _, op, v in _transition_sites(self.blob, self.S) if op == 0x7E}
+        while True:
+            inside = set().union(*map(lists, group))
+            outside = named | {e["operand"] for r in self.regions
+                               if r["kind"] == "tagged_list" and r["offset"] not in inside
+                               and r.get("role") != "page_binding_copy"
+                               for e in r["entries"] if e["opcode"] == 0x7E}
+            out = {c for c in group - {mode} if c in outside}
+            if not out:
+                break
+            # drop it, and keep what still joins the device without it
+            group = component(group - out)
+        return sorted(group - {mode})
+
     def pool_copy(self, page_list_offset: int) -> dict:
         """The pool copy of a page list. Copies sit in the pools in the order of
         the page records in the mode table, each record counted once, which is
@@ -1921,9 +1971,12 @@ def _detach_device(raw: bytes, mode: int) -> tuple[bytes, dict]:
                 grew = True
 
     # what the device's own mode, pages and Devices entries use is delete_device's
-    f = d.mode(mode)
-    own = {f["start"]} | {p["list"] for p in f["pages"]}
-    own_twins = {d.pool_copy(p["list"])["offset"] for p in f["pages"]}
+    # (and of the modes that belong to it alone, which go with it)
+    own, own_twins = set(), set()
+    for m in [mode] + d.companion_modes(mode):
+        f = d.mode(m)
+        own |= {f["start"]} | {p["list"] for p in f["pages"]}
+        own_twins |= {d.pool_copy(p["list"])["offset"] for p in f["pages"]}
     own_targets = {v for off in own for _, op, v in cmp.tagged(blob, off) if op == 0x7F}
     selections = {i for i in range(n) if d.selection_target(i) == mode}
     keep_whole = own_targets | selections
@@ -2042,6 +2095,8 @@ def delete_device(raw: bytes, mode: int) -> bytes:
     group = device.group
     devices_modes = d.devices_modes()
     f = d.mode(mode)
+    # the device's mode and any mode that belongs to it alone (issue #46)
+    removed_modes = [mode] + d.companion_modes(mode)
 
     # ---- what goes: the action lists only this device reaches ----
     referrers: dict[int, set] = {}
@@ -2065,8 +2120,11 @@ def delete_device(raw: bytes, mode: int) -> bytes:
     for at, op, operand in _transition_sites(blob, S):
         note(("transition", at), op, operand)
 
-    own_lists = {f["start"]} | {p["list"] for p in f["pages"]}
-    pool_twins = {d.pool_copy(p["list"])["offset"] for p in f["pages"]}
+    own_lists, pool_twins = set(), set()
+    for m in removed_modes:
+        g = d.mode(m)
+        own_lists |= {g["start"]} | {p["list"] for p in g["pages"]}
+        pool_twins |= {d.pool_copy(p["list"])["offset"] for p in g["pages"]}
     seeds = set()
     for off in own_lists:
         seeds |= {v for _, op, v in cmp.tagged(blob, off) if op == 0x7F}
@@ -2108,8 +2166,8 @@ def delete_device(raw: bytes, mode: int) -> bytes:
             if op in (0x7C, 0x7D) and operand >> 8 == group:
                 raise ComposeError(f"action list {i}, which stays, sends to this device's group "
                                    f"{group}: an activity or a transition uses it")
-            if op == 0x7E and operand == mode:
-                raise ComposeError(f"action list {i}, which stays, enters mode {mode}")
+            if op == 0x7E and operand in removed_modes:
+                raise ComposeError(f"action list {i}, which stays, enters mode {operand}")
     for at, op, operand in _transition_sites(blob, S):
         if op in (0x7C, 0x7D) and operand >> 8 == group:
             raise ComposeError(f"a section 13 transition sends to group {group}")
@@ -2118,7 +2176,9 @@ def delete_device(raw: bytes, mode: int) -> bytes:
     keep_actions = [i for i in range(d.n_actions) if i not in doomed]
     actions = {i: None for i in doomed}
     actions.update({old: new for new, old in enumerate(keep_actions) if old != new})
-    modes = {mode: None, **{m: m - 1 for m in range(mode + 1, d.n_modes)}}
+    modes = {m: None for m in removed_modes}
+    modes.update({m: m - sum(r < m for r in removed_modes)
+                  for m in range(min(removed_modes) + 1, d.n_modes) if m not in removed_modes})
     n_groups = len(ir.ir_groups(blob, S))
     groups = {group: None, **{g: g - 1 for g in range(group + 1, n_groups)}}
 
@@ -2129,15 +2189,17 @@ def delete_device(raw: bytes, mode: int) -> bytes:
             gone.update(r["id"] for r in d.at[item["offset"]] if r["kind"] != "section")
             if item["opcode"] == 5:
                 gone.update(r["id"] for r in d.at.get(item["offset"] + 3, []) if r["kind"] == "glyph_string")
-    gone.add(d.region(f["entry"], "record_header")["id"])
-    gone.add(d.region(f["start"], "tagged_list")["id"])
-    for p in f["pages"]:
-        gone.add(d.region(p["address"], "mode_page")["id"])
-        gone.add(d.region(p["list"], "tagged_list")["id"])
-        gone.add(d.pool_copy(p["list"])["id"])
-        drop_program(p["program"])
-    action_regions = {d.actions[i] - BASE if d.actions[i] >= BASE else d.actions[i]: i
-                      for i in range(d.n_actions)}
+    for g in map(d.mode, removed_modes):
+        gone.add(d.region(g["entry"], "record_header")["id"])
+        gone.add(d.region(g["start"], "tagged_list")["id"])
+        for p in g["pages"]:
+            gone.add(d.region(p["address"], "mode_page")["id"])
+            gone.add(d.region(p["list"], "tagged_list")["id"])
+            gone.add(d.pool_copy(p["list"])["id"])
+            drop_program(p["program"])
+    # file offsets already: a configuration past 0x20000 bytes (a 555 of seven
+    # devices after a few edits) has lists there too
+    action_regions = {d.actions[i]: i for i in range(d.n_actions)}
     for r in d.regions:
         if r["kind"] == "action_list" and action_regions.get(r["offset"]) in doomed:
             gone.add(r["id"])
@@ -2218,7 +2280,8 @@ def delete_device(raw: bytes, mode: int) -> bytes:
 
     # ---- tables ----
     mt = d.region(S[sem.MODE_SLOT], "pointer_table")
-    del mt["targets"][mode]
+    for m in sorted(removed_modes, reverse=True):
+        del mt["targets"][m]
     at_ = d.region(S[sem.ACTION_SLOT], "pointer_table")
     at_["targets"] = [t for i, t in enumerate(at_["targets"]) if i not in doomed]
     gt = _ir_table(d)
@@ -2264,10 +2327,10 @@ def delete_device(raw: bytes, mode: int) -> bytes:
         want = [(op, _remap(op, v, actions, modes, groups)) for op, v in d.ins(old)]
         if after.ins(new) != want:
             raise AssertionError(f"action list {old} -> {new} changed")
-    if after.n_modes != d.n_modes - 1:
+    if after.n_modes != d.n_modes - len(removed_modes):
         raise AssertionError("mode count")
     for old in range(d.n_modes):
-        if old == mode:
+        if old in removed_modes:
             continue
         new = modes.get(old, old)
         f0, f1 = d.mode(old), after.mode(new)
@@ -2277,7 +2340,7 @@ def delete_device(raw: bytes, mode: int) -> bytes:
     r0, r1 = render_map(blob), render_map(a)
     devices_set = set(devices_modes) | touched_modes
     for (m, k), value in r0.items():
-        if m == mode or m in devices_set:
+        if m in removed_modes or m in devices_set:
             continue
         if r1.get((modes.get(m, m), k), (None,))[0] != value[0]:
             raise AssertionError(f"screen of mode {m} page {k} changed")
@@ -2743,6 +2806,10 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
             return None
         return replace
 
+    # a device's own modes (issue #46): a copy of its screen does not take the
+    # keys into them, since they lead back to the device and not here
+    companions = {c for x in devices(raw) for c in d.companion_modes(x.mode)}
+
     def copy_mode(old, kind):
         if old in mode_map:
             return mode_map[old]
@@ -2753,6 +2820,9 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
         f = d.mode(old)
         lst = d.region(f["start"], "tagged_list")
         entries = copy.deepcopy(lst["entries"])
+        for e in entries:
+            if e["opcode"] == 0x7E and e["operand"] in companions:
+                e["opcode"], e["operand"] = 0, 0
         ml = fresh_region("tagged_list", f"act{value}_m{new}_list", wide=lst.get("wide", True),
                           entries=entries, **({"role": lst["role"]} if "role" in lst else {}))
         pages, programs = [], []
@@ -2808,6 +2878,8 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
             if tag not in theirs:
                 raise ComposeError(f"{names[tag]} does nothing on mode {m}'s screen")
             e = theirs[tag]
+            if e["opcode"] == 0x7E and e["operand"] in companions:
+                raise ComposeError(f"{names[tag]} on mode {m}'s screen enters a screen of that device's own")
             if tag in mine:
                 mine[tag].update(operand=e["operand"], opcode=e["opcode"])
             else:

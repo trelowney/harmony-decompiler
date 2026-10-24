@@ -10,7 +10,9 @@ flag are, and in where a corner's second line is drawn (FORMAT 5ai). Checks:
 * on the 515, adding a device and an activity, editing the activity, renaming,
   moving and deleting a device, and a power state each pass the composer's own
   checks, and adding then deleting an activity gives the file back;
-* the 555, empty, takes a first device with nothing to copy from.
+* the 555, empty, takes a first device with nothing to copy from;
+* the 555 of issue #46 (seven devices, Logitech's 7.x software) reads its
+  names whole and deletes each device with the modes that belong to it.
 """
 from __future__ import annotations
 
@@ -138,6 +140,22 @@ def main() -> int:
         after = {(t["part"], t["text"]) for t in c.screen_texts(out)}
         ok = ok and {("soft", "Ano\nNe"), ("title", "Aktivity")} <= after and ("soft", "Yes\nNo") not in after
     check(ok, "515 and 555 take Ano and Ne on every Help screen, and a menu titled Aktivity")
+
+    # the issue #46 555, Logitech's own seven devices: names with J and
+    # brackets read whole, and every device deletes with the modes its keys
+    # 0xA4 and 0xA5 go round (one or two each, five of seven devices)
+    s555b = (ROOT / "harmony555" / "H555-New-1-Config.EZHex").read_bytes()
+    db = c._Doc(s555b)
+    names = sorted(x.name for x in c.devices(s555b))
+    companions = {x.name: db.companion_modes(x.mode) for x in c.devices(s555b)}
+    ok = True
+    for x in c.devices(s555b):
+        out = c.delete_device(s555b, x.mode)
+        ok = ok and c._Doc(out).n_modes == db.n_modes - 1 - len(companions[x.name]) \
+            and sorted(y.name for y in c.devices(out)) == [n for n in names if n != x.name]
+    check(ok and "JVC Surround" in names and "Network (DLNA)" in [a.name for a in c.activities(s555b)]
+          and sum(map(len, companions.values())) == 8 and companions["Logitech YRE8"] == [],
+          "555 of issue #46: seven devices read by name, each deletes with its own modes")
     return 1 if failed else 0
 
 

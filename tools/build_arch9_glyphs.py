@@ -14,9 +14,12 @@ configuration per typeface was rendered and read by eye, its codes in order:
 The Harmony 555 (skin 48) draws with the 525's typeface: 50 of its 53 codes
 match it. The other three are characters the 525 never draws, read from
 @kkong42's 555 sample from issue #42 (H555-Config.EZHez): a comma ("still on,
-press"), a K ("OK") and a double quote ('"Help" now').
+press"), a K ("OK") and a double quote ('"Help" now'). His second 555, from
+issue #46 (H555-New-1-Config.EZHex, seven devices), adds six more, read on
+2026-10-24: J and j ("JVC Surround"), both brackets ("Network (DLNA)"), an
+apostrophe, and a 7 in the page counter's font.
 
-    python build_arch9_glyphs.py <H515-Config.EZHex> <H555-Config.EZHez>
+    python build_arch9_glyphs.py <H515-Config.EZHex> <H555-Config.EZHez> <H555-New-1-Config.EZHex>
 """
 from __future__ import annotations
 
@@ -36,6 +39,8 @@ H515_ALPHABET = "HyOFaTermint EUSBCNDpgducs0:o2flL.wGWbIzkRPhAMq" + "\\" + 'v,x?
 
 # skin 48: only the codes the 525's shapes do not explain
 H555_CODES = {50: ",", 51: "K", 52: '"'}
+# skin 48, the issue #46 sample: again only what no earlier file explains
+H555_NEW_CODES = {0x3B: "J", 0x3C: "(", 0x3D: ")", 0x40: "j", 0x41: "'", 0x46: "7"}
 
 OUT = Path(__file__).resolve().parent / "arch9_glyphs.json"
 # and each typeface's own glyphs, by typeface (see compose525.EXTRA_GLYPHS), which a
@@ -74,7 +79,7 @@ def shapes_of(raw: bytes, alphabet) -> dict[str, set]:
 
 
 def main() -> int:
-    if len(sys.argv) != 3:
+    if len(sys.argv) != 4:
         print(__doc__)
         return 2
     assert len(H515_ALPHABET) == 65 and len(set(H515_ALPHABET)) == 65, len(H515_ALPHABET)
@@ -82,17 +87,21 @@ def main() -> int:
     table: dict[str, set] = {}
     for raw, alphabet in (((root / "samples/harmony525/config.EZHex").read_bytes(), H525_OWNER_ALPHABET),
                           (Path(sys.argv[1]).read_bytes(), H515_ALPHABET),
-                          (Path(sys.argv[2]).read_bytes(), H555_CODES)):
+                          (Path(sys.argv[2]).read_bytes(), H555_CODES),
+                          (Path(sys.argv[3]).read_bytes(), H555_NEW_CODES)):
         for key, chars in shapes_of(raw, alphabet).items():
             table.setdefault(key, set()).update(chars)
     out = {key: "".join(sorted(chars)) for key, chars in sorted(table.items())}
     OUT.write_text(json.dumps(out, indent=0, ensure_ascii=False) + "\n", encoding="utf-8")
     s525 = (root / "samples/harmony525/config.EZHex").read_bytes()
-    fonts = {"525-0": font_glyphs(s525, H525_OWNER_ALPHABET, 0),
+    s555_new = Path(sys.argv[3]).read_bytes()
+    # the #46 555 draws J, j, brackets and an apostrophe in both typefaces
+    fonts = {"525-0": font_glyphs(s555_new, None, 0, font_glyphs(s525, H525_OWNER_ALPHABET, 0)),
              # the 555 draws the same wide typeface and has E, K, R, g, comma,
              # colon and quote, which the 525 sample never drew in it
-             "525-1": font_glyphs(Path(sys.argv[2]).read_bytes(), None, 1,
-                                  font_glyphs(s525, H525_OWNER_ALPHABET, 1)),
+             "525-1": font_glyphs(s555_new, None, 1,
+                                  font_glyphs(Path(sys.argv[2]).read_bytes(), None, 1,
+                                              font_glyphs(s525, H525_OWNER_ALPHABET, 1))),
              "515-0": font_glyphs(Path(sys.argv[1]).read_bytes(), H515_ALPHABET, 0),
              # the page counter's 8 row digits, "OF" and more (font set 4), which
              # an empty 555 has no font set for (compose525.counter_font)

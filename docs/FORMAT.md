@@ -6002,6 +6002,39 @@ whose Devices screen first showed Devices pages 2 and 3 moved page 2's pool
 copy and left page 3's behind, because the check compared with the old order
 and not with where the copies were. It compares with the copies' places now.
 
+**A 555 with seven devices from Logitech's own software** (@kkong42, issue #46,
+Harmony 7.x, mirrored in `samples/harmony555/`). It is the first arch 9 file
+from Logitech's compiler past four devices, the shape 5ad to 5ae and this
+section had to build without one. What it confirms and what it adds:
+
+- Devices and the activity menu are two pages each, and font set 4 is eight
+  rows high and draws the page counter: what `counter_font` gives an empty
+  555, so that guess stands.
+- Each activity has its own Devices screen (section 9 lists 4 to 10, one per
+  activity and one for none, picked through `0x340` as in 5ae), and each
+  lists the devices in its own order, mostly the ones the activity turns on
+  first but not by that rule alone (Watch TV puts PIC IR Controller ahead of
+  JVC Surround, which it turns on). The composer still writes one order for
+  all of them.
+- Five of the seven devices have one or two modes of their own besides their
+  own mode: keys `0xA5` and `0xA4` go round the device's mode and them (93 to
+  52 to 163 and back), each a page with no soft keys, named by nothing else.
+  `delete_device` left them behind, still entering the deleted mode, and the
+  random runs refused 43 of 120 sequences on it. `_Doc.companion_modes` finds
+  them now (the modes joined to a device's by those keys, either way, that
+  nothing else names) and they go with the device. An activity that ends on a
+  device's screen copied those two keys too, so a second screen then named
+  the device's modes and the device could no longer be deleted; the copy
+  leaves them doing nothing now, and routing such a key to an activity is
+  refused. The 525 and the 515 samples have none.
+- It is 119,353 bytes, and a few edits take it past `0x20000`. `delete_device`
+  still took an action list's offset there for an address and subtracted the
+  base, so a deleted device's lists past that point stayed behind. The action
+  table's entries are offsets already and are used as they are now.
+- Six of its glyph codes draw characters no earlier file had: J, j, both
+  brackets, an apostrophe and a 7 in the counter's font, read by eye into
+  `tools/arch9_glyphs.json`. "JVC Surround" read as "?VC Surround" before.
+
 ## 6. Prior art
 
 The key thread is

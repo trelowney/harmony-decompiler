@@ -28,8 +28,9 @@ def set_template(container: bytes) -> None:
 
 
 # The arch 9 remotes this page knows, by the skin a configuration states in
-# section 1 (FORMAT 4r): the same firmware runs all three (FORMAT 5ab).
-MODELS = {22: "Harmony 525", 67: "Harmony 515", 48: "Harmony 555"}
+# section 1 (FORMAT 4r): the same firmware runs all of them (FORMAT 5ab). The
+# 520 is @rfritch's, read, edited and written with this page (issue #45).
+MODELS = {22: "Harmony 525", 67: "Harmony 515", 48: "Harmony 555", 18: "Harmony 520"}
 
 
 def skin_of(blob: bytes) -> int:
