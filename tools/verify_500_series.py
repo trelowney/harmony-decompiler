@@ -1,4 +1,4 @@
-"""The Harmony 515 and 555 read, and the 515 composed on, with the 525's tools.
+"""The Harmony 515, 520 and 555 read, and the 515 composed on, with the 525's tools.
 
 The three run the same firmware (FORMAT 5ab); their configurations differ in
 the typeface, in which state variables CurrentActivityState and the device
@@ -12,7 +12,9 @@ flag are, and in where a corner's second line is drawn (FORMAT 5ai). Checks:
   checks, and adding then deleting an activity gives the file back;
 * the 555, empty, takes a first device with nothing to copy from;
 * the 555 of issue #46 (seven devices, Logitech's 7.x software) reads its
-  names whole and deletes each device with the modes that belong to it.
+  names whole and deletes each device with the modes that belong to it;
+* the 520 of issue #45 draws its page counter in font set 2, not 4, and a
+  fifth device is counted there.
 """
 from __future__ import annotations
 
@@ -156,6 +158,20 @@ def main() -> int:
     check(ok and "JVC Surround" in names and "Network (DLNA)" in [a.name for a in c.activities(s555b)]
           and sum(map(len, companions.values())) == 8 and companions["Logitech YRE8"] == [],
           "555 of issue #46: seven devices read by name, each deletes with its own modes")
+
+    # the issue #45 520: its page counter is font set 2, the one eight rows
+    # high, where the others draw it in set 4; a fifth device opens a second
+    # Devices page counted in that set with the 520's own codes
+    s520 = (ROOT / "harmony520" / "harmony520-prewrite.EZHex").read_bytes()
+    d520 = c._Doc(s520)
+    fifth, placed = c.add_device(s520, "Test Box", cmds, {"VolumeUp": "Vol+"},
+                                 [[("Power", "Power"), None, None, None]])
+    after = c._Doc(fifth)
+    check(c._counter_font(d520) == 2 and [c._counter_font(x) for x in (d525, d515)] == [4, 4]
+          and (placed.devices_page, placed.corner) == (1, 0)
+          and [f.height for f in after.fonts] == [f.height for f in d520.fonts]
+          and c._counter_codes(after, "2") == c._counter_codes(d520, "2"),
+          "520 of issue #45: the counter is font set 2, and a fifth device is counted in it")
     return 1 if failed else 0
 
 

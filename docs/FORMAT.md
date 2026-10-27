@@ -6035,6 +6035,21 @@ section had to build without one. What it confirms and what it adds:
   brackets, an apostrophe and a 7 in the counter's font, read by eye into
   `tools/arch9_glyphs.json`. "JVC Surround" read as "?VC Surround" before.
 
+**The 520 draws its page counter in font set 2** (@rfritch, issue #45, the
+page's own backup of their remote before its first write, mirrored in
+`samples/harmony520/`). Its five sets are 11, 11, 8, 11 and 11 rows high, where
+the 525, 515 and the seven device 555 have 11, 11, 11, 11 (12 and 10 on the
+515) and 8 in set 4. Every counter draw on its paged device screens selects
+set 2, and the digits 1 to 6 and the O there are the 525's set 4 pixels under
+the 520's own codes. The composer assumed set 4, put the 525's eight row
+glyphs into the 520's eleven row set 4, and refused its own result ("the page
+counter's font set did not read back"), which is the error rfritch reported
+for a fifth device. The counter's set is now the one set eight rows high, and
+set 4 is added only where there is none (the empty 555). Its eleven page
+device carries glyphs for 7, 8 and 9 in that set and starts the counter of
+its tenth page at x 31 rather than 35, room for a second digit; the composer
+still counts to six.
+
 ## 6. Prior art
 
 The key thread is

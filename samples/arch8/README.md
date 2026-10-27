@@ -1,7 +1,7 @@
 # Arch 8 samples (Harmony 720/785/88x)
 
-Thirteen configs from two people. All thirteen decompile and recompile byte for
-byte, and all thirteen internal checksums verify. If either of them would rather
+Fourteen configs from two people. All fourteen decompile and recompile byte for
+byte, and all fourteen internal checksums verify. If either of them would rather
 their files were not mirrored here, say so and they come straight back out.
 
 ## The four `Update*.EZHex`, from @guyman70718
@@ -88,6 +88,23 @@ What these add that the `Update*` four could not:
 He also supplied Harmony 880 and 885 firmware dumps, in
 [discussion #17](https://github.com/trelowney/harmony-decompiler/discussions/17).
 Firmware is not mirrored in this repository, by policy.
+
+## `H785-Config.EZHex`, from @kkong42
+
+The first Harmony 785 here, uploaded to
+[issue #47](https://github.com/trelowney/harmony-decompiler/issues/47) with the
+"happy to publish" box ticked. Mirrored unmodified, and only the config: the
+firmware and safe mode dumps in the same upload stay where they are.
+
+| file | issue | size | protocol | skin | board | flash |
+|---|---|---:|---:|---:|---|---|
+| `H785-Config.EZHex` | #47 | 414,672 B | 8 | 45 | 0.8.0 | 0x01:0x49 |
+
+Two devices and one activity. It round trips byte for byte and section 5 counts
+the two devices. A third skin and a third board revision in arch 8, at the same
+flash ID as the 88x. Its 53-entry key table is not the 88x's: 45 of 53 codes
+are shared and 8 differ each way, which is the size of difference a different
+keypad should make. Which keys those eight are has not been looked at.
 
 ## Why they matter
 

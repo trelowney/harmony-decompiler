@@ -66,10 +66,23 @@ DEVICE_KEY_ORDER = (0x89, 0x8B, 0x8A, 0x8D, 0x8C, 0x8F, 0x8E, 0x81, 0x83, 0x82, 
 # soft keys beside the screen, in reading order: top left, top right,
 # bottom left, bottom right (FORMAT 5ae, both top-left and bottom-right pressed)
 SOFT = (0xA7, 0xA6, 0x9F, 0x9E)
-# font 4 glyph codes for the page counter, read off a six page device mode
-# "n OF m" under a paged screen, in font set 4. The codes are the
+# "n OF m" under a paged screen, in the one font set eight rows high: set 4 on
+# the 525, 515 and 555, set 2 on the 520 (#45). The codes are the
 # configuration's own: 0x37 is "1" on the 525's and ")" on a 515's.
-COUNTER_FONT = 4
+COUNTER_HEIGHT = 8
+COUNTER_FONT = 4             # where counter_font adds the set when none is that high
+
+
+def _counter_font(d) -> int:
+    """The font set the page counter is drawn in."""
+    sets = [i for i, f in enumerate(d.fonts) if f.height == COUNTER_HEIGHT]
+    if len(sets) > 1:
+        raise ComposeError(f"font sets {sets} are all {COUNTER_HEIGHT} rows high; which is the page counter's?")
+    return sets[0] if sets else COUNTER_FONT
+
+
+def _counter_select(d) -> bytes:
+    return bytes((0x10, _counter_font(d)))
 
 
 def _digit(d, n: int) -> int:
@@ -81,7 +94,8 @@ def _of(d) -> bytes:
 
 
 def _counter_codes(d, text: str) -> bytes:
-    if len(d.fonts) <= COUNTER_FONT:
+    font = _counter_font(d)
+    if len(d.fonts) <= font:
         raise NoCounterFont("this configuration has no page counter font")
     try:
         codes = encode_text(text, d.alphabet)
@@ -89,7 +103,7 @@ def _counter_codes(d, text: str) -> bytes:
         raise NoCounterFont(f"the page counter's font has no {text!r} here") from None
     for code in codes:
         try:
-            d.fonts[COUNTER_FONT].glyph(code)
+            d.fonts[font].glyph(code)
         except ValueError:
             raise NoCounterFont(f"the page counter's font has no {text!r} here") from None
     return codes
@@ -100,14 +114,17 @@ COUNTER_TEXT = "123456OF"
 
 
 def counter_font(raw: bytes) -> bytes:
-    """Give a configuration the page counter's font set 4 with the digits 1
+    """Give a configuration the page counter's font set with the digits 1
     to 6 and "OF", in the 525's 8 row counter typeface ("525-4"). An empty
-    555 has only fonts 0 to 3, since nothing in it was ever paged; the 525
-    and 515 have set 4 already, and a set 4 that lacks a character gets it."""
+    555 has only fonts 0 to 3, since nothing in it was ever paged, and gets
+    set 4; the 525, 515 and 520 have the set already, and one that lacks a
+    character gets it."""
     d = _Doc(raw)
     glyphs = _font_glyphs().get("525-4", {})
     if any(ch not in glyphs for ch in COUNTER_TEXT):
         raise ComposeError("arch9_font_glyphs.json has no page counter typeface")
+    font = _counter_font(d)
+    n_sets = max(len(d.fonts), COUNTER_FONT + 1)
     if len(d.fonts) < COUNTER_FONT:
         raise ComposeError(f"{len(d.fonts)} font sets; the page counter's is number {COUNTER_FONT}")
     if len(d.fonts) == COUNTER_FONT:
@@ -119,17 +136,18 @@ def counter_font(raw: bytes) -> bytes:
         d.regions.insert(d.index_of(sets[-1]) + 1, new)
         table["targets"].append({"to": new["id"]})
         d = _Doc(d.compile())
-    d._ensure_glyphs(COUNTER_TEXT, COUNTER_FONT, glyphs)
+    d._ensure_glyphs(COUNTER_TEXT, font, glyphs)
     out = d.compile()
 
     # ---- checks ----
     after = _Doc(out)
-    if len(after.fonts) != COUNTER_FONT + 1 or after.fonts[COUNTER_FONT].height != len(glyphs["1"]):
+    if (len(after.fonts) != n_sets or _counter_font(after) != font
+            or after.fonts[font].height != len(glyphs["1"])):
         raise AssertionError("the page counter's font set did not read back")
     for ch in COUNTER_TEXT:
         code = next(k for k, v in after.alphabet.items() if v == ch)
         rows = ["".join("#" if v == renderer.INK else "." for v in row)
-                for row in after.fonts[COUNTER_FONT].glyph(code)]
+                for row in after.fonts[font].glyph(code)]
         if rows != glyphs[ch]:
             raise AssertionError(f"the counter's {ch!r} reads back otherwise")
     r0, r1 = render_map(_Doc(raw).blob), render_map(after.blob)
@@ -980,7 +998,7 @@ def _set_counters(d: _Doc, programs: dict[int, tuple[int, int]], prefix: str) ->
             continue
         x = 38 if cur == 1 else 35
         d.insert_before(d.band_ends(root)[7], [
-            opaque(f"{prefix}_{root:x}_font", b"\x10\x04"),
+            opaque(f"{prefix}_{root:x}_font", _counter_select(d)),
             _draw(x, 56, bytes((_digit(d, cur),)), f"{prefix}_{root:x}_cur"),
             _draw(47, 56, _of(d), f"{prefix}_{root:x}_of"),
             _draw(65, 56, bytes((_digit(d, total),)), f"{prefix}_{root:x}_total"),
@@ -1123,7 +1141,7 @@ def _device_pages(d: _Doc, prefix: str, name: str, lcd, act: dict, donor_root: i
                         _draw(x, y, codes, f"{prefix}_p{k}_k{c}_l{n}_b{band}"))
         if len(lcd) > 1:
             per_band.setdefault(7, []).extend([
-                opaque(f"{prefix}_p{k}_cf", b"\x10\x04"),
+                opaque(f"{prefix}_p{k}_cf", _counter_select(d)),
                 _draw(38 if k == 0 else 35, 56, bytes((_digit(d, k + 1),)), f"{prefix}_p{k}_cc"),
                 _draw(47, 56, _of(d), f"{prefix}_p{k}_co"),
                 _draw(65, 56, bytes((_digit(d, len(lcd)),)), f"{prefix}_p{k}_ct")])
@@ -1376,7 +1394,7 @@ def add_device(raw: bytes, name: str, commands: Sequence[Command],
     if new_page:
         body = new_devices_regions[:-1]
         _insert_in_program(body, {7: [
-            opaque(f"dev{group}_newpage_cf", b"\x10\x04"),
+            opaque(f"dev{group}_newpage_cf", _counter_select(d)),
             _draw(35, 56, bytes((_digit(d, n_pages),)), f"dev{group}_newpage_cc"),
             _draw(47, 56, _of(d), f"dev{group}_newpage_co"),
             _draw(65, 56, bytes((_digit(d, n_pages),)), f"dev{group}_newpage_ct")]})
@@ -3115,7 +3133,7 @@ def add_activity(raw: bytes, name: str, like: str, on: Sequence[str],
         _insert_in_program(program, {band: _in_font_0(regs, fonts_at.get(band, 0), f"act{value}_new_b{band}")
                                      for band, regs in _corner_draws(d, 0, name, f"act{value}_menu").items()})
         _insert_in_program(program, {7: [
-            opaque(f"act{value}_menu_cf", b"\x10\x04"),
+            opaque(f"act{value}_menu_cf", _counter_select(d)),
             _draw(35, 56, bytes((_digit(d, page + 1),)), f"act{value}_menu_cc"),
             _draw(47, 56, _of(d), f"act{value}_menu_co"),
             _draw(65, 56, bytes((_digit(d, page + 1),)), f"act{value}_menu_ct")]})
@@ -3730,7 +3748,7 @@ def _apply_corner_layout(d: _Doc, modes: list, layout: list, prefix: str) -> set
                  for band, regs in names.items()}
         if n > 1:
             draws.setdefault(7, []).extend([
-                opaque(f"{rid}_cf", b"\x10\x04"),
+                opaque(f"{rid}_cf", _counter_select(d)),
                 _draw(38 if k == 0 else 35, 56, bytes((_digit(d, k + 1),)), f"{rid}_cc"),
                 _draw(47, 56, _of(d), f"{rid}_co"),
                 _draw(65, 56, bytes((_digit(d, n),)), f"{rid}_ct")])
@@ -4252,11 +4270,11 @@ def _screen_parts(d: _Doc, m: int, k: int, titled: set) -> dict[str, list[tuple]
     tags = {t for t, _, _ in cmp.tagged(d.blob, page["list"])}
     is_help = tags == {HELP_YES, HELP_NO}
     corners = bool(tags & set(SOFT)) and not is_help
-    font, items = 0, {}
+    font, items, counter = 0, {}, _counter_font(d)
     for it in sem.screen_program_path(d.blob, page["program"]):
         if it["opcode"] == 0x10:
             font = it["operands"][0]
-        elif it["opcode"] in (4, 5) and font != COUNTER_FONT:
+        elif it["opcode"] in (4, 5) and font != counter:
             x, y = it["operands"][0], it["operands"][1]
             codes = bytes(renderer_string(d, it))
             if codes and y < 64:
